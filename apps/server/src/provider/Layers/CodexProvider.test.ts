@@ -171,3 +171,26 @@ it("ignores custom models that shadow a preferred slug", () => {
 
   assert.deepStrictEqual(models.find((model) => model.isDefault)?.slug, "gpt-5.4");
 });
+
+it("keeps the existing Astra default when a newer CLI defaults to Sol", () => {
+  const models = applyPreferredCodexDefaultModel([
+    {
+      slug: "gpt-6.1-sol",
+      name: "GPT-6.1-Sol",
+      isCustom: false,
+      isDefault: true,
+      capabilities: null,
+    },
+    { slug: "gpt-6-astra", name: "GPT-6-Astra", isCustom: false, capabilities: null },
+    { slug: "gpt-6-luna", name: "GPT-6-Luna", isCustom: false, capabilities: null },
+    { slug: "gpt-5.5", name: "GPT-5.5", isCustom: false, capabilities: null },
+  ]);
+  assert.deepStrictEqual(
+    models.map((model) => model.slug),
+    ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.5"],
+  );
+  assert.deepStrictEqual(
+    models.filter((model) => model.isDefault).map((model) => model.slug),
+    ["gpt-6-astra"],
+  );
+});

@@ -66,6 +66,25 @@ function settingsWithProviderInstances(): UnifiedSettings {
 }
 
 describe("instance-scoped model selection", () => {
+  it("keeps the selected GPT-6 model when the live catalog refreshes", () => {
+    const instanceId = ProviderInstanceId.make("codex");
+    const models = ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.5"];
+    const before = [provider({ instanceId, models })];
+    const after = [provider({ instanceId, models: models.toReversed() })];
+    const entry = deriveProviderInstanceEntries(after)[0]!;
+    expect(
+      getAppModelOptionsForInstance(DEFAULT_UNIFIED_SETTINGS, entry).map((option) => option.slug),
+    ).toEqual(models.toReversed());
+    for (const selected of models.slice(0, 3)) {
+      expect(
+        resolveAppModelSelectionForInstance(instanceId, DEFAULT_UNIFIED_SETTINGS, before, selected),
+      ).toBe(selected);
+      expect(
+        resolveAppModelSelectionForInstance(instanceId, DEFAULT_UNIFIED_SETTINGS, after, selected),
+      ).toBe(selected);
+    }
+  });
+
   it("preserves server-provided legacy model metadata", () => {
     const baseProvider = provider({
       instanceId: "claudeAgent",
