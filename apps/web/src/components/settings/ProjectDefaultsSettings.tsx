@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
@@ -135,7 +136,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       settingKeys={["defaultModelSelection"]}
       mixed={mixedModel}
       id="default-model"
-      title="Model"
+      title={uiText("Model")}
       description={
         isProjectScope
           ? "Model for new threads in this project."
@@ -233,7 +234,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                 value === "local" || value === "worktree"
                   ? resolveEnvModeLabel(value)
                   : unavailable
-                    ? "Unavailable"
+                    ? uiText("Unavailable")
                     : "Mixed"
               }
             </SelectValue>
@@ -258,7 +259,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       }
       title={
         category === "general" || category === "project"
-          ? "New threads"
+          ? uiText("New threads")
           : category === "integrations"
             ? "Browser"
             : "Repositories"
@@ -365,7 +366,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                       isWorktreeSubmodules(value)
                         ? WORKTREE_SUBMODULES_LABELS[value]
                         : unavailable
-                          ? "Unavailable"
+                          ? uiText("Unavailable")
                           : "Mixed"
                     }
                   </SelectValue>
@@ -388,7 +389,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             settingKeys={["defaultAutoPull"]}
             mixed={mixedAutoPull}
             id="automatic-pull"
-            title="Automatically pull"
+            title={uiText("Automatically pull")}
             description={
               isProjectScope
                 ? "Keeps this project's default branch current when the checkout has no local changes or commits."
@@ -468,7 +469,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             settingKeys={["enableAgentBrowserAccess"]}
             mixed={mixedBrowser}
             id={searchableSetting("agent-browser-access").id}
-            title="Agent browser access"
+            title={uiText("Agent browser access")}
             description={
               isProjectScope
                 ? "Allow agents in this project to use the shared browser. Applies when the agent session next starts."
@@ -489,7 +490,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             }
             control={
               <Switch
-                aria-label="Agent browser access"
+                aria-label={uiText("Agent browser access")}
                 mixed={mixedBrowser}
                 checked={mixedBrowser ? false : settings.enableAgentBrowserAccess}
                 onCheckedChange={(enabled) => updateSettings({ enableAgentBrowserAccess: enabled })}

@@ -1,5 +1,7 @@
 "use client";
 
+import { uiText } from "~/uiText";
+
 import { Spinner } from "~/components/ui/spinner";
 
 import {
@@ -446,7 +448,7 @@ export function ProviderInstanceCard({
 }: ProviderInstanceCardProps) {
   const enabled = resolveProviderInstanceEnabled(instance);
   const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
-  // A locally disabled provider reads "Disabled" with a muted dot even if its
+  // A locally disabled provider reads uiText("Disabled") with a muted dot even if its
   // last server status is stale. Enabled providers use the server status.
   const statusKey: ProviderStatusKey = enabled
     ? ((liveProvider?.status as ProviderStatusKey | undefined) ?? "warning")
@@ -454,7 +456,7 @@ export function ProviderInstanceCard({
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const summary = enabled
     ? getProviderSummary(liveProvider)
-    : { headline: "Disabled", detail: null };
+    : { headline: uiText("Disabled"), detail: null };
   const authEmail = liveProvider?.auth.email?.trim();
   const isAuthenticated = enabled && liveProvider?.auth.status === "authenticated";
   const authLabel =
@@ -701,7 +703,11 @@ export function ProviderInstanceCard({
                     <TooltipPopup side="top">Copy update command</TooltipPopup>
                   </Tooltip>
                 ) : (
-                  <span role="img" aria-label="Update available" className="inline-flex shrink-0">
+                  <span
+                    role="img"
+                    aria-label={uiText("Update available")}
+                    className="inline-flex shrink-0"
+                  >
                     <ArrowUpCircleIcon className="size-3.5 text-muted-foreground" />
                   </span>
                 )
@@ -834,7 +840,7 @@ export function ProviderInstanceCard({
                           </Button>
                         }
                       />
-                      <TooltipPopup side="top">Copy command</TooltipPopup>
+                      <TooltipPopup side="top">{uiText("Copy command")}</TooltipPopup>
                     </Tooltip>
                   </div>
                 ) : null}

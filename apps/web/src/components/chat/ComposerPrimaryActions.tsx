@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { memo, type PointerEventHandler } from "react";
 import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
@@ -41,15 +42,15 @@ const formatPendingPrimaryActionLabel = (input: {
   questionIndex: number;
 }) => {
   if (input.isResponding) {
-    return "Submitting...";
+    return uiText("Submitting...");
   }
   if (input.compact) {
-    return input.isLastQuestion ? "Submit" : "Next";
+    return input.isLastQuestion ? uiText("Submit") : uiText("Next");
   }
   if (!input.isLastQuestion) {
-    return "Next question";
+    return uiText("Next question");
   }
-  return input.questionIndex > 0 ? "Submit answers" : "Submit answer";
+  return input.questionIndex > 0 ? uiText("Submit answers") : uiText("Submit answer");
 };
 
 // The composer's labeled primary actions (Submit, Refine, Implement) share the send button's
@@ -100,7 +101,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       )}
       {...pointerFocusProps}
       onClick={onInterrupt}
-      aria-label="Stop generation"
+      aria-label={uiText("Stop generation")}
     >
       <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
         <rect x="2" y="2" width="8" height="8" rx="1.5" />
@@ -120,7 +121,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               {...pointerFocusProps}
               onClick={onPreviousPendingQuestion}
               disabled={pendingAction.isResponding}
-              aria-label="Previous question"
+              aria-label={uiText("Previous question")}
             >
               <ChevronLeftIcon className="size-3.5" />
             </Button>
@@ -166,7 +167,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           {...pointerFocusProps}
           disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
         >
-          {isConnecting || isSendBusy ? "Sending..." : "Refine"}
+          {isConnecting || isSendBusy ? uiText("Sending...") : uiText("Refine")}
         </button>
       );
     }
@@ -179,7 +180,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           {...pointerFocusProps}
           disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
         >
-          {isConnecting || isSendBusy ? "Sending..." : "Implement"}
+          {isConnecting || isSendBusy ? uiText("Sending...") : uiText("Implement")}
         </button>
         <Menu>
           <MenuTrigger
@@ -190,7 +191,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                   messageActionPillClassName,
                   "h-9 rounded-l-none border-l border-message-action-foreground/20 px-2 sm:h-8",
                 )}
-                aria-label="Implementation actions"
+                aria-label={uiText("Implementation actions")}
                 {...pointerFocusProps}
                 disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
               />
@@ -230,18 +231,18 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       }
       aria-label={
         isEnvironmentUnavailable
-          ? "Environment disconnected"
+          ? uiText("Environment disconnected")
           : sendDisabledReason
             ? sendDisabledReason
             : isConnecting
-              ? "Connecting"
+              ? uiText("Connecting")
               : isPreparingWorktree
-                ? "Preparing worktree"
+                ? uiText("Preparing worktree")
                 : isSendBusy
-                  ? "Sending"
+                  ? uiText("Sending")
                   : isRunning
-                    ? "Queue message"
-                    : "Send message"
+                    ? uiText("Queue message")
+                    : uiText("Send message")
       }
     >
       {stageBackdropVariant ? (

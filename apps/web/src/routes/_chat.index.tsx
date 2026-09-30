@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { createFileRoute, Link } from "@tanstack/react-router";
@@ -94,14 +95,14 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
       {isElectron ? <WorkspacePageHeader electron /> : null}
       <Empty className="flex-1">
         <EmptyHeader className="max-w-md">
-          <EmptyTitle>Couldn’t start a new thread</EmptyTitle>
+          <EmptyTitle>{uiText("Couldn\u2019t start a new thread")}</EmptyTitle>
           <EmptyDescription>
-            The project is still available. Try opening the draft again.
+            {uiText("The project is still available. Try opening the draft again.")}
           </EmptyDescription>
           <div className="mt-5 flex justify-center">
             <Button size="sm" onClick={onRetry}>
               <RefreshIcon size="md" />
-              Try again
+              {uiText("Try again")}
             </Button>
           </div>
         </EmptyHeader>
@@ -140,7 +141,7 @@ function HostedStaticOnboardingState() {
               <div className="mx-auto mb-5 flex size-11 items-center justify-center rounded-xl border border-border/70 bg-background/70 text-muted-foreground">
                 <LinkIcon className="size-5" />
               </div>
-              <EmptyTitle>Connect to a computer running T3 Code</EmptyTitle>
+              <EmptyTitle>{uiText("Connect to a computer running T3 Code")}</EmptyTitle>
               <EmptyDescription>
                 This app connects to T3 Code running on your computer or a server. Start the T3 Code
                 desktop app or command-line server on that machine and keep it running.
@@ -149,7 +150,7 @@ function HostedStaticOnboardingState() {
               <div className="mt-6 flex justify-center">
                 <Button render={<Link to="/settings/connections" />} size="sm">
                   <PlusIcon className="size-4" />
-                  Open Connections
+                  {uiText("Open Connections")}
                 </Button>
               </div>
             </EmptyHeader>

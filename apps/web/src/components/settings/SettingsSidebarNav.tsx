@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   lazy,
   Suspense,
@@ -248,8 +249,8 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                   setActiveResultIndex(0);
                 }}
                 onKeyDown={handleSearchKeyDown}
-                placeholder="Search"
-                aria-label="Search settings"
+                placeholder={uiText("Search")}
+                aria-label={uiText("Search settings")}
                 role="combobox"
                 aria-autocomplete="list"
                 aria-expanded={isSearching && hasResults}

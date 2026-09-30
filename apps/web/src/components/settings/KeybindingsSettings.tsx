@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   ChevronDownIcon,
   CircleXIcon,
@@ -833,7 +834,7 @@ function KeybindingKeyControl({
           disabled={isSaving || keyDraft.trim().length === 0 || !isWhenDraftValid}
           onClick={save}
         >
-          {isSaving ? "Saving" : "Save"}
+          {isSaving ? "Saving" : uiText("Save")}
         </Button>
       ) : null}
       {showPill ? (
@@ -923,7 +924,7 @@ function KeybindingRowMenu({
   onRemove: (row: KeybindingRow) => void;
 }) {
   const canReset = row.source === "Custom" && row.defaultKey !== null;
-  const canRemove = row.source !== "Default";
+  const canRemove = row.source !== uiText("Default");
   if (!canReset && !canRemove) return null;
 
   return (
@@ -949,7 +950,7 @@ function KeybindingRowMenu({
         ) : null}
         {canRemove ? (
           <MenuItem variant="destructive" disabled={isSaving} onClick={() => onRemove(row)}>
-            Remove
+            {uiText("Remove")}
           </MenuItem>
         ) : null}
       </MenuPopup>
@@ -958,7 +959,7 @@ function KeybindingRowMenu({
 }
 
 function KeybindingSourceBadge({ source }: { source: KeybindingRow["source"] }) {
-  if (source === "Default") return null;
+  if (source === uiText("Default")) return null;
   return (
     <Badge variant="outline" size="sm">
       {source}
@@ -1218,7 +1219,7 @@ function NewKeybindingCancelIcon({
       >
         <XIcon className="size-3.5" />
       </TooltipTrigger>
-      <TooltipPopup side="top">Cancel</TooltipPopup>
+      <TooltipPopup side="top">{uiText("Cancel")}</TooltipPopup>
     </Tooltip>
   );
 }
@@ -1248,7 +1249,7 @@ function NewKeybindingSettingsRow(props: NewKeybindingProps) {
           <KeybindingConflictWarning labels={draft.conflictLabels} />
           <NewKeybindingKeyInput draft={draft} className="w-44" />
           <Button size="sm" disabled={isSaving || !draft.canSave} onClick={draft.save}>
-            {isSaving ? "Saving" : "Save"}
+            {isSaving ? "Saving" : uiText("Save")}
           </Button>
           <NewKeybindingCancelIcon isSaving={isSaving} onCancel={onCancel} />
         </div>

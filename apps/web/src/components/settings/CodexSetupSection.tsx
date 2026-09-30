@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -81,24 +82,24 @@ export function CodexSetupSection(props: CodexSetupSectionProps) {
                 .
               </>
             ) : (
-              "Connected with your Codex CLI."
+              uiText("Connected with your Codex CLI.")
             )
           ) : existingChecking ? (
-            "Checking your Codex CLI..."
+            uiText("Checking your Codex CLI...")
           ) : props.provider?.installed ? (
             existingSummary.headline
           ) : (
-            "Code with your ChatGPT subscription."
+            uiText("Code with your ChatGPT subscription.")
           )
         }
         control={
           existingReady ? (
             <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success-foreground">
               <CheckIcon className="size-3.5" />
-              Ready
+              {uiText("Ready")}
             </span>
           ) : existingChecking ? (
-            <span className="text-xs text-muted-foreground">Checking...</span>
+            <span className="text-xs text-muted-foreground">{uiText("Checking...")}</span>
           ) : existingAuthenticated ? (
             <span className="text-xs text-muted-foreground">{existingSummary.headline}</span>
           ) : (
@@ -110,14 +111,14 @@ export function CodexSetupSection(props: CodexSetupSectionProps) {
                 props.onModeChange("managed");
               }}
             >
-              Continue with ChatGPT
+              {uiText("Continue with ChatGPT")}
             </ChatGptConnectionButton>
           )
         }
         secondaryControl={
           !existingAuthenticated && !existingReady && !existingChecking ? (
             <Button size="sm" variant="ghost-muted" onClick={() => props.onModeChange("existing")}>
-              Use existing CLI
+              {uiText("Use existing CLI")}
             </Button>
           ) : null
         }
@@ -129,17 +130,17 @@ export function CodexSetupSection(props: CodexSetupSectionProps) {
           description={<CodexSignInDescription />}
           control={
             <Button size="sm" variant="outline" className="min-w-44" disabled>
-              Open sign-in page
+              {uiText("Open sign-in page")}
             </Button>
           }
           secondaryControl={
             <Button size="sm" variant="ghost-muted" disabled>
-              Cancel
+              {uiText("Cancel")}
             </Button>
           }
         />
       ) : (
-        <SettingsRow title="ChatGPT account" description="Preparing sign-in." />
+        <SettingsRow title={uiText("ChatGPT account")} description={uiText("Preparing sign-in.")} />
       )
     ) : (
       <ManagedCodexSetup
@@ -330,14 +331,16 @@ function ManagedCodexSetup({
         if (result._tag === "Failure") {
           if (!isAtomCommandInterrupted(result)) {
             const failure = squashAtomCommandFailure(result);
-            setError(failure instanceof Error ? failure.message : "Codex setup failed. Try again.");
+            setError(
+              failure instanceof Error ? failure.message : uiText("Codex setup failed. Try again."),
+            );
           }
         } else {
           succeeded = true;
           onSuccess?.(result.value);
         }
       } catch {
-        setError("Codex setup failed. Try again.");
+        setError(uiText("Codex setup failed. Try again."));
       }
       pendingRef.current = false;
       setPending(false);
@@ -576,14 +579,14 @@ function ManagedCodexSetup({
             ? `${installation?.source === "local" ? "Using your installed Codex" : "Managed by T3 Code"}${installation?.installedVersion ? ` · v${installation.installedVersion}` : ""}.`
             : (installation?.message ?? "T3 Code downloads and manages Codex for you.");
   const accountDescription = finishingSignIn ? (
-    "Finishing sign-in..."
+    uiText("Finishing sign-in...")
   ) : installActive ? (
     runtimeDescription
   ) : authActive || auth?.phase === "failed" || auth?.phase === "cancelled" ? (
     auth?.phase === "waiting" && requestedAccountEmail ? (
       `Continue as ${requestedAccountEmail} on OpenAI.`
     ) : (
-      (auth?.message ?? "Finish signing in in your browser.")
+      (auth?.message ?? uiText("Finish signing in in your browser."))
     )
   ) : authenticated ? (
     provider?.auth.email?.trim() ? (
@@ -598,10 +601,10 @@ function ManagedCodexSetup({
         .
       </>
     ) : (
-      "Signed in with ChatGPT."
+      uiText("Signed in with ChatGPT.")
     )
   ) : (
-    (reconnectEmail ?? "Use your ChatGPT subscription.")
+    (reconnectEmail ?? uiText("Use your ChatGPT subscription."))
   );
 
   const handoffUrl =
@@ -634,18 +637,18 @@ function ManagedCodexSetup({
       }}
     >
       {finishingSignIn
-        ? "Finishing sign-in..."
+        ? uiText("Finishing sign-in...")
         : handoffQuery.data?.phase === "finished"
           ? transferFailed
-            ? "Retry connection"
-            : "Finishing sign-in..."
+            ? uiText("Retry connection")
+            : uiText("Finishing sign-in...")
           : auth?.phase === "waiting"
             ? remoteWeb
-              ? "Open ChatGPT sign-in"
-              : "Open sign-in page"
+              ? uiText("Open ChatGPT sign-in")
+              : uiText("Open sign-in page")
             : presentation === "onboarding"
-              ? "Open sign-in page"
-              : "Signing in..."}
+              ? uiText("Open sign-in page")
+              : uiText("Signing in...")}
     </Button>
   );
   const callbackCompletion =
@@ -688,7 +691,7 @@ function ManagedCodexSetup({
             type="submit"
             disabled={pending || readOnly || !callbackUrl.trim()}
           >
-            Connect
+            {uiText("Connect")}
           </Button>
         </form>
         {!remoteWeb ? (
@@ -783,7 +786,7 @@ function ManagedCodexSetup({
                   .
                 </>
               ) : (
-                "Connected to ChatGPT."
+                uiText("Connected to ChatGPT.")
               )
             ) : callbackCompletion && !needsManualCallback ? (
               <CodexSignInDescription
@@ -800,14 +803,14 @@ function ManagedCodexSetup({
             ) : authActive || auth?.phase === "failed" || auth?.phase === "cancelled" ? (
               accountDescription
             ) : (
-              "Code with your ChatGPT subscription."
+              uiText("Code with your ChatGPT subscription.")
             )
           }
           control={
             authenticated && !busy ? (
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success-foreground">
                 <CheckIcon className="size-3.5" />
-                Ready
+                {uiText("Ready")}
               </span>
             ) : authActive ? (
               waitingControl
@@ -828,7 +831,7 @@ function ManagedCodexSetup({
                   ? "Setting up..."
                   : hasSavedAccount
                     ? "Reconnect account"
-                    : "Continue with ChatGPT"}
+                    : uiText("Continue with ChatGPT")}
               </ChatGptConnectionButton>
             )
           }
@@ -851,7 +854,7 @@ function ManagedCodexSetup({
                     );
                 }}
               >
-                Cancel
+                {uiText("Cancel")}
               </Button>
             ) : !authActive && !authenticated && hasSavedAccount ? (
               <Button
@@ -869,7 +872,7 @@ function ManagedCodexSetup({
                 disabled={readOnly || busy}
                 onClick={() => onModeChange("existing")}
               >
-                Use existing CLI
+                {uiText("Use existing CLI")}
               </Button>
             ) : null
           }
@@ -889,7 +892,7 @@ function ManagedCodexSetup({
     <section aria-label="Codex setup" className="divide-y divide-border/50">
       {accountPicker}
       <SettingsRow
-        title="ChatGPT account"
+        title={uiText("ChatGPT account")}
         description={accountDescription}
         control={
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -908,7 +911,7 @@ function ManagedCodexSetup({
                       onSignInCancelled?.();
                     }}
                   >
-                    Cancel
+                    {uiText("Cancel")}
                   </Button>
                 )}
               </>
@@ -928,7 +931,7 @@ function ManagedCodexSetup({
                   );
                 }}
               >
-                Cancel
+                {uiText("Cancel")}
               </Button>
             ) : authenticated ? (
               <>
@@ -967,7 +970,7 @@ function ManagedCodexSetup({
                     ? "Setting up..."
                     : hasSavedAccount
                       ? "Reconnect account"
-                      : "Continue with ChatGPT"}
+                      : uiText("Continue with ChatGPT")}
                 </ChatGptConnectionButton>
                 {hasSavedAccount ? (
                   <Button
@@ -1027,7 +1030,7 @@ export function CodexManagedRuntimeFields({
   return (
     <>
       <SettingsRow
-        title="Binary path"
+        title={uiText("Binary path")}
         description="Selected by T3 Code."
         control={
           <div className="w-full sm:w-80">
@@ -1050,7 +1053,7 @@ export function CodexManagedRuntimeFields({
               aria-label="Codex home path"
               value={provider?.runtimePaths?.homePath ?? ""}
               title={provider?.runtimePaths?.homePath}
-              placeholder="Unavailable"
+              placeholder={uiText("Unavailable")}
               disabled
             />
           </div>
@@ -1069,7 +1072,7 @@ export function CodexManagedRuntimeFields({
               aria-label="Codex shadow home path"
               value={provider?.runtimePaths?.shadowHomePath ?? ""}
               title={provider?.runtimePaths?.shadowHomePath ?? undefined}
-              placeholder={provider?.runtimePaths ? "Not used" : "Unavailable"}
+              placeholder={provider?.runtimePaths ? "Not used" : uiText("Unavailable")}
               disabled
             />
           </div>

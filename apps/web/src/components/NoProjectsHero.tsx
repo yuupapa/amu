@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { PlusIcon } from "lucide-react";
 import { useCallback } from "react";
 
@@ -19,12 +20,14 @@ export function NoProjectsHero() {
         <Empty size="hero" className="flex-1">
           <div className="w-full max-w-lg px-8 py-12">
             <EmptyHeader className="max-w-none">
-              <EmptyTitle>What should we work on?</EmptyTitle>
-              <EmptyDescription>Add a project to start your first thread.</EmptyDescription>
+              <EmptyTitle>{uiText("What should we work on?")}</EmptyTitle>
+              <EmptyDescription>
+                {uiText("Add a project to start your first thread.")}
+              </EmptyDescription>
               <div className="mt-6 flex justify-center">
                 <Button size="sm" onClick={openAddProject}>
                   <PlusIcon className="size-4" />
-                  Add project
+                  {uiText("Add project")}
                 </Button>
               </div>
             </EmptyHeader>
