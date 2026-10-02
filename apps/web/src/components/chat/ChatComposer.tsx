@@ -1,4 +1,4 @@
-import { uiText } from "~/uiText";
+import { uiText, uiFormat } from "~/uiText";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -1319,6 +1319,8 @@ export interface ChatComposerHandle {
 // --------------------------------------------------------------------------
 
 export interface ChatComposerProps {
+  jevAutoSelected?: boolean;
+  onJevAutoChange?: (auto: boolean) => void;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   attachmentUploadsCapabilityKnown: boolean;
@@ -2362,7 +2364,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           type: "slash-command",
           command: "model",
           label: "/model",
-          description: "Switch response model for this thread",
+          description: uiText("Switch response model for this thread"),
         },
         ...(planModeUiEnabled
           ? ([
@@ -2371,14 +2373,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 type: "slash-command",
                 command: "plan",
                 label: "/plan",
-                description: "Switch this thread into plan mode",
+                description: uiText("Switch this thread into plan mode"),
               },
               {
                 id: "slash:default",
                 type: "slash-command",
                 command: "default",
                 label: "/default",
-                description: "Switch this thread back to normal build mode",
+                description: uiText("Switch this thread back to normal build mode"),
               },
             ] as const)
           : []),
@@ -2396,7 +2398,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         provider: selectedProvider,
         command,
         label: `/${command.name}`,
-        description: command.description ?? command.input?.hint ?? "Run provider command",
+        description: command.description ?? command.input?.hint ?? uiText("Run provider command"),
       }));
       const query = composerTrigger.query.trim().toLowerCase();
       const skillItems = slashMenuSkills.map((skill) => ({
@@ -2408,7 +2410,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         description:
           skill.shortDescription ??
           skill.description ??
-          (skill.scope ? `${skill.scope} skill` : ""),
+          (skill.scope ? uiFormat("{0} skill", skill.scope) : ""),
       }));
       const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
         (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
@@ -2429,7 +2431,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         description:
           skill.shortDescription ??
           skill.description ??
-          (skill.scope ? `${skill.scope} skill` : "Run provider skill"),
+          (skill.scope ? uiFormat("{0} skill", skill.scope) : uiText("Run provider skill")),
       }));
     }
     if (
@@ -2849,8 +2851,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const fail = (reason: string) => {
         toastManager.add({
           type: "error",
-          title: `Couldn't bring ${record.name} into this message`,
-          description: `${reason} Remove the chip or attach the file again.`,
+          title: uiFormat("Couldn't bring {0} into this message", record.name),
+          description: uiFormat("{0} Remove the chip or attach the file again.", reason),
         });
       };
       const sourceConnection = readPreparedConnection(sourceEnvironmentId);
@@ -3802,8 +3804,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         event?.preventDefault();
         toastManager.add({
           type: "info",
-          title: "Still compressing a pasted image.",
-          description: "Send again once its thumbnail appears.",
+          title: uiText("Still compressing a pasted image."),
+          description: uiText("Send again once its thumbnail appears."),
         });
         return;
       }
@@ -3813,8 +3815,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         event?.preventDefault();
         toastManager.add({
           type: "info",
-          title: "Still bringing a pasted attachment into this message.",
-          description: "Send again once its chip resolves.",
+          title: uiText("Still bringing a pasted attachment into this message."),
+          description: uiText("Send again once its chip resolves."),
         });
         return;
       }
@@ -4104,8 +4106,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (filesToVerify.some((file) => file.environmentId !== environmentId)) {
         toastManager.add({
           type: "error",
-          title: "Stashed files belong to another environment",
-          description: "Restore this prompt in the environment that received its files.",
+          title: uiText("Stashed files belong to another environment"),
+          description: uiText("Restore this prompt in the environment that received its files."),
         });
         return;
       }
@@ -4144,9 +4146,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (!durable) {
         toastManager.add({
           type: "warning",
-          title: "Restored prompt may reappear in the stash",
-          description:
+          title: uiText("Restored prompt may reappear in the stash"),
+          description: uiText(
             "Browser storage rejected the update, so this entry could still be there after a reload.",
+          ),
           data: { hideCopyButton: true },
         });
       }
@@ -4372,7 +4375,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (missingImageReasons.length > 0) {
         toastManager.add({
           type: "warning",
-          title: "Some attachments were not restored",
+          title: uiText("Some attachments were not restored"),
           description: missingImageReasons.join(" "),
         });
       }
@@ -4418,9 +4421,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (!durable) {
         toastManager.add({
           type: "warning",
-          title: "Stash entry may come back",
-          description:
+          title: uiText("Stash entry may come back"),
+          description: uiText(
             "Browser storage rejected the delete, so this prompt could reappear after a reload.",
+          ),
           data: { hideCopyButton: true },
         });
       }
@@ -4434,8 +4438,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (pendingDraftWork.has(attachmentTargetKeyRef.current)) {
       toastManager.add({
         type: "info",
-        title: "Still bringing a pasted attachment into this message.",
-        description: "Stash again once its chip resolves.",
+        title: uiText("Still bringing a pasted attachment into this message."),
+        description: uiText("Stash again once its chip resolves."),
       });
       return;
     }
@@ -4470,7 +4474,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (composerFileNeedsReattach(file)) {
         toastManager.add({
           type: "error",
-          title: "Attach dropped files again or remove them before stashing",
+          title: uiText("Attach dropped files again or remove them before stashing"),
         });
         return;
       }
@@ -4478,7 +4482,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (upload?.status !== "ready" || upload.environmentId !== environmentId) {
         toastManager.add({
           type: "error",
-          title: "Wait for file uploads before stashing this prompt",
+          title: uiText("Wait for file uploads before stashing this prompt"),
         });
         return;
       }
@@ -4532,9 +4536,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (!written) {
         toastManager.add({
           type: "error",
-          title: "Could not stash this prompt",
-          description:
+          title: uiText("Could not stash this prompt"),
+          description: uiText(
             "Browser storage rejected the write, so the composer was left as-is. Free up site data and try again.",
+          ),
           data: { hideCopyButton: true },
         });
         return;
@@ -4545,9 +4550,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (!durable) {
         toastManager.add({
           type: "warning",
-          title: "Stashed prompt will not survive a reload",
-          description:
+          title: uiText("Stashed prompt will not survive a reload"),
+          description: uiText(
             "Browser storage is unavailable, so this stash is kept in memory only for this session.",
+          ),
           data: { hideCopyButton: true },
         });
       }
@@ -4581,8 +4587,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }
         toastManager.add({
           type: "warning",
-          title: "Oldest stashed prompt discarded",
-          description: `The stash holds ${MAX_STASH_ENTRIES} prompts; the oldest was removed to make room.`,
+          title: uiText("Oldest stashed prompt discarded"),
+          description: uiFormat(
+            "The stash holds {0} prompts; the oldest was removed to make room.",
+            MAX_STASH_ENTRIES,
+          ),
           data: { hideCopyButton: true },
         });
       }
@@ -4632,9 +4641,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         if (!imagesDurable && durable && images.length > 0) {
           toastManager.add({
             type: "warning",
-            title: "Stashed images were not saved",
-            description:
+            title: uiText("Stashed images were not saved"),
+            description: uiText(
               "The prompt was stashed, but browser storage rejected its images. They will be missing if you reload.",
+            ),
             data: { hideCopyButton: true },
           });
         }
@@ -4644,8 +4654,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         // them evaporate.
         toastManager.add({
           type: "warning",
-          title: "Stashed images did not attach",
-          description: `That prompt was restored or deleted before ${kept.length} image${kept.length === 1 ? "" : "s"} finished saving. Re-attach ${kept.length === 1 ? "it" : "them"} if you still need ${kept.length === 1 ? "it" : "them"}.`,
+          title: uiText("Stashed images did not attach"),
+          description: uiFormat(
+            "That prompt was restored or deleted before {0} image{1} finished saving. Re-attach {2} if you still need {3}.",
+            kept.length,
+            kept.length === 1 ? "" : "s",
+            kept.length === 1 ? "it" : "them",
+            kept.length === 1 ? "it" : "them",
+          ),
           data: { hideCopyButton: true },
         });
       }
@@ -4775,7 +4791,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             key={image.id}
             type="button"
             className="relative size-7 shrink-0 cursor-zoom-in overflow-hidden rounded-md border border-border/70 bg-muted/60"
-            aria-label={`Preview ${image.name}`}
+            aria-label={uiFormat("Preview {0}", image.name)}
             onPointerDown={(event) => event.preventDefault()}
             onClick={() => {
               const preview = buildExpandedImagePreview(composerImages, image.id);
@@ -4810,7 +4826,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           <button
             type="button"
             className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md border border-border/70 bg-muted/60 font-medium text-secondary-label text-xs tabular-nums outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-            aria-label={`Show ${String(restingImagePreviewCounts.overflowCount)} more image attachments`}
+            aria-label={uiFormat(
+              "Show {0} more image attachments",
+              String(restingImagePreviewCounts.overflowCount),
+            )}
             onPointerDown={(event) => event.preventDefault()}
             onClick={() => {
               if (isComposerCollapsedMobile) {
@@ -4961,35 +4980,37 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     size: composerControlsInStrip ? "xs" : "sm",
     hidden: composerControlsHidden || restingHiddenBlockCount > 1,
   });
-  const restingBlockDefs = [
-    ...(providerTraitsPicker
-      ? [
-          {
-            id: "traits",
-            content: (
-              <>
-                <ComposerControlSeparator size={composerControlsInStrip ? "xs" : "sm"} />
-                {restingProviderTraitsPicker}
-              </>
-            ),
-          },
-        ]
-      : []),
-    {
-      id: "mode",
-      content: (
-        <ComposerFooterModeControls
-          showInteractionModeToggle={planModeUiEnabled}
-          interactionMode={interactionMode}
-          runtimeMode={runtimeMode}
-          size={composerControlsInStrip ? "xs" : "sm"}
-          hidden={composerControlsHidden || restingHiddenBlockCount > 0}
-          onToggleInteractionMode={toggleInteractionMode}
-          onRuntimeModeChange={handleRuntimeModeChange}
-        />
-      ),
-    },
-  ];
+  const restingBlockDefs = props.jevAutoSelected
+    ? []
+    : [
+        ...(providerTraitsPicker
+          ? [
+              {
+                id: "traits",
+                content: (
+                  <>
+                    <ComposerControlSeparator size={composerControlsInStrip ? "xs" : "sm"} />
+                    {restingProviderTraitsPicker}
+                  </>
+                ),
+              },
+            ]
+          : []),
+        {
+          id: "mode",
+          content: (
+            <ComposerFooterModeControls
+              showInteractionModeToggle={planModeUiEnabled}
+              interactionMode={interactionMode}
+              runtimeMode={runtimeMode}
+              size={composerControlsInStrip ? "xs" : "sm"}
+              hidden={composerControlsHidden || restingHiddenBlockCount > 0}
+              onToggleInteractionMode={toggleInteractionMode}
+              onRuntimeModeChange={handleRuntimeModeChange}
+            />
+          ),
+        },
+      ];
   const hiddenRestingBlockIds = restingBlockDefs
     .slice(restingBlockDefs.length - restingHiddenBlockCount)
     .map((def) => def.id);
@@ -5006,7 +5027,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       className="shrink-0"
     >
       <CircleAlertIcon className="size-4" />
-      {providerSetupInstanceId ? "Open provider settings" : "No provider available"}
+      {providerSetupInstanceId ? uiText("Open provider settings") : uiText("No provider available")}
     </ComposerControl>
   ) : (
     <>
@@ -5018,6 +5039,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         />
       ) : null}
       <ProviderModelPicker
+        {...(props.onJevAutoChange
+          ? {
+              autoSelected: props.jevAutoSelected,
+              onAutoSelect: () => {
+                setMultipleModelSelections(null);
+                props.onJevAutoChange?.(true);
+              },
+              ...(props.jevAutoSelected
+                ? { triggerLabel: "オート", triggerAriaLabel: "オート・モデル選択" }
+                : {}),
+            }
+          : {})}
         isComposerOwned
         disabled={providerCatalogPending || isSendBusy}
         {...(routeKind === "draft" && supportsMultipleModels
@@ -5026,6 +5059,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 ? { selectedModels: multipleModelSelections }
                 : {}),
               onToggleModel: (instanceId: ProviderInstanceId, model: string) => {
+                props.onJevAutoChange?.(false);
                 const current = multipleModelSelections ?? [selectedModelSelection];
                 const matchesModel = (selection: ModelSelection) => {
                   if (selection.instanceId !== instanceId) return false;
@@ -5095,6 +5129,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onOpenChange={setIsComposerModelPickerOpen}
         getModelDisabledReason={getModelDisabledReason}
         onInstanceModelChange={(instanceId, model) => {
+          props.onJevAutoChange?.(false);
           setMultipleModelSelections(null);
           onProviderModelSelect(instanceId, model);
         }}
@@ -5291,7 +5326,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ) {
       toastManager.add({
         type: "error",
-        title: "This question cannot accept attachments.",
+        title: uiText("This question cannot accept attachments."),
       });
       return false;
     }
@@ -5409,10 +5444,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         const attached = storedFiles[0]!;
         toastManager.add({
           type: "info",
-          title: `Large paste attached as ${attached.name}`,
-          description: `${formatAttachmentSize(attached.sizeBytes)} · Use ${
-            isMacPlatform(navigator.platform) ? "⌘⇧V" : "Ctrl+Shift+V"
-          } to keep a large paste inline.`,
+          title: uiFormat("Large paste attached as {0}", attached.name),
+          description: uiFormat(
+            "{0} · Use {1} to keep a large paste inline.",
+            formatAttachmentSize(attached.sizeBytes),
+            isMacPlatform(navigator.platform) ? "⌘⇧V" : "Ctrl+Shift+V",
+          ),
           data: { hideCopyButton: true },
         });
       }
@@ -5585,8 +5622,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       toastManager.add({
         type: "error",
-        title: "Pasted text is too large for this message",
-        description: "Remove some text or an attachment, then paste again.",
+        title: uiText("Pasted text is too large for this message"),
+        description: uiText("Remove some text or an attachment, then paste again."),
         data: { hideCopyButton: true },
       });
       return true;
@@ -5607,8 +5644,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (!wouldExceedInputLimit) return false;
       toastManager.add({
         type: "error",
-        title: "Pasted text is too large to attach",
-        description: "Reduce the clipboard contents or save a smaller excerpt as a file.",
+        title: uiText("Pasted text is too large to attach"),
+        description: uiText("Reduce the clipboard contents or save a smaller excerpt as a file."),
         data: { hideCopyButton: true },
       });
       return true;
@@ -5747,8 +5784,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onInsertRejected: () => {
       toastManager.add({
         type: "error",
-        title: "Unable to add to chat",
-        description: "The composer is busy; try again once it is ready.",
+        title: uiText("Unable to add to chat"),
+        description: uiText("The composer is busy; try again once it is ready."),
       });
     },
   });
@@ -5879,7 +5916,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         if (target === "remote") {
           toastManager.add({
             type: "error",
-            title: "Folders can't be dropped into remote environments",
+            title: uiText("Folders can't be dropped into remote environments"),
           });
           return;
         }
@@ -5888,8 +5925,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           if (path === null) {
             toastManager.add({
               type: "error",
-              title: `Couldn't get the path of "${folder.name}"`,
-              description: "Type the folder path with @ instead.",
+              title: uiFormat('Couldn\'t get the path of "{0}"', folder.name),
+              description: uiText("Type the folder path with @ instead."),
             });
             continue;
           }
@@ -6392,9 +6429,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 >
                   {activePendingProgress
                     ? isChoiceOnlyPendingQuestion
-                      ? "Choose an option above"
+                      ? uiText("Choose an option above")
                       : activePendingProgress.customAnswer ||
-                        "Type your own answer, or leave this blank to use the selected option"
+                        uiText(
+                          "Type your own answer, or leave this blank to use the selected option",
+                        )
                     : prompt.trim() ||
                       (showProviderUnavailable
                         ? uiText("Enable a provider in Settings")
@@ -6520,7 +6559,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               <button
                                 type="button"
                                 className="h-full w-full cursor-zoom-in"
-                                aria-label={`Preview ${image.name}`}
+                                aria-label={uiFormat("Preview {0}", image.name)}
                                 onClick={() => {
                                   const preview = buildExpandedImagePreview(
                                     composerImages,
@@ -6561,7 +6600,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   render={
                                     <span
                                       role="img"
-                                      aria-label="Draft attachment may not persist"
+                                      aria-label={uiText("Draft attachment may not persist")}
                                       className="absolute left-1 top-1 inline-flex items-center justify-center rounded bg-background/85 p-0.5 text-warning-foreground"
                                     >
                                       <CircleAlertIcon className="size-3" />
@@ -6569,8 +6608,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   }
                                 />
                                 <TooltipPopup side="top">
-                                  Draft attachment could not be saved locally and may be lost on
-                                  navigation.
+                                  {uiText(
+                                    "Draft attachment could not be saved locally and may be lost on navigation.",
+                                  )}
                                 </TooltipPopup>
                               </Tooltip>
                             )}
@@ -6594,7 +6634,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                           draftTarget: attachmentDraftTarget,
                                         })
                                       }
-                                      aria-label={`Retry upload for ${image.name}`}
+                                      aria-label={uiFormat("Retry upload for {0}", image.name)}
                                     />
                                   }
                                 >
@@ -6615,7 +6655,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 variant="media-close"
                                 size="icon-xs"
                                 onClick={() => removeComposerImage(image.id)}
-                                aria-label={`Remove ${image.name}`}
+                                aria-label={uiFormat("Remove {0}", image.name)}
                               >
                                 <XIcon />
                               </Button>
@@ -6654,7 +6694,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           <button
                             type="button"
                             className="flex h-full w-full cursor-zoom-in flex-col items-center justify-center gap-1 px-1 text-white"
-                            aria-label={`Play ${file.name}`}
+                            aria-label={uiFormat("Play {0}", file.name)}
                             onClick={() => {
                               if (file.file !== null) {
                                 const preview = buildExpandedImagePreview([file], file.id);
@@ -6693,7 +6733,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                         draftTarget: attachmentDraftTarget,
                                       })
                                     }
-                                    aria-label={`Retry upload for ${file.name}`}
+                                    aria-label={uiFormat("Retry upload for {0}", file.name)}
                                   />
                                 }
                               >
@@ -6707,7 +6747,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             size="icon-xs"
                             className="absolute right-1 top-1"
                             onClick={() => removeComposerFileFromDraft(file.id)}
-                            aria-label={`Remove ${file.name}`}
+                            aria-label={uiFormat("Remove {0}", file.name)}
                           >
                             <XIcon />
                           </Button>
@@ -6751,8 +6791,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           <span className="shrink-0 text-xs text-secondary-label">
                             {needsReattach
                               ? canReattachFile
-                                ? "Attach again"
-                                : "Remove to send"
+                                ? uiText("Attach again")
+                                : uiText("Remove to send")
                               : upload?.status === "uploading"
                                 ? formatAttachmentUploadProgress(upload.progress)
                                 : formatAttachmentSize(file.sizeBytes)}
@@ -6771,7 +6811,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                         draftTarget: attachmentDraftTarget,
                                       })
                                     }
-                                    aria-label={`Retry upload for ${file.name}`}
+                                    aria-label={uiFormat("Retry upload for {0}", file.name)}
                                   />
                                 }
                               >
@@ -6784,7 +6824,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             variant="ghost"
                             size="icon-xs"
                             onClick={() => removeComposerFileFromDraft(file.id)}
-                            aria-label={`Remove ${file.name}`}
+                            aria-label={uiFormat("Remove {0}", file.name)}
                           >
                             <XIcon />
                           </Button>
@@ -6881,23 +6921,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onPaste={onComposerPaste}
                     placeholder={
                       isComposerApprovalState
-                        ? "Resolve this approval request to continue"
+                        ? uiText("Resolve this approval request to continue")
                         : activePendingProgress
                           ? isChoiceOnlyPendingQuestion
-                            ? "Choose an option above"
-                            : "Type your own answer, or leave this blank to use the selected option"
+                            ? uiText("Choose an option above")
+                            : uiText(
+                                "Type your own answer, or leave this blank to use the selected option",
+                              )
                           : showPlanFollowUpPrompt && activeProposedPlan
-                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            ? uiText(
+                                "Add feedback to refine the plan, or leave this blank to implement it",
+                              )
                             : projectSelectionRequired
-                              ? "Choose a project above to start a thread"
+                              ? uiText("Choose a project above to start a thread")
                               : showProviderUnavailable
                                 ? uiText("Enable a provider in Settings to send a message")
                                 : phase === "disconnected"
-                                  ? DISCONNECTED_COMPOSER_PLACEHOLDER
+                                  ? uiText(DISCONNECTED_COMPOSER_PLACEHOLDER)
                                   : uiText(
-                                      uiText(
-                                        "Ask anything, @tag files/folders, $use skills, or / for commands",
-                                      ),
+                                      "Ask anything, @tag files/folders, $use skills, or / for commands",
                                     )
                     }
                     disabled={

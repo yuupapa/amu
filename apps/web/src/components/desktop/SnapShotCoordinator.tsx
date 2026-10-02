@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 import {
   type DesktopPendingSnapShot,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -285,8 +286,8 @@ export function SnapShotCoordinator() {
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Snapshot taken, but no project is available",
-                description: "Add a project, then capture the window again.",
+                title: uiText("Snapshot taken, but no project is available"),
+                description: uiText("Add a project, then capture the window again."),
               }),
             );
             continue;
@@ -302,10 +303,12 @@ export function SnapShotCoordinator() {
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Snapshot failed",
-                description: `Capture ${item.id}: ${
-                  error instanceof Error ? error.message : "Try the capture again."
-                }`,
+                title: uiText("Snapshot failed"),
+                description: uiFormat(
+                  "Capture {0}: {1}",
+                  item.id,
+                  error instanceof Error ? error.message : "Try the capture again.",
+                ),
               }),
             );
           }
@@ -317,8 +320,8 @@ export function SnapShotCoordinator() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Snapshot failed",
-            description: error instanceof Error ? error.message : "Try the capture again.",
+            title: uiText("Snapshot failed"),
+            description: error instanceof Error ? error.message : uiText("Try the capture again."),
           }),
         );
       })
@@ -376,8 +379,8 @@ export function SnapShotCoordinator() {
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Snapshot failed",
-                description: state.message ?? "Try the capture again.",
+                title: uiText("Snapshot failed"),
+                description: state.message ?? uiText("Try the capture again."),
               }),
             );
           });

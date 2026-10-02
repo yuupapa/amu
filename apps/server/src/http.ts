@@ -3,6 +3,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  JevRpcRequest,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
@@ -27,6 +28,16 @@ import {
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { OtlpTracer, OtlpSerialization } from "effect/unstable/observability";
 
+import { JevBridge } from "./jev/JevBridge.ts";
+import { LunaDecisionBroker } from "./luna/LunaDecision.ts";
+import { resolveLunaPreflight } from "./luna/LunaPreflight.ts";
+import { autoChoices } from "@t3tools/shared/lunaAuto";
+import { deriveProviderInstanceConfigMap } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
+import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
+import { ServerSettingsService } from "./serverSettings.ts";
+import { mergeProviderInstanceEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
+import { expandHomePath } from "./pathExpansion.ts";
+
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
 import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
@@ -46,7 +57,11 @@ import {
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
-import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
+import {
+  browserApiCorsAllowedHeaders,
+  browserApiCorsAllowedMethods,
+  isLocalLunaAutoRequest,
+} from "./httpCors.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -429,6 +444,170 @@ export const assetRouteLayer = HttpRouter.add(
       request.method === "HEAD" ? "HEAD" : "GET",
     ).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
+    );
+  }),
+);
+
+// The local integration uses the same T3 session and operate scope as a turn.
+// A custom header blocks cross-origin form posts; no separate dashboard or public listener.
+export const jevRouteLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const bridge = yield* JevBridge;
+    return HttpRouter.add(
+      "POST",
+      "/api/jev",
+      Effect.gen(function* () {
+        yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const url = HttpServerRequest.toURL(request);
+        if (
+          Option.isNone(url) ||
+          !LOOPBACK_HOSTNAMES.has(url.value.hostname) ||
+          request.headers["x-t3-jev"] !== "1" ||
+          (request.headers.origin !== undefined && request.headers.origin !== url.value.origin)
+        ) {
+          return HttpServerResponse.jsonUnsafe(
+            { error: "JevはこのMacのローカルのAmuで利用してください。" },
+            { status: 403 },
+          );
+        }
+        const body = yield* request.text;
+        if (Buffer.byteLength(body) > 64000)
+          return HttpServerResponse.jsonUnsafe(
+            { error: "入力サイズが上限を超えています。" },
+            { status: 400 },
+          );
+        const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(JevRpcRequest))(body).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+        if (decoded === null)
+          return HttpServerResponse.jsonUnsafe({ error: "操作形式が不正です。" }, { status: 400 });
+        return yield* Effect.tryPromise(() =>
+          bridge.request(decoded.method, decoded.thread, "args" in decoded ? decoded.args : {}),
+        ).pipe(
+          Effect.map((result) => HttpServerResponse.jsonUnsafe({ result })),
+          Effect.catch((error) =>
+            Effect.succeed(
+              HttpServerResponse.jsonUnsafe(
+                {
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : "Jev接続が停止しました。再送せず状態を確認してください。",
+                },
+                { status: 400 },
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }),
+);
+
+export const lunaAutoRouteLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const providers = yield* ProviderRegistry;
+    const settings = yield* ServerSettingsService;
+    const broker = new LunaDecisionBroker();
+    yield* Effect.addFinalizer(() => Effect.sync(() => broker.close()));
+    return HttpRouter.add(
+      "POST",
+      "/api/luna-auto",
+      Effect.gen(function* () {
+        yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const url = HttpServerRequest.toURL(request);
+        if (Option.isNone(url) || !isLocalLunaAutoRequest(url.value, request.headers))
+          return HttpServerResponse.jsonUnsafe(
+            { error: "オートはこのMacのローカルのAmuで利用してください。" },
+            { status: 403 },
+          );
+        const body = yield* request.text;
+        if (Buffer.byteLength(body) > 64_000)
+          return HttpServerResponse.jsonUnsafe(
+            { error: "入力サイズが上限を超えています。" },
+            { status: 400 },
+          );
+        const data = yield* Schema.decodeEffect(
+          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+        )(body).pipe(Effect.orElseSucceed(() => null));
+        if (!data || typeof data.id !== "string" || !/^[a-zA-Z0-9-]{20,80}$/.test(data.id))
+          return HttpServerResponse.jsonUnsafe(
+            { error: "モデル選択の形式が不正です。" },
+            { status: 400 },
+          );
+        if (data.action === "cancel") {
+          broker.cancel(data.id);
+          return HttpServerResponse.jsonUnsafe({ cancelled: true });
+        }
+        if (
+          data.action !== "decide" ||
+          typeof data.prompt !== "string" ||
+          !data.prompt.trim() ||
+          data.prompt.length > 24_000 ||
+          !Array.isArray(data.models)
+        )
+          return HttpServerResponse.jsonUnsafe(
+            { error: "依頼文または利用可能モデルが不正です。" },
+            { status: 400 },
+          );
+        const snapshots = yield* providers.getProviders;
+        const currentSettings = yield* settings.getSettings;
+        const allowedModels = data.models;
+        const choices = autoChoices(
+          snapshots.map((p) => ({
+            ...p,
+            models: p.models.filter((model) =>
+              allowedModels.some(
+                (m: unknown) =>
+                  m !== null &&
+                  typeof m === "object" &&
+                  "instanceId" in m &&
+                  "model" in m &&
+                  m.instanceId === p.instanceId &&
+                  m.model === model.slug,
+              ),
+            ),
+          })),
+        );
+        const preflight = resolveLunaPreflight(
+          snapshots,
+          deriveProviderInstanceConfigMap(currentSettings),
+          choices,
+        );
+        if (!preflight.ok)
+          return HttpServerResponse.jsonUnsafe(
+            { error: preflight.error, code: preflight.code },
+            { status: 400 },
+          );
+        const { judge, instance, config } = preflight;
+        const id = data.id,
+          prompt = data.prompt;
+        // Keep the original rejection message; the default catcher replaces it with a generic UnknownError.
+        return yield* Effect.tryPromise({
+          try: () =>
+            broker.decide(id, {
+              prompt,
+              choices,
+              runtime: {
+                binary: expandHomePath(config.binaryPath),
+                home:
+                  judge.runtimePaths?.shadowHomePath ??
+                  judge.runtimePaths?.homePath ??
+                  expandHomePath(config.homePath),
+                environment: mergeProviderInstanceEnvironment(instance.environment),
+              },
+            }),
+          catch: (error) =>
+            error instanceof Error ? error.message : "Lunaの結果が不明です。自動再送はしません。",
+        }).pipe(
+          Effect.map((result) => HttpServerResponse.jsonUnsafe({ result })),
+          Effect.catch((message) =>
+            Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 400 })),
+          ),
+        );
+      }),
     );
   }),
 );

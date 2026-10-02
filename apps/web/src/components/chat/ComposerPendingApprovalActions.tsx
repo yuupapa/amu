@@ -1,3 +1,5 @@
+import { uiText } from "~/uiText";
+import { approvalOptionPresentation } from "./approvalPresentation";
 import {
   type ApprovalRequestId,
   type ProviderApprovalDecision,
@@ -21,10 +23,10 @@ interface ComposerPendingApprovalActionsProps {
 }
 
 const DEFAULT_APPROVAL_OPTIONS = [
-  { decision: "cancel", label: "Cancel" },
-  { decision: "decline", label: "Decline" },
-  { decision: "acceptForSession", label: "Always allow this session" },
-  { decision: "accept", label: "Approve" },
+  { decision: "cancel", label: "取り消す" },
+  { decision: "decline", label: "許可しない" },
+  { decision: "acceptForSession", label: "このセッション中は許可" },
+  { decision: "accept", label: "今回だけ許可" },
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
 
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
@@ -33,10 +35,11 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
   options = DEFAULT_APPROVAL_OPTIONS,
   onRespondToApproval,
 }: ComposerPendingApprovalActionsProps) {
-  const primaryOptions = options.filter(
+  const presentedOptions = options.map(approvalOptionPresentation);
+  const primaryOptions = presentedOptions.filter(
     (option) => option.decision === "decline" || option.decision === "accept",
   );
-  const moreOptions = options.filter(
+  const moreOptions = presentedOptions.filter(
     (option) => option.decision !== "decline" && option.decision !== "accept",
   );
 
@@ -50,6 +53,11 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
             variant={option.decision === "accept" ? "default" : "outline"}
             disabled={isResponding}
             aria-description={option.warning}
+            title={
+              option.originalLabel === option.label
+                ? undefined
+                : `提供元の選択肢: ${option.originalLabel}`
+            }
             onClick={() => void onRespondToApproval(requestId, option.decision)}
           >
             {option.warning ? <TriangleAlertIcon className="size-3 shrink-0" /> : null}
@@ -59,7 +67,12 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         return option.warning ? (
           <Tooltip key={option.decision}>
             <TooltipTrigger render={button} />
-            <TooltipPopup side="top">{option.warning}</TooltipPopup>
+            <TooltipPopup side="top">
+              {option.warning}
+              {option.originalWarning !== option.warning && (
+                <span className="mt-1 block">警告の原文: {option.originalWarning}</span>
+              )}
+            </TooltipPopup>
           </Tooltip>
         ) : (
           button
@@ -69,7 +82,13 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         <Menu>
           <MenuTrigger
             disabled={isResponding}
-            render={<Button size="icon-xs" variant="outline" aria-label="More approval options" />}
+            render={
+              <Button
+                size="icon-xs"
+                variant="outline"
+                aria-label={uiText("More approval options")}
+              />
+            }
           >
             <EllipsisIcon />
           </MenuTrigger>
@@ -80,6 +99,11 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
                   key={option.decision}
                   disabled={isResponding}
                   aria-description={option.warning}
+                  title={
+                    option.originalLabel === option.label
+                      ? undefined
+                      : `提供元の選択肢: ${option.originalLabel}`
+                  }
                   onClick={() => void onRespondToApproval(requestId, option.decision)}
                   variant="ghost"
                   className="mb-1 last:mb-0"
@@ -91,7 +115,12 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
               return option.warning ? (
                 <Tooltip key={option.decision}>
                   <TooltipTrigger render={item} />
-                  <TooltipPopup side="top">{option.warning}</TooltipPopup>
+                  <TooltipPopup side="top">
+                    {option.warning}
+                    {option.originalWarning !== option.warning && (
+                      <span className="mt-1 block">警告の原文: {option.originalWarning}</span>
+                    )}
+                  </TooltipPopup>
                 </Tooltip>
               ) : (
                 item

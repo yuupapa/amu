@@ -1,3 +1,4 @@
+import { uiFormat } from "~/uiText";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
@@ -480,13 +481,13 @@ export function buildMultiSelectThreadContextMenuItems(input: {
   hasRunningThread: boolean;
 }): readonly ContextMenuItem<"mark-unread" | "archive" | "delete">[] {
   return [
-    { id: "mark-unread", label: `Mark unread (${input.count})` },
+    { id: "mark-unread", label: uiFormat("Mark unread ({0})", input.count) },
     {
       id: "archive",
-      label: `Archive (${input.count})`,
+      label: uiFormat("Archive ({0})", input.count),
       disabled: input.hasRunningThread,
     },
-    { id: "delete", label: `Delete (${input.count})`, destructive: true },
+    { id: "delete", label: uiFormat("Delete ({0})", input.count), destructive: true },
   ];
 }
 
@@ -498,13 +499,13 @@ export function buildBulkTitleRegenerationContextMenuItem(input: {
   if (input.actionableCount === 0) {
     return {
       id: "regenerate-title",
-      label: `Regenerating… (${input.supportedCount})`,
+      label: uiFormat("Regenerating… ({0})", input.supportedCount),
       disabled: true,
     };
   }
   return {
     id: "regenerate-title",
-    label: `Regenerate titles (${input.actionableCount})`,
+    label: uiFormat("Regenerate titles ({0})", input.actionableCount),
   };
 }
 
@@ -517,7 +518,7 @@ export function buildBulkUnpinContextMenuItem(input: {
   pinnedCount: number;
 }): ContextMenuItem<"unpin"> | null {
   if (input.pinnedCount === 0) return null;
-  return { id: "unpin", label: `Unpin (${input.pinnedCount})` };
+  return { id: "unpin", label: uiFormat("Unpin ({0})", input.pinnedCount) };
 }
 
 export interface ThreadStatusPill {

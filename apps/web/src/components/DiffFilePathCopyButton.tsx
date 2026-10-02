@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useRef } from "react";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -25,7 +26,7 @@ export function DiffFilePathCopyButton({ filePath }: { filePath: string }) {
             ref={ref}
             size="icon-micro"
             variant="ghost-muted"
-            aria-label="Copy file path"
+            aria-label={uiText("Copy file path")}
             onClick={() => copyToClipboard(filePath, undefined)}
           />
         }
@@ -33,7 +34,7 @@ export function DiffFilePathCopyButton({ filePath }: { filePath: string }) {
         {isCopied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
       </TooltipTrigger>
       <TooltipPopup>
-        <p>{isCopied ? "Copied" : "Copy path"}</p>
+        <p>{isCopied ? uiText("Copied") : uiText("Copy path")}</p>
       </TooltipPopup>
     </Tooltip>
   );

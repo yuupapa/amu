@@ -1,3 +1,35 @@
+import { uiText, uiFormat } from "~/uiText";
+import {
+  autoChoices,
+  isNewAutoRequest,
+  type AutoChoice,
+  type AutoDecision,
+} from "@t3tools/shared/lunaAuto";
+import {
+  autoRecoveryMessage,
+  cancelPendingAutoRecord,
+  lunaAutoRequest,
+  readAutoRecord,
+  runLunaAuto,
+  type AutoTicket,
+} from "../lib/lunaAuto";
+import {
+  JEV_HANDOFF_STATUSES,
+  JEV_STOPPED_STATUSES,
+  jevRequest,
+  JEV_INTEGRATION_ENABLED,
+  readJevAuto,
+  readJevHandoffs,
+  setJevHandoffState,
+  dispatchJevHandoff,
+  isJevHandoffDispatching,
+  nativeJevPlan,
+  type JevHandoff,
+  saveJevAuto,
+  saveJevHandoff,
+} from "../lib/jev";
+import type { JevDetail } from "@t3tools/contracts";
+import { JevWorkflowPanel, type JevSubmission } from "./chat/JevWorkflowPanel";
 import { isChatGptUsageLimitError } from "@t3tools/shared/usageLimits";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -1493,6 +1525,62 @@ export default function ChatView(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  const [lunaMode, setLunaMode] = useState({ key: routeThreadKey, enabled: false });
+  const [lunaStatus, setLunaStatus] = useState<{ key: string; text: string; busy: boolean } | null>(
+    null,
+  );
+  const [lunaManualRecoveryKey, setLunaManualRecoveryKey] = useState<string | null>(null);
+  const lunaPendingRef = useRef<{ id: string; controller: AbortController } | null>(null);
+  const changeLunaAuto = (enabled: boolean) => {
+    const pending = lunaPendingRef.current;
+    if (pending) {
+      pending.controller.abort();
+      void lunaAutoRequest({ id: pending.id, action: "cancel" }).catch(() => {});
+    }
+    setLunaMode({ key: routeThreadKey, enabled });
+  };
+  useEffect(
+    () => () => {
+      const pending = lunaPendingRef.current;
+      if (pending) {
+        pending.controller.abort();
+        void lunaAutoRequest({ id: pending.id, action: "cancel" }).catch(() => {});
+      }
+    },
+    [routeThreadKey],
+  );
+  const [jevChoice, setJevChoice] = useState(() => ({
+    key: routeThreadKey,
+    auto: readJevAuto(routeThreadKey, routeKind === "draft"),
+  }));
+  const [jevDraft, setJevDraft] = useState<{ key: string; submission: JevSubmission } | null>(null);
+  if (jevChoice.key !== routeThreadKey)
+    setJevChoice({ key: routeThreadKey, auto: readJevAuto(routeThreadKey, routeKind === "draft") });
+  const jevAuto = JEV_INTEGRATION_ENABLED && jevChoice.key === routeThreadKey && jevChoice.auto;
+  const jevAutoRef = useRef(jevAuto);
+  jevAutoRef.current = jevAuto;
+  // Set only while the prompt Jev routed is sent as a normal turn with Jev's model.
+  const jevHandoffBypassRef = useRef(false);
+  const [jevHandoffNonce, setJevHandoffNonce] = useState(0);
+  const [jevHandoffSend, setJevHandoffSend] = useState<{
+    entry: JevHandoff;
+    model: string;
+    instanceId: ProviderInstanceId;
+    effort: string;
+    tries: number;
+  } | null>(null);
+  const changeJevAuto = (auto: boolean) => {
+    if (!JEV_INTEGRATION_ENABLED) return;
+    saveJevAuto(routeThreadKey, auto);
+    setJevChoice({ key: routeThreadKey, auto });
+    if (!auto && activeThread) {
+      for (const entry of readJevHandoffs().filter(
+        (x) => x.threadId === activeThread.id && (!x.state || x.state === "pending"),
+      ))
+        setJevHandoffState(entry.jobId, "cancelled");
+      setJevHandoffSend(null);
+    }
+  };
   const currentRouteThreadKeyRef = useRef<string | null>(routeThreadKey);
   useLayoutEffect(() => {
     currentRouteThreadKeyRef.current = routeThreadKey;
@@ -1677,9 +1765,10 @@ export default function ChatView(props: ChatViewProps) {
       if (!inserted) {
         toastManager.add({
           type: "warning",
-          title: "The composer is not ready",
-          description:
+          title: uiText("The composer is not ready"),
+          description: uiText(
             "Try citing the selection after the connection or pending input is resolved.",
+          ),
         });
       }
       return inserted;
@@ -1953,6 +2042,8 @@ export default function ChatView(props: ChatViewProps) {
   // Implicit drafts follow their current project/environment, including retargets.
   // Explicit composer choices and existing server threads retain their permissions.
   const runtimeMode = composerRuntimeMode ?? activeServerThread?.runtimeMode ?? defaultRuntimeMode;
+  const latestRuntimeModeRef = useRef(runtimeMode);
+  latestRuntimeModeRef.current = runtimeMode;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
@@ -2191,7 +2282,7 @@ export default function ChatView(props: ChatViewProps) {
           stackedThreadToast({
             type: "error",
             title,
-            description: error instanceof Error ? error.message : "An error occurred.",
+            description: error instanceof Error ? error.message : uiText("An error occurred."),
           }),
         );
       }
@@ -2219,7 +2310,7 @@ export default function ChatView(props: ChatViewProps) {
         compact: true,
         priority: "activity",
         icon: <DownloadIcon />,
-        title: `Cloning ${name}`,
+        title: uiFormat("Cloning {0}", name),
         description: projectCloneProgressSummary(activeProjectClone),
         actions: (
           <Button
@@ -2231,7 +2322,7 @@ export default function ChatView(props: ChatViewProps) {
               )
             }
           >
-            Cancel
+            {uiText("Cancel")}
           </Button>
         ),
       };
@@ -2242,8 +2333,12 @@ export default function ChatView(props: ChatViewProps) {
       variant: cancelled ? "warning" : "error",
       compact: true,
       icon: <DownloadIcon />,
-      title: cancelled ? `Cancelled cloning ${name}` : `Failed to clone ${name}`,
-      description: cancelled ? "Retry to bring in the repository." : activeProjectClone.error,
+      title: cancelled
+        ? uiFormat("Cancelled cloning {0}", name)
+        : uiFormat("Failed to clone {0}", name),
+      description: cancelled
+        ? uiText("Retry to bring in the repository.")
+        : activeProjectClone.error,
       actions: (
         <>
           <Button
@@ -2251,7 +2346,7 @@ export default function ChatView(props: ChatViewProps) {
             variant="ghost"
             onClick={() => void removeClonedProject({ environmentId, projectId })}
           >
-            Remove project
+            {uiText("Remove project")}
           </Button>
           <Button
             size="xs"
@@ -2262,7 +2357,7 @@ export default function ChatView(props: ChatViewProps) {
               )
             }
           >
-            Retry
+            {uiText("Retry")}
           </Button>
         </>
       ),
@@ -2409,8 +2504,8 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not reconnect environment",
-            description: error instanceof Error ? error.message : "Failed to reconnect.",
+            title: uiText("Could not reconnect environment"),
+            description: error instanceof Error ? error.message : uiText("Failed to reconnect."),
           }),
         );
       }
@@ -2437,8 +2532,8 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not disconnect server",
-              description: error instanceof Error ? error.message : "Failed to disconnect.",
+              title: uiText("Could not disconnect server"),
+              description: error instanceof Error ? error.message : uiText("Failed to disconnect."),
             }),
           );
         }
@@ -2694,12 +2789,12 @@ export default function ChatView(props: ChatViewProps) {
           size="xs"
           variant="ghost"
           disabled={disconnectingEnvironment}
-          title="Hide this server's threads. Switch it on again in Connections."
+          title={uiText("Hide this server's threads. Switch it on again in Connections.")}
           onClick={() =>
             void handleDisconnectActiveEnvironment(activeEnvironmentUnavailableState.environmentId)
           }
         >
-          Disconnect server
+          {uiText("Disconnect server")}
         </Button>
       ) : undefined;
     const environmentReconnecting =
@@ -2716,7 +2811,11 @@ export default function ChatView(props: ChatViewProps) {
         id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
         variant: unavailableConnection.phase === "error" ? "error" : "warning",
         icon: <WifiOffIcon />,
-        title: `${activeEnvironmentUnavailableState.label} is ${environmentReconnecting ? "reconnecting" : "offline"}`,
+        title: uiFormat(
+          "{0} is {1}",
+          activeEnvironmentUnavailableState.label,
+          environmentReconnecting ? "reconnecting" : "offline",
+        ),
         actions: (
           <>
             {!environmentReconnecting ? (
@@ -2729,7 +2828,7 @@ export default function ChatView(props: ChatViewProps) {
                   )
                 }
               >
-                Reconnect
+                {uiText("Reconnect")}
               </Button>
             ) : null}
             {disconnectAction}
@@ -2766,7 +2865,7 @@ export default function ChatView(props: ChatViewProps) {
                     type="button"
                     className="block max-w-full cursor-help truncate rounded-sm text-left"
                   >
-                    Server update available
+                    {uiText("Server update available")}
                   </button>
                 }
               />
@@ -2776,7 +2875,7 @@ export default function ChatView(props: ChatViewProps) {
               </TooltipPopup>
             </Tooltip>
           ) : (
-            "Server update available"
+            uiText("Server update available")
           ),
         description:
           !updateInProgress &&
@@ -2797,7 +2896,7 @@ export default function ChatView(props: ChatViewProps) {
             desktopAppUpdate={versionMismatchDesktopAppUpdate}
             threadContinuation={versionMismatchThreadContinuation}
             targetVersion={versionMismatch.clientVersion}
-            label={updateFailed ? "Retry" : "Update"}
+            label={updateFailed ? uiText("Retry") : uiText("Update")}
             variant="ghost"
           />
         ),
@@ -2846,6 +2945,17 @@ export default function ChatView(props: ChatViewProps) {
       ),
     [providerStatuses, settings],
   );
+  const lunaLiveRef = useRef({
+    providers: providerInstanceEntries,
+    started: false,
+    unavailable: false,
+  });
+  lunaLiveRef.current = {
+    providers: providerInstanceEntries,
+    started:
+      !!activeThread?.session || activeThread?.messages.some((m) => m.role === "user") === true,
+    unavailable: isConnecting || activeEnvironmentUnavailable,
+  };
   const { selectedProviderEntry, requestedDriverKind } = useMemo(
     () =>
       resolveComposerProviderSelection({
@@ -3161,7 +3271,10 @@ export default function ChatView(props: ChatViewProps) {
       return true;
     }
     setUsageLimitsPanel(null);
-    toastManager.add({ type: "info", title: "Usage limits are unavailable for this provider" });
+    toastManager.add({
+      type: "info",
+      title: uiText("Usage limits are unavailable for this provider"),
+    });
     return false;
   }, [
     activeProviderInstanceId,
@@ -3316,7 +3429,7 @@ export default function ChatView(props: ChatViewProps) {
     async (attachment: ChatFileAttachment) => {
       const connection = readPreparedConnection(environmentId);
       if (!connection) {
-        toastManager.add({ type: "error", title: "The environment is not connected." });
+        toastManager.add({ type: "error", title: uiText("The environment is not connected.") });
         return;
       }
 
@@ -3334,8 +3447,9 @@ export default function ChatView(props: ChatViewProps) {
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: "Could not download " + attachment.name,
-          description: error instanceof Error ? error.message : "The attachment is unavailable.",
+          title: uiText("Could not download ") + attachment.name,
+          description:
+            error instanceof Error ? error.message : uiText("The attachment is unavailable."),
         });
       }
     },
@@ -3852,9 +3966,10 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add({
         type: "warning",
         id: "load-balancing-attachments",
-        title: "Keep attachments on this machine",
-        description:
+        title: uiText("Keep attachments on this machine"),
+        description: uiText(
           "Remove attachments before choosing automatic routing, then attach them on the selected machine.",
+        ),
       });
       return;
     }
@@ -3999,8 +4114,8 @@ export default function ChatView(props: ChatViewProps) {
       if (prompt !== null && !composer.insertTextAtEnd(prompt, { ensureLeadingBoundary: true })) {
         toastManager.add({
           type: "error",
-          title: "Unable to add to chat",
-          description: "The composer is busy; try again once it is ready.",
+          title: uiText("Unable to add to chat"),
+          description: uiText("The composer is busy; try again once it is ready."),
         });
         return;
       }
@@ -4460,15 +4575,16 @@ export default function ChatView(props: ChatViewProps) {
       if (result._tag === "Success") {
         toastManager.add({
           type: "success",
-          title: `Deleted action "${deletedName ?? "Unknown"}"`,
+          title: uiFormat('Deleted action "{0}"', deletedName ?? "Unknown"),
         });
       } else if (!isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not delete action",
-            description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            title: uiText("Could not delete action"),
+            description:
+              error instanceof Error ? error.message : uiText("An unexpected error occurred."),
           }),
         );
       }
@@ -4543,7 +4659,7 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Unable to open browser",
+              title: uiText("Unable to open browser"),
               description: error.message,
             }),
           );
@@ -5181,8 +5297,8 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy path",
-          description: "Clipboard API unavailable.",
+          title: uiText("Failed to copy path"),
+          description: uiText("Clipboard API unavailable."),
         }),
       );
       return;
@@ -5192,7 +5308,7 @@ export default function ChatView(props: ChatViewProps) {
       () => {
         toastManager.add({
           type: "success",
-          title: "Path copied",
+          title: uiText("Path copied"),
           description: relativePath,
         });
       },
@@ -5200,8 +5316,8 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to copy path",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            title: uiText("Failed to copy path"),
+            description: error instanceof Error ? error.message : uiText("An error occurred."),
           }),
         );
       },
@@ -6007,7 +6123,7 @@ export default function ChatView(props: ChatViewProps) {
           stackedThreadToast({
             type: "error",
             title: target.failureTitle,
-            description: error instanceof Error ? error.message : "An error occurred.",
+            description: error instanceof Error ? error.message : uiText("An error occurred."),
           }),
         );
       },
@@ -6102,8 +6218,8 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to un-settle thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            title: uiText("Failed to un-settle thread"),
+            description: error instanceof Error ? error.message : uiText("An error occurred."),
           }),
         );
       }
@@ -6130,8 +6246,8 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to wake thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            title: uiText("Failed to wake thread"),
+            description: error instanceof Error ? error.message : uiText("An error occurred."),
           }),
         );
       }
@@ -6191,7 +6307,7 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to switch checkout",
+            title: uiText("Failed to switch checkout"),
             description: chatActionErrorMessage(squashAtomCommandFailure(checkoutResult)),
           }),
         );
@@ -6211,7 +6327,7 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Checkout switched, but the thread could not be updated",
+              title: uiText("Checkout switched, but the thread could not be updated"),
               description: chatActionErrorMessage(squashAtomCommandFailure(updateResult)),
             }),
           );
@@ -6296,14 +6412,19 @@ export default function ChatView(props: ChatViewProps) {
       ),
       title: working
         ? liveCount > 0
-          ? `${liveCount} ${liveCount === 1 ? "agent" : "agents"} working`
-          : "Background work"
-        : "Monitoring",
+          ? uiFormat("{0} {1} working", liveCount, liveCount === 1 ? "agent" : uiText("agents"))
+          : uiText("Background work")
+        : uiText("Monitoring"),
       actions: (
         <>
           {showViewAgents ? (
-            <Button size="xs" variant="ghost" aria-label="View agents" onClick={addAgentsSurface}>
-              View
+            <Button
+              size="xs"
+              variant="ghost"
+              aria-label={uiText("View agents")}
+              onClick={addAgentsSurface}
+            >
+              {uiText("View")}
             </Button>
           ) : null}
           <Button
@@ -6312,7 +6433,7 @@ export default function ChatView(props: ChatViewProps) {
             disabled={isStoppingBackgroundWork}
             onClick={() => void handleStopBackgroundWork()}
           >
-            {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
+            {isStoppingBackgroundWork ? uiText("Stopping...") : uiText("Stop")}
           </Button>
         </>
       ),
@@ -6338,8 +6459,8 @@ export default function ChatView(props: ChatViewProps) {
       id: `thread-woke:${activeThread?.id ?? "unknown"}`,
       variant: "info",
       icon: <AlarmClockIcon />,
-      title: "Thread woke from snooze",
-      description: "Send a message to continue",
+      title: uiText("Thread woke from snooze"),
+      description: uiText("Send a message to continue"),
       dismissLabel: "Dismiss Woke notification",
       onDismiss: acknowledgeActiveThreadWoke,
     };
@@ -6353,8 +6474,8 @@ export default function ChatView(props: ChatViewProps) {
       id: `thread-${isSnoozed ? "snoozed" : "settled"}:${activeThread?.id ?? "unknown"}`,
       variant: "info",
       icon: isSnoozed ? <AlarmClockIcon /> : <CheckCircle2Icon />,
-      title: `This thread is ${isSnoozed ? "snoozed" : "settled"}`,
-      description: `Send a message to ${isSnoozed ? "wake" : "unsettle"}`,
+      title: uiFormat("This thread is {0}", isSnoozed ? "snoozed" : uiText("settled")),
+      description: uiFormat("Send a message to {0}", isSnoozed ? "wake" : "unsettle"),
       actions: (
         <Button
           size="xs"
@@ -6366,11 +6487,11 @@ export default function ChatView(props: ChatViewProps) {
         >
           {isSnoozed
             ? isUnsnoozing
-              ? "Waking..."
-              : "Wake now"
+              ? uiText("Waking...")
+              : uiText("Wake now")
             : isUnsettling
-              ? "Un-settling..."
-              : "Un-settle"}
+              ? uiText("Un-settling...")
+              : uiText("Un-settle")}
         </Button>
       ),
     };
@@ -6451,15 +6572,18 @@ export default function ChatView(props: ChatViewProps) {
           composerRef.current?.compactContext();
         }}
       >
-        Compact
+        {uiText("Compact")}
       </Button>
     );
     return {
       id: `resume-compaction:${resumeCompactionKey}`,
       variant: "info",
       icon: <Minimize2Icon />,
-      title: "Resume with less context",
-      description: `${formatContextWindowTokens(activeContextWindow.usedTokens)} tokens from earlier`,
+      title: uiText("Resume with less context"),
+      description: uiFormat(
+        "{0} tokens from earlier",
+        formatContextWindowTokens(activeContextWindow.usedTokens),
+      ),
       actions: compactDisabledReason ? (
         <Tooltip>
           <TooltipTrigger render={<span className="inline-flex">{compactAction}</span>} />
@@ -6544,7 +6668,9 @@ export default function ChatView(props: ChatViewProps) {
         icon: <GitBranchIcon />,
         title: (
           <span className="flex min-w-0 items-baseline gap-1.5">
-            <span className="shrink-0 font-normal text-muted-foreground">Branch changed — was</span>
+            <span className="shrink-0 font-normal text-muted-foreground">
+              {uiText("Branch changed — was")}
+            </span>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -6554,8 +6680,10 @@ export default function ChatView(props: ChatViewProps) {
                 }
               />
               <TooltipPopup side="top">
-                This thread last ran on {localCheckoutBranchMismatch.threadBranch}. Sending will
-                continue on {localCheckoutBranchMismatch.currentBranch}.
+                {uiText("This thread last ran on")}
+                {localCheckoutBranchMismatch.threadBranch}
+                {uiText(". Sending will continue on")}
+                {localCheckoutBranchMismatch.currentBranch}.
               </TooltipPopup>
             </Tooltip>
           </span>
@@ -6567,7 +6695,7 @@ export default function ChatView(props: ChatViewProps) {
             disabled={isRestoringThreadBranch}
             onClick={handleRestoreThreadBranch}
           >
-            {isRestoringThreadBranch ? "Restoring..." : "Restore branch"}
+            {isRestoringThreadBranch ? uiText("Restoring...") : uiText("Restore branch")}
           </Button>
         ),
         dismissLabel: "Dismiss branch change notice",
@@ -6746,8 +6874,8 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to settle thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
+              title: uiText("Failed to settle thread"),
+              description: error instanceof Error ? error.message : uiText("An error occurred."),
             }),
           );
         });
@@ -6766,8 +6894,8 @@ export default function ChatView(props: ChatViewProps) {
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: pinned ? "Failed to unpin thread" : "Failed to pin thread",
-                description: error instanceof Error ? error.message : "An error occurred.",
+                title: pinned ? uiText("Failed to unpin thread") : uiText("Failed to pin thread"),
+                description: error instanceof Error ? error.message : uiText("An error occurred."),
               }),
             );
           },
@@ -7288,8 +7416,11 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "info",
-          title: "Some attachments stayed queued",
-          description: `A message holds at most ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments. Use Send now on the queued row when you want the rest to go.`,
+          title: uiText("Some attachments stayed queued"),
+          description: uiFormat(
+            "A message holds at most {0} attachments. Use Send now on the queued row when you want the rest to go.",
+            PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+          ),
         }),
       );
     }
@@ -7322,8 +7453,31 @@ export default function ChatView(props: ChatViewProps) {
       annotation: PreviewAnnotationPayload;
       image: ComposerImageAttachment | null;
     },
+    jevHandoff?: JevHandoff,
+    lunaPrepared?: { decision: AutoDecision; choice: AutoChoice; ticket: AutoTicket },
   ) => {
     e?.preventDefault();
+    if (lunaPendingRef.current && !lunaPrepared) return;
+    if (!lunaPrepared && lunaManualRecoveryKey !== routeThreadKey) {
+      try {
+        const record = readAutoRecord(routeThreadKey);
+        if (record && ["judging", "ready", "dispatching", "uncertain"].includes(record.state)) {
+          setLunaStatus({
+            key: routeThreadKey,
+            busy: false,
+            text: autoRecoveryMessage(routeThreadKey) ?? "前回の会話と実行状態を確認してください。",
+          });
+          return;
+        }
+      } catch {
+        setLunaStatus({
+          key: routeThreadKey,
+          busy: false,
+          text: "オートの保存状態を確認できません。会話と実行状態を確認して手動に戻してください。",
+        });
+        return;
+      }
+    }
     // Typed out in full rather than picked from the menu. Attachments or contexts
     // mean the user is sending a prompt, so those go through as usual.
     if (
@@ -7346,8 +7500,10 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "info",
-          title: "Annotation attached to draft",
-          description: "Sending is unavailable right now. Finish the current action, then send.",
+          title: uiText("Annotation attached to draft"),
+          description: uiText(
+            "Sending is unavailable right now. Finish the current action, then send.",
+          ),
         }),
       );
     };
@@ -7368,11 +7524,13 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add({
         type: "warning",
         title: loadBalancing.pending
-          ? "Checking machine resources"
-          : "Choose a machine to continue",
+          ? uiText("Checking machine resources")
+          : uiText("Choose a machine to continue"),
         description: loadBalancing.pending
-          ? "Resource checks are still running. You can choose a machine in the composer."
-          : "No eligible machine has available resources. Choose a machine in the composer to override.",
+          ? uiText("Resource checks are still running. You can choose a machine in the composer.")
+          : uiText(
+              "No eligible machine has available resources. Choose a machine in the composer to override.",
+            ),
       });
       return;
     }
@@ -7383,8 +7541,8 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add({
         ...stackedThreadToast({
           type: "warning",
-          title: "Not connected: message not sent",
-          description: "Reconnecting to the environment. Try again once it is connected.",
+          title: uiText("Not connected: message not sent"),
+          description: uiText("Reconnecting to the environment. Try again once it is connected."),
         }),
         id: `chat-send-environment-unavailable:${toastSlot}`,
       });
@@ -7398,7 +7556,225 @@ export default function ChatView(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
+    let sendCtx = composerRef.current?.getSendContext();
+    const lunaEnabled =
+      lunaMode.key === routeThreadKey &&
+      lunaMode.enabled &&
+      environmentId === primaryEnvironment?.environmentId;
+    if (
+      !lunaPrepared &&
+      sendCtx &&
+      isNewAutoRequest({
+        enabled: lunaEnabled,
+        hasSession: activeThread.session !== null,
+        hasUserMessage: activeThread.messages.some((m) => m.role === "user"),
+        contextCount: 0,
+        multipleModels: false,
+      })
+    ) {
+      if (
+        sendCtx.images.length ||
+        sendCtx.files.length ||
+        sendCtx.terminalContexts.length ||
+        sendCtx.previewAnnotations.length ||
+        sendCtx.reviewComments.length ||
+        directAnnotation ||
+        sendCtx.multipleModelSelections ||
+        sendCtx.prompt.trim().startsWith("/")
+      ) {
+        setThreadError(
+          activeThread.id,
+          "オートは新しい依頼の本文だけを判断します。添付・複数モデル・コマンドは手動でモデルを選んで送信してください。",
+        );
+        return;
+      }
+      if (!sendCtx.prompt.trim() || !activeProject) return;
+      const promptSnapshot = sendCtx.prompt;
+      const selectionSnapshot = JSON.stringify(sendCtx.selectedModelSelection);
+      const accessSnapshot = JSON.stringify({
+        runtimeMode: latestRuntimeModeRef.current,
+        interactionMode: sendCtx.interactionMode,
+      });
+      const choices = autoChoices(
+        providerInstanceEntries.filter((p) => p.enabled && p.isAvailable).map((p) => p.snapshot),
+      );
+      const unchanged = () => {
+        const current = composerRef.current?.getSendContext();
+        return (
+          currentRouteThreadKeyRef.current === routeThreadKey &&
+          !lunaLiveRef.current.started &&
+          !lunaLiveRef.current.unavailable &&
+          current?.prompt === promptSnapshot &&
+          JSON.stringify(current.selectedModelSelection) === selectionSnapshot &&
+          JSON.stringify({
+            runtimeMode: latestRuntimeModeRef.current,
+            interactionMode: current.interactionMode,
+          }) === accessSnapshot &&
+          current.images.length +
+            current.files.length +
+            current.terminalContexts.length +
+            current.previewAnnotations.length +
+            current.reviewComments.length ===
+            0
+        );
+      };
+      const id = randomUUID(),
+        controller = new AbortController();
+      lunaPendingRef.current = { id, controller };
+      setLunaStatus({
+        key: routeThreadKey,
+        busy: true,
+        text: "Lunaがモデルを選んでいます。元の依頼は保持しています。",
+      });
+      const timeout = window.setTimeout(() => {
+        controller.abort();
+        void lunaAutoRequest({ id, action: "cancel" }).catch(() => {});
+      }, 50_000);
+      try {
+        const decision = await runLunaAuto({
+          thread: routeThreadKey,
+          id,
+          signal: controller.signal,
+          choices,
+          unchanged,
+          decide: () =>
+            lunaAutoRequest(
+              {
+                id,
+                action: "decide",
+                prompt: promptSnapshot,
+                models: choices.map((c) => ({ instanceId: c.instanceId, model: c.model })),
+              },
+              controller.signal,
+            ),
+          send: (decision, choice, ticket) =>
+            onSendRef.current(undefined, submissionIntent, undefined, undefined, {
+              decision,
+              choice,
+              ticket,
+            }),
+        });
+        if (currentRouteThreadKeyRef.current === routeThreadKey) {
+          const picked = choices.find((c) => c.model === decision.model);
+          const descriptor = providerInstanceEntries
+            .find((p) => p.instanceId === picked?.instanceId)
+            ?.snapshot.models.find((m) => m.slug === decision.model)
+            ?.capabilities?.optionDescriptors?.find((d) => d.id === picked?.effortId);
+          const effortLabel =
+            descriptor?.type === "select"
+              ? descriptor.options.find((o) => o.id === decision.effort)?.label
+              : undefined;
+          setLunaStatus({
+            key: routeThreadKey,
+            busy: false,
+            text: `オート：${picked?.name ?? decision.model}・${effortLabel ? uiText(effortLabel) : decision.effort} — ${decision.reason.replace(/[。．.]+$/u, "")}`,
+          });
+        }
+      } catch (error) {
+        if (currentRouteThreadKeyRef.current === routeThreadKey) {
+          setLunaMode({ key: routeThreadKey, enabled: false });
+          if (promptRef.current === "") {
+            promptRef.current = promptSnapshot;
+            setComposerDraftPrompt(composerDraftTarget, promptSnapshot);
+            composerRef.current?.resetCursorState({ prompt: promptSnapshot });
+          }
+          const text =
+            error instanceof Error && error.name !== "AbortError"
+              ? error.message
+              : "モデル選択を取り消したか、時間内に完了しませんでした。元の依頼を残して手動送信に戻ります。";
+          setThreadError(activeThread.id, text);
+          setLunaStatus({ key: routeThreadKey, busy: false, text });
+        }
+      } finally {
+        window.clearTimeout(timeout);
+        if (lunaPendingRef.current?.id === id) lunaPendingRef.current = null;
+      }
+      return;
+    }
+    if (lunaPrepared && sendCtx) {
+      const { choice, decision, ticket } = lunaPrepared;
+      const provider = providerInstanceEntries.find(
+        (p) =>
+          p.instanceId === choice.instanceId && p.enabled && p.isAvailable && p.status === "ready",
+      );
+      const currentChoices = autoChoices(
+        providerInstanceEntries.filter((p) => p.enabled && p.isAvailable).map((p) => p.snapshot),
+      );
+      if (
+        ticket.signal.aborted ||
+        !provider ||
+        !currentChoices.some(
+          (c) =>
+            c.instanceId === choice.instanceId &&
+            c.model === decision.model &&
+            c.efforts.includes(decision.effort),
+        )
+      )
+        return false;
+      const selection = createModelSelection(
+        provider.instanceId,
+        decision.model,
+        choice.effortId ? [{ id: choice.effortId, value: decision.effort }] : [],
+      );
+      const state = getComposerProviderState({
+        provider: provider.driverKind,
+        model: decision.model,
+        models: provider.models,
+        modelOptions: selection.options,
+        promptInjectionState: getComposerPromptInjectionState(sendCtx.prompt),
+        planModeEnabled: settings.planModeEnabled,
+      });
+      sendCtx = {
+        ...sendCtx,
+        selectedProvider: provider.driverKind,
+        selectedModel: decision.model,
+        selectedProviderModels: provider.models,
+        selectedModelSelection: createModelSelection(
+          provider.instanceId,
+          decision.model,
+          state.modelOptionsForDispatch,
+        ),
+        selectedPromptEffort: state.promptEffort,
+        selectedModelOptionsForDispatch: state.modelOptionsForDispatch,
+        providerAvailable: true,
+      };
+    }
+    if (
+      jevAuto &&
+      !jevHandoffBypassRef.current &&
+      environmentId === primaryEnvironment?.environmentId &&
+      sendCtx
+    ) {
+      if (
+        sendCtx.images.length ||
+        sendCtx.files.length ||
+        sendCtx.terminalContexts.length ||
+        sendCtx.previewAnnotations.length ||
+        sendCtx.reviewComments.length ||
+        directAnnotation
+      ) {
+        setThreadError(
+          activeThread.id,
+          "オートの対象は作業範囲で指定してください。添付・端末・画面注釈は自動送信しません。",
+        );
+        return;
+      }
+      if (!sendCtx.prompt.trim()) return;
+      setJevDraft((current) =>
+        current?.key === routeThreadKey
+          ? current
+          : {
+              key: routeThreadKey,
+              submission: {
+                task: sendCtx.prompt.trim(),
+                source: activeWorkspaceRoot ?? activeProject?.workspaceRoot ?? "",
+                nonce: randomUUID(),
+                selectionSnapshot: JSON.stringify(sendCtx.selectedModelSelection),
+              },
+            },
+      );
+      return;
+    }
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;
@@ -7421,9 +7797,10 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: "Choose models and a base branch",
-          description:
+          title: uiText("Choose models and a base branch"),
+          description: uiText(
             "Multiple models need a new thread in a Git project. Each gets its own worktree.",
+          ),
         }),
       );
       return;
@@ -7506,8 +7883,8 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "warning",
-            title: "Start a Codex thread first",
-            description: "Send a message before you submit feedback.",
+            title: uiText("Start a Codex thread first"),
+            description: uiText("Send a message before you submit feedback."),
           }),
         );
         return;
@@ -7650,8 +8027,8 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: "Choose a project first",
-          description: "This draft no longer points to an available project.",
+          title: uiText("Choose a project first"),
+          description: uiText("This draft no longer points to an available project."),
         }),
       );
       return;
@@ -7819,6 +8196,7 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
 
+    if (lunaPrepared && !lunaPrepared.ticket.markDispatch()) return false;
     sendInFlightRef.current = true;
     const sendGeneration = ++composerSendGenerationRef.current;
     const attachmentCapabilitiesBeforeUpload = readLiveAttachmentCapabilities();
@@ -7900,7 +8278,7 @@ export default function ChatView(props: ChatViewProps) {
       submissionIntent: resolvedSubmissionIntent,
     });
 
-    const messageIdForSend = newMessageId();
+    const messageIdForSend = jevHandoff ? (`jev-${jevHandoff.jobId}` as MessageId) : newMessageId();
     const messageCreatedAt = new Date().toISOString();
     const turnAttachmentsPromise = Promise.all(
       composerAttachmentsSnapshot.map(async (attachment) => {
@@ -8043,8 +8421,9 @@ export default function ChatView(props: ChatViewProps) {
               const failureToastId = toastManager.add(
                 stackedThreadToast({
                   type: "error",
-                  title: `Could not start ${target.selection.model}`,
-                  description: error instanceof Error ? error.message : "Failed to send message.",
+                  title: uiFormat("Could not start {0}", target.selection.model),
+                  description:
+                    error instanceof Error ? error.message : uiText("Failed to send message."),
                   ...(retainedThreadId
                     ? {
                         timeout: 0,
@@ -8100,7 +8479,11 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "success",
-              title: `Started ${startedCount} ${startedCount === 1 ? "thread" : "threads"} in background`,
+              title: uiFormat(
+                "Started {0} {1} in background",
+                startedCount,
+                startedCount === 1 ? uiText("thread") : "threads",
+              ),
             }),
           );
         }
@@ -8149,9 +8532,10 @@ export default function ChatView(props: ChatViewProps) {
             const recoveryToastId = toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "A background prompt could not be sent",
-                description:
+                title: uiText("A background prompt could not be sent"),
+                description: uiText(
                   "Your newer draft is unchanged. Restore the failed prompt when this composer is empty.",
+                ),
                 timeout: 0,
                 actionProps: {
                   children: "Restore prompt",
@@ -8165,8 +8549,9 @@ export default function ChatView(props: ChatViewProps) {
                       )
                     ) {
                       toastManager.update(recoveryToastId, {
-                        description:
+                        description: uiText(
                           "Return to the original draft and send or clear its current prompt before restoring.",
+                        ),
                       });
                       return;
                     }
@@ -8371,6 +8756,16 @@ export default function ChatView(props: ChatViewProps) {
       if (backgroundThreadRef) {
         beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
       }
+      if (jevHandoff && !isJevHandoffDispatching(jevHandoff.jobId)) {
+        sendInFlightRef.current = false;
+        resetLocalDispatch();
+        return false;
+      }
+      if (lunaPrepared?.ticket.signal.aborted) {
+        sendInFlightRef.current = false;
+        resetLocalDispatch();
+        return false;
+      }
       const startPromise = startThreadTurn({
         environmentId,
         input: {
@@ -8433,7 +8828,7 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "warning",
-              title: "Could not open a fresh composer",
+              title: uiText("Could not open a fresh composer"),
               description: error instanceof Error ? error.message : undefined,
             }),
           );
@@ -8444,6 +8839,13 @@ export default function ChatView(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        if (lunaPrepared)
+          onProviderModelSelect(ctxSelectedModelSelection.instanceId, ctxSelectedModel, {
+            focusComposer: false,
+            ...(lunaPrepared.choice.effortId
+              ? { effort: lunaPrepared.decision.effort, optionId: lunaPrepared.choice.effortId }
+              : {}),
+          });
         // The turn is under way and will spend quota, so that thread's limits
         // snapshot is stale. Uploads may have outlasted a navigation, so only
         // the sending thread's panel clears.
@@ -8462,7 +8864,7 @@ export default function ChatView(props: ChatViewProps) {
             toastManager.add(
               stackedThreadToast({
                 type: "success",
-                title: "Started in background",
+                title: uiText("Started in background"),
                 timeout: 5_000,
                 actionProps: {
                   children: "Open",
@@ -8559,8 +8961,9 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Background task failed",
-              description: error instanceof Error ? error.message : "Failed to send message.",
+              title: uiText("Background task failed"),
+              description:
+                error instanceof Error ? error.message : uiText("Failed to send message."),
               actionProps: {
                 children: "Open draft",
                 onClick: () => {
@@ -8579,6 +8982,7 @@ export default function ChatView(props: ChatViewProps) {
       );
       resetLocalDispatch();
     }
+    return turnStartSucceeded;
   };
 
   // Queued messages go out from QueuedMessageSender, which also covers
@@ -9100,7 +9504,7 @@ export default function ChatView(props: ChatViewProps) {
         projectId: activeProject.id,
         title: nextThreadTitle,
         modelSelection: nextThreadModelSelection,
-        runtimeMode: defaultRuntimeMode,
+        runtimeMode,
         interactionMode: "default",
         branch: activeThreadBranch,
         worktreePath: activeThread.worktreePath,
@@ -9123,7 +9527,7 @@ export default function ChatView(props: ChatViewProps) {
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: nextThreadTitle,
-          runtimeMode: defaultRuntimeMode,
+          runtimeMode,
           interactionMode: "default",
           sourceProposedPlan: {
             threadId: activeThread.id,
@@ -9173,11 +9577,11 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not start implementation thread",
+            title: uiText("Could not start implementation thread"),
             description:
               error instanceof Error
                 ? error.message
-                : "An error occurred while creating the new thread.",
+                : uiText("An error occurred while creating the new thread."),
           }),
         );
       }
@@ -9197,7 +9601,7 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread,
     navigate,
     resetLocalDispatch,
-    defaultRuntimeMode,
+    runtimeMode,
     startThreadTurn,
     environmentId,
     composerRef,
@@ -9221,7 +9625,11 @@ export default function ChatView(props: ChatViewProps) {
   );
 
   const onProviderModelSelect = useCallback(
-    (instanceId: ProviderInstanceId, model: string, options?: { focusComposer?: boolean }) => {
+    (
+      instanceId: ProviderInstanceId,
+      model: string,
+      options?: { focusComposer?: boolean; effort?: string; optionId?: string },
+    ) => {
       if (!activeThread) return;
       // Look up the configured instance so model normalization and custom
       // model lookup stay scoped to that exact instance. Unknown instance ids
@@ -9262,6 +9670,9 @@ export default function ChatView(props: ChatViewProps) {
       const nextModelSelection: ModelSelection = {
         instanceId,
         model: resolvedModel,
+        ...(options?.effort
+          ? { options: [{ id: options.optionId ?? "effort", value: options.effort }] }
+          : {}),
       };
       const modelChangeBlockReason = getStartedThreadModelChangeBlockReason({
         providers: providerStatuses,
@@ -9297,6 +9708,214 @@ export default function ChatView(props: ChatViewProps) {
       settings,
     ],
   );
+  // A validated decision selects one worker; the user's work executes once through the normal turn path.
+  const startJevHandoff = (entry: JevHandoff, model: string, effort: string) => {
+    if (!JEV_INTEGRATION_ENABLED || !activeThread) return;
+    const target = providerStatuses.find(
+      (provider) => provider.enabled && provider.models.some((item) => item.slug === model),
+    );
+    if (!target) {
+      setJevHandoffState(entry.jobId, "blocked");
+      setThreadError(
+        activeThread.id,
+        `Jevの選択（${model}）は利用できません。別のモデルへの自動送信はしていません。`,
+      );
+      return;
+    }
+    const current = composerRef.current?.getSendContext();
+    const choiceAlreadyApplied =
+      current?.selectedModel === model &&
+      current.selectedModelSelection.instanceId === target.instanceId &&
+      (effort === "default" ||
+        current.selectedModelSelection.options?.some(
+          (option) => option.id === "effort" && option.value === effort,
+        ) === true);
+    if (
+      entry.selectionSnapshot &&
+      JSON.stringify(current?.selectedModelSelection) !== entry.selectionSnapshot &&
+      !choiceAlreadyApplied
+    ) {
+      setJevHandoffState(entry.jobId, "blocked");
+      setThreadError(
+        activeThread.id,
+        "判定中にモデル選択が変更されました。現在の選択と入力を保持し、自動送信を停止しました。",
+      );
+      return;
+    }
+    onProviderModelSelect(target.instanceId, model, { focusComposer: false, effort });
+    setJevHandoffSend({ entry, model, instanceId: target.instanceId, effort, tries: 0 });
+  };
+  const startJevHandoffRef = useRef(startJevHandoff);
+  startJevHandoffRef.current = startJevHandoff;
+  const jevOnSendRef = useRef<(entry: JevHandoff) => Promise<boolean | undefined>>(
+    async () => false,
+  );
+  jevOnSendRef.current = (entry) => onSend(undefined, "foreground", undefined, entry);
+  const jevDispatchingRef = useRef(new Set<string>());
+  const jevHandoffReady =
+    !!activeThread &&
+    !isSendBusy &&
+    !isConnecting &&
+    !isRevertingCheckpoint &&
+    clientSettingsHydrated &&
+    !threadDetailLoading &&
+    phase !== "running" &&
+    activePendingApproval === null &&
+    pendingUserInputs.length === 0;
+  const activeThreadIdForJev = activeThread?.id ?? null;
+  const jevPrimary = JEV_INTEGRATION_ENABLED && environmentId === primaryEnvironment?.environmentId;
+  // Auto (Luna) lives in the model picker; it is offered only for the first request of a thread that never started Auto.
+  const lunaJudging = lunaStatus?.key === routeThreadKey && lunaStatus.busy;
+  const lunaAutoRecorded =
+    !lunaJudging &&
+    (() => {
+      try {
+        return readAutoRecord(routeThreadKey) !== null;
+      } catch {
+        return true;
+      }
+    })();
+  const lunaAutoOffered =
+    environmentId === primaryEnvironment?.environmentId &&
+    !activeThread?.session &&
+    !activeThread?.messages.some((m) => m.role === "user") &&
+    !lunaAutoRecorded;
+  const lunaAutoOn = lunaAutoOffered && lunaMode.key === routeThreadKey && lunaMode.enabled;
+  const lunaStatusText =
+    lunaStatus?.key === routeThreadKey
+      ? lunaStatus.text
+      : (autoRecoveryMessage(routeThreadKey) ??
+        (lunaAutoOn ? "オート：送信すると、Lunaがモデルと思考の強さを選びます。" : null));
+  useEffect(() => {
+    if (!activeThreadIdForJev || !jevPrimary) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let failures = 0;
+    const poll = async () => {
+      const entry = readJevHandoffs().find(
+        (x) => x.threadId === activeThreadIdForJev && (!x.state || x.state === "pending"),
+      );
+      if (!entry || cancelled) return;
+      try {
+        const detail = await jevRequest<JevDetail>(entry.jevThread, "get", { id: entry.jobId });
+        if (cancelled) return;
+        failures = 0;
+        const plan = nativeJevPlan(detail.job);
+        if (plan) {
+          startJevHandoffRef.current(entry, plan.model, plan.effort);
+          return;
+        }
+        if (
+          JEV_STOPPED_STATUSES.has(detail.job.status) ||
+          JEV_HANDOFF_STATUSES.has(detail.job.status)
+        ) {
+          setJevHandoffState(entry.jobId, "blocked");
+          toastManager.add({
+            type: "warning",
+            title: "Jevの自動送信を停止しました",
+            description:
+              "確認待ち・取消・未合格の作業は送信しません。指示は保留記録に残っています。",
+          });
+          return;
+        }
+      } catch {
+        if (++failures >= 30) {
+          setJevHandoffState(entry.jobId, "blocked");
+          toastManager.add({
+            type: "error",
+            title: "Jevの状態を確認できません",
+            description: "指示は保留記録に残っています。自動再送はしません。",
+          });
+          return;
+        }
+      }
+      timer = window.setTimeout(() => void poll(), 1000);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeThreadIdForJev, jevPrimary, jevHandoffNonce]);
+  useEffect(() => {
+    if (!jevHandoffSend || activeThreadIdForJev !== jevHandoffSend.entry.threadId) return;
+    const { entry } = jevHandoffSend;
+    if (jevDispatchingRef.current.has(entry.jobId)) return;
+    const stored = readJevHandoffs().find((x) => x.jobId === entry.jobId);
+    if (!stored || (stored.state && stored.state !== "pending")) {
+      setJevHandoffSend(null);
+      return;
+    }
+    const context = composerRef.current?.getSendContext();
+    const modelApplied =
+      context?.selectedModel === jevHandoffSend.model &&
+      context.selectedModelSelection.instanceId === jevHandoffSend.instanceId &&
+      (jevHandoffSend.effort === "default" ||
+        context.selectedModelSelection.options?.some(
+          (option) => option.id === "effort" && option.value === jevHandoffSend.effort,
+        ) === true);
+    if (!jevHandoffReady || !modelApplied || !context?.providerAvailable) {
+      if (jevHandoffSend.tries < 40) {
+        const timer = window.setTimeout(
+          () => setJevHandoffSend((value) => value && { ...value, tries: value.tries + 1 }),
+          250,
+        );
+        return () => window.clearTimeout(timer);
+      }
+      setJevHandoffState(entry.jobId, "blocked");
+      setJevHandoffSend(null);
+      setThreadError(
+        activeThreadIdForJev,
+        "Jevが選んだモデルで実行を開始できません。指示は保留記録に残っています。別モデルへの自動送信はしません。",
+      );
+      return;
+    }
+    // Do not overwrite a newer draft or silently attach context added after routing.
+    if (
+      context.prompt.trim() !== entry.task ||
+      context.images.length ||
+      context.files.length ||
+      context.terminalContexts.length ||
+      context.previewAnnotations.length ||
+      context.reviewComments.length ||
+      context.multipleModelSelections !== null
+    ) {
+      setJevHandoffState(entry.jobId, "blocked");
+      setJevHandoffSend(null);
+      setThreadError(
+        activeThreadIdForJev,
+        "入力欄に新しい内容があるため、Jevの自動送信を停止しました。元の指示は保留記録に残っています。",
+      );
+      return;
+    }
+    jevDispatchingRef.current.add(entry.jobId);
+    setJevHandoffSend(null);
+    void dispatchJevHandoff(
+      entry,
+      async () => (await jevRequest<JevDetail>(entry.jevThread, "get", { id: entry.jobId })).job,
+      async (plan) => {
+        if (plan.model !== jevHandoffSend.model || plan.effort !== jevHandoffSend.effort)
+          return false;
+        promptRef.current = entry.task;
+        setComposerDraftPrompt(composerDraftTarget, entry.task);
+        jevHandoffBypassRef.current = true;
+        try {
+          return await jevOnSendRef.current(entry);
+        } finally {
+          jevHandoffBypassRef.current = false;
+        }
+      },
+    )
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Jevの実行を確認してください",
+          description:
+            error instanceof Error ? error.message : "結果不明のため自動再送を停止しました。",
+        });
+      })
+      .finally(() => jevDispatchingRef.current.delete(entry.jobId));
+  }, [jevHandoffSend, jevHandoffReady, activeThreadIdForJev, composerDraftTarget]);
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
       if (multipleModelSelections !== null) return;
@@ -9575,8 +10194,8 @@ export default function ChatView(props: ChatViewProps) {
       <PullRequestDetailGhost />
     ) : renderedRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (
       <PullRequestsUnavailableState
-        title="Pull requests unavailable"
-        error="Update this environment's T3 Code server to browse pull requests."
+        title={uiText("Pull requests unavailable")}
+        error="プルリクエストを閲覧するには、この環境のAmuサーバーを更新してください。"
       />
     ) : renderedRightPanelSurface?.kind === "pull-request" ? (
       // No onClose: the surface tab's own X owns closing here, and a second X in the header
@@ -9797,7 +10416,7 @@ export default function ChatView(props: ChatViewProps) {
                   className="flex items-center gap-2 rounded-full border border-primary/25 bg-background/95 px-4 py-2.5 text-sm font-medium text-foreground shadow-lg"
                 >
                   <PaperclipIcon className="size-4 text-primary" aria-hidden="true" />
-                  Drop files to attach
+                  {uiText("Drop files to attach")}
                 </div>
               </div>
             ) : null}
@@ -9914,7 +10533,7 @@ export default function ChatView(props: ChatViewProps) {
                   style={{ bottom: scrollToEndClearance + 4 }}
                 >
                   <Button
-                    aria-label="Scroll to end"
+                    aria-label={uiText("Scroll to end")}
                     onPointerDown={(event) => event.preventDefault()}
                     onClick={() => {
                       composerRef.current?.restoreAfterTimelineReachedEnd();
@@ -9925,7 +10544,7 @@ export default function ChatView(props: ChatViewProps) {
                     variant="glass"
                   >
                     <ChevronDownIcon className="size-3.5" />
-                    Scroll to end
+                    {uiText("Scroll to end")}
                   </Button>
                 </div>
               )}
@@ -9978,10 +10597,129 @@ export default function ChatView(props: ChatViewProps) {
                         : undefined
                     }
                   >
+                    {JEV_INTEGRATION_ENABLED &&
+                      environmentId === primaryEnvironment?.environmentId && (
+                        <JevWorkflowPanel
+                          key={routeThreadKey}
+                          threadKey={routeThreadKey}
+                          submission={jevDraft?.key === routeThreadKey ? jevDraft.submission : null}
+                          onDismiss={() => setJevDraft(null)}
+                          onCreated={async (job) => {
+                            if (currentRouteThreadKeyRef.current !== routeThreadKey) return;
+                            if (isLocalDraftThread && activeThread && activeProject) {
+                              const result = await createThread({
+                                environmentId,
+                                input: {
+                                  threadId: activeThread.id,
+                                  projectId: activeProject.id,
+                                  title: truncate(jevDraft?.submission.task ?? "オートの作業"),
+                                  modelSelection:
+                                    composerRef.current!.getSendContext().selectedModelSelection,
+                                  runtimeMode: latestRuntimeModeRef.current,
+                                  interactionMode:
+                                    composerRef.current!.getSendContext().interactionMode,
+                                  branch: activeThreadBranch,
+                                  worktreePath: activeThread.worktreePath,
+                                  createdAt: new Date().toISOString(),
+                                },
+                              });
+                              if (result._tag === "Failure")
+                                throw new Error(
+                                  "Amuの会話保存を確認できません。Auto作業は保存済みです。再送せず会話一覧を確認してください。",
+                                );
+                              if (currentRouteThreadKeyRef.current !== routeThreadKey) return;
+                              saveJevAuto(routeThreadKey, jevAutoRef.current);
+                              saveJevAuto(
+                                scopedThreadKey(scopeThreadRef(environmentId, activeThread.id)),
+                                jevAutoRef.current,
+                              );
+                              markPromotedDraftThreadByRef(routeThreadRef);
+                            }
+                            setJevDraft(null);
+                            if (
+                              activeThread &&
+                              jevDraft &&
+                              job.data.request.text_only === true &&
+                              job.data.request.decision_only === true
+                            ) {
+                              saveJevHandoff({
+                                jobId: job.id,
+                                jevThread: routeThreadKey,
+                                ...(jevDraft.submission.selectionSnapshot
+                                  ? { selectionSnapshot: jevDraft.submission.selectionSnapshot }
+                                  : {}),
+                                threadId: activeThread.id,
+                                task: jevDraft.submission.task,
+                                state: jevAutoRef.current ? "pending" : "cancelled",
+                              });
+                              setJevHandoffNonce((n) => n + 1);
+                            }
+                            if (isLocalDraftThread && activeThread)
+                              await navigate({
+                                to: "/$environmentId/$threadId",
+                                params: { environmentId, threadId: activeThread.id },
+                              });
+                          }}
+                        />
+                      )}
+                    {lunaStatusText && (
+                      <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 text-xs text-muted-foreground">
+                        <span
+                          role="status"
+                          aria-label="モデル自動選択の状態"
+                          title="続きの会話では、最初に選ばれたモデルを維持します。"
+                        >
+                          {lunaStatusText}
+                        </span>
+                        {lunaJudging && (
+                          <Button variant="outline" size="sm" onClick={() => changeLunaAuto(false)}>
+                            判定を取り消す
+                          </Button>
+                        )}
+                        {autoRecoveryMessage(routeThreadKey) &&
+                          lunaManualRecoveryKey !== routeThreadKey &&
+                          !lunaPendingRef.current && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                void cancelPendingAutoRecord(routeThreadKey)
+                                  .then(() => {
+                                    setLunaManualRecoveryKey(routeThreadKey);
+                                    setLunaMode({ key: routeThreadKey, enabled: false });
+                                    setLunaStatus({
+                                      key: routeThreadKey,
+                                      busy: false,
+                                      text: "手動送信に戻りました。元の依頼と選択モデルを確認して送信してください。",
+                                    });
+                                  })
+                                  .catch((error) =>
+                                    setLunaStatus({
+                                      key: routeThreadKey,
+                                      busy: false,
+                                      text:
+                                        error instanceof Error
+                                          ? error.message
+                                          : "手動送信への復帰を確認できません。",
+                                    }),
+                                  );
+                              }}
+                            >
+                              実行状態を確認して手動に戻る
+                            </Button>
+                          )}
+                      </div>
+                    )}
                     <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
                           <ChatComposer
+                            {...(JEV_INTEGRATION_ENABLED &&
+                            environmentId === primaryEnvironment?.environmentId
+                              ? { jevAutoSelected: jevAuto, onJevAutoChange: changeJevAuto }
+                              : lunaAutoOffered
+                                ? { jevAutoSelected: lunaAutoOn, onJevAutoChange: changeLunaAuto }
+                                : {})}
                             multipleModelSelections={multipleModelSelections}
                             supportsMultipleModels={
                               serverConfig?.environment.capabilities.requiredWorktreeBootstrap ===
@@ -10009,7 +10747,7 @@ export default function ChatView(props: ChatViewProps) {
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}
                             isConnecting={isConnecting}
-                            isSendBusy={isSendBusy}
+                            isSendBusy={isSendBusy || lunaJudging}
                             isRevertingCheckpoint={isRevertingCheckpoint}
                             sendDisabledReason={
                               isRevertingCheckpoint
@@ -10188,19 +10926,22 @@ export default function ChatView(props: ChatViewProps) {
               <AlertDialogPopup>
                 <AlertDialogHeader>
                   <AlertDialogTitle>
-                    Switch to{" "}
+                    {uiText("Switch to")}{" "}
                     <code className="font-medium">
                       {localCheckoutBranchMismatch?.threadBranch ?? ""}
                     </code>
                     ?
                   </AlertDialogTitle>
                   <AlertDialogDescription>
-                    You have uncommitted changes. They'll carry over to the other branch, or block
-                    the switch if they conflict.
+                    {uiText(
+                      "You have uncommitted changes. They'll carry over to the other branch, or block the switch if they conflict.",
+                    )}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+                  <AlertDialogClose render={<Button variant="outline" />}>
+                    {uiText("Cancel")}
+                  </AlertDialogClose>
                   <Button
                     variant="default"
                     onClick={() => {
@@ -10208,7 +10949,7 @@ export default function ChatView(props: ChatViewProps) {
                       void handleSwitchCheckoutToThread();
                     }}
                   >
-                    Switch branch
+                    {uiText("Switch branch")}
                   </Button>
                 </AlertDialogFooter>
               </AlertDialogPopup>
@@ -10368,17 +11109,22 @@ export default function ChatView(props: ChatViewProps) {
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Edit from here?</AlertDialogTitle>
+            <AlertDialogTitle>{uiText("Edit from here?")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Rewind chat to before this message. Your prompt and attachments return to the
-              composer.
+              {uiText(
+                "Rewind chat to before this message. Your prompt and attachments return to the composer.",
+              )}
               {activeWorktreePath === null
-                ? " Files stay as they are because this thread shares the project directory."
+                ? uiText(
+                    " Files stay as they are because this thread shares the project directory.",
+                  )
                 : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {uiText("Cancel")}
+            </AlertDialogClose>
             {activeWorktreePath !== null ? (
               <Button
                 variant="destructive"
@@ -10388,7 +11134,7 @@ export default function ChatView(props: ChatViewProps) {
                   void onRevertToTurnCount(pendingRevert.turnCount, pendingRevert.messageId, true);
                 }}
               >
-                Revert files too
+                {uiText("Revert files too")}
               </Button>
             ) : null}
             <Button
@@ -10398,7 +11144,7 @@ export default function ChatView(props: ChatViewProps) {
                 void onRevertToTurnCount(pendingRevert.turnCount, pendingRevert.messageId, false);
               }}
             >
-              Revert and keep changes
+              {uiText("Revert and keep changes")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

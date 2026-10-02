@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 import {
   DEFAULT_SERVER_SETTINGS,
   PROJECT_FILE_BACKED_SETTINGS,
@@ -29,31 +30,29 @@ interface InheritanceLayer {
 }
 
 const WRITING_STYLE_LABELS: Record<string, string> = {
-  repo_conventions: "Repository conventions",
-  conventional_commits: "Conventional Commits",
-  custom: "Custom instructions",
+  repo_conventions: uiText("Repository conventions"),
+  conventional_commits: uiText("Conventional Commits"),
+  custom: uiText("Custom instructions"),
 };
 
 /** Human labels for the values the chain can show; falls back to a type summary. */
 function formatValue(key: keyof ServerSettings, value: unknown): string {
   if (value === null || value === undefined) {
     return key === "pullRequestMergeMethod"
-      ? "Last selected"
+      ? uiText("Last selected")
       : key === "sidebarAutoSettleAfterDays"
-        ? "Never"
+        ? uiText("Never")
         : key === "defaultModelSelection"
-          ? "Automatic"
+          ? uiText("Automatic")
           : key === "sourceControlWriterModelSelection"
-            ? "Text generation model"
+            ? uiText("Text generation model")
             : key === "defaultThreadEnvMode" || key === "worktreeSubmodules"
-              ? "Inherit"
-              : "Not set";
+              ? uiText("Inherit")
+              : uiText("Not set");
   }
-  if (typeof value === "boolean") return value ? "On" : "Off";
+  if (typeof value === "boolean") return value ? uiText("On") : uiText("Off");
   if (typeof value === "number") {
-    return key === "sidebarAutoSettleAfterDays"
-      ? `${value} ${value === 1 ? "day" : "days"}`
-      : String(value);
+    return key === "sidebarAutoSettleAfterDays" ? uiFormat("{0} days", value) : String(value);
   }
   if (typeof value === "string") {
     if (key === "defaultThreadEnvMode" && (value === "local" || value === "worktree")) {
@@ -67,16 +66,16 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
         value as keyof typeof PULL_REQUEST_MERGE_METHOD_LABELS
       ];
     }
-    return value === "" ? "Empty" : value;
+    return value === "" ? uiText("Empty") : value;
   }
-  if (Array.isArray(value)) return `${value.length} ${value.length === 1 ? "item" : "items"}`;
+  if (Array.isArray(value)) return uiFormat("{0} items", value.length);
   if (typeof value === "object") {
     if ("model" in value && typeof value.model === "string") return value.model;
     if ("mode" in value && typeof value.mode === "string") {
       return WRITING_STYLE_LABELS[value.mode] ?? value.mode;
     }
   }
-  return "Custom";
+  return uiText("Custom");
 }
 
 /**
@@ -98,8 +97,8 @@ export function settingInheritanceLayers(
   if (target.projectId !== null && isProjectScopedSettingKey(key)) {
     layers.push({
       key: "project",
-      label: "Project",
-      value: source === "project" ? formatValue(key, target.settings[key]) : "Inherits",
+      label: uiText("Project"),
+      value: source === "project" ? formatValue(key, target.settings[key]) : uiText("Inherits"),
       effective: source === "project",
       set: source === "project",
     });
@@ -107,7 +106,7 @@ export function settingInheritanceLayers(
   layers.push({
     key: "environment",
     label: target.label,
-    value: environmentSet ? formatValue(key, environmentValue) : "Inherits",
+    value: environmentSet ? formatValue(key, environmentValue) : uiText("Inherits"),
     effective: source === "environment" && environmentSet,
     set: environmentSet,
   });
@@ -115,7 +114,7 @@ export function settingInheritanceLayers(
     layers.push({
       key: "t3.json",
       label: "t3.json",
-      value: source === "t3.json" ? formatValue(key, target.settings[key]) : "Inherits",
+      value: source === "t3.json" ? formatValue(key, target.settings[key]) : uiText("Inherits"),
       effective: source === "t3.json",
       set: source === "t3.json",
     });
@@ -127,7 +126,7 @@ export function settingInheritanceLayers(
     : DEFAULT_SERVER_SETTINGS[key];
   layers.push({
     key: "built-in",
-    label: "Default",
+    label: uiText("Default"),
     value: formatValue(key, builtIn),
     effective: source === "environment" && !environmentSet,
     set: true,
@@ -207,7 +206,7 @@ export function SettingInheritance({
                 <Button
                   size="icon-micro"
                   variant="ghost-muted"
-                  aria-label={`${overrideSummary}. Show where this value comes from`}
+                  aria-label={uiFormat("{0}. Show where this value comes from", overrideSummary)}
                 />
               }
             />
@@ -249,7 +248,7 @@ export function SettingInheritance({
                         layer.effective ? "font-medium text-foreground" : "text-muted-foreground",
                       )}
                     >
-                      {layer.key === "environment" ? "Environment" : layer.label}
+                      {layer.key === "environment" ? uiText("Environment") : layer.label}
                     </span>
                     <span
                       className={cn(
@@ -280,10 +279,10 @@ export function SettingInheritance({
                 return (
                   <div className="mt-2 border-t border-border/60 pt-2">
                     <div className="flex items-center justify-between gap-3 px-2 text-xs text-muted-foreground">
-                      <span>Overridden by</span>
+                      <span>{uiText("Overridden by")}</span>
                       {onClearOverrides ? (
                         <InlineButton onClick={() => onClearOverrides(overriding)}>
-                          Reset {overriding.length === 1 ? "it" : "all"}
+                          {uiText(overriding.length === 1 ? "Reset it" : "Reset all")}
                         </InlineButton>
                       ) : null}
                     </div>

@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId } from "@t3tools/contracts";
 
@@ -142,7 +143,7 @@ describe("searchSettings", () => {
   it("registers the WSL backend as a desktop-only setting", () => {
     expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "wsl-backend")).toMatchObject({
       id: "wsl-backend",
-      title: "WSL backend",
+      title: uiText("WSL backend"),
       to: "/settings/connections",
       desktopOnly: true,
       windowsOnly: true,
@@ -271,8 +272,11 @@ describe("searchSettings", () => {
   });
 
   it("serves anchor props to panels from the catalog", () => {
-    expect(searchableSetting("word-wrap")).toEqual({ id: "word-wrap", title: "Word wrap" });
-    expect(searchableSetting("archive")).toEqual({ id: "archive", title: "Archived threads" });
+    expect(searchableSetting("word-wrap")).toEqual({ id: "word-wrap", title: uiText("Word wrap") });
+    expect(searchableSetting("archive")).toEqual({
+      id: "archive",
+      title: uiText("Archived threads"),
+    });
   });
 
   it("routes appearance settings to their current section", () => {
@@ -377,7 +381,7 @@ describe("settings search targets", () => {
 
   it("treats device-local rows as reachable from every selection", () => {
     const setting = getSettingsSearchTargetScope("time-format")!;
-    expect(setting).toEqual({ title: "Time format", scope: null });
+    expect(setting).toEqual({ title: uiText("Time format"), scope: null });
     expect(isSettingsSearchScopeAvailable(setting.scope, "project")).toBe(true);
     expect(isSettingsSearchScopeAvailable(setting.scope, "all")).toBe(true);
     expect(getSettingsSearchTargetScope("appearance")).toMatchObject({ scope: null });

@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import type { EnvironmentId, PullRequestRef, ScopedThreadRef } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -346,8 +347,8 @@ export function useOpenPrLink(threadRef?: ScopedThreadRef) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to open pull request link",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            title: uiText("Unable to open pull request link"),
+            description: error instanceof Error ? error.message : uiText("An error occurred."),
           }),
         );
       });

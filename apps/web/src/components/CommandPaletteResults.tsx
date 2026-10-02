@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { ChevronRightIcon } from "lucide-react";
 import { shortcutLabelForCommand } from "../keybindings";
@@ -31,8 +32,8 @@ export function CommandPaletteResults(props: CommandPaletteResultsProps) {
       <div className="py-10 text-center text-sm text-muted-foreground">
         {props.emptyStateMessage ??
           (props.isActionsOnly
-            ? "No matching actions."
-            : "No matching commands, projects, or threads.")}
+            ? uiText("No matching actions.")
+            : uiText("No matching commands, projects, or threads."))}
       </div>
     );
   }

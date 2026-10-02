@@ -1,4 +1,4 @@
-import { originalUiText, uiText } from "~/uiText";
+import { originalUiText, originalUiTextAliases, uiText } from "~/uiText";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import { STATIC_KEYBINDING_COMMANDS, type KeybindingCommand } from "@t3tools/contracts";
@@ -992,6 +992,7 @@ export function searchSettings(
       if (item.windowsOnly && !isWindowsPlatform(platform)) return [];
 
       const title = normalizeSearchText(item.title);
+      const titles = [title, ...originalUiTextAliases(item.title).map(normalizeSearchText)];
       const fields = [
         title,
         normalizeSearchText(originalUiText(item.title)),
@@ -1002,18 +1003,17 @@ export function searchSettings(
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];
 
       const exactPhraseField = fields.findIndex((field) => field.includes(normalizedQuery));
-      const rank =
-        title === normalizedQuery
-          ? 5
-          : title.startsWith(normalizedQuery)
-            ? 4
-            : title.includes(normalizedQuery)
-              ? 3
-              : queryTokens.every((token) => title.includes(token))
-                ? 2
-                : exactPhraseField >= 0
-                  ? 1
-                  : 0;
+      const rank = titles.some((candidate) => candidate === normalizedQuery)
+        ? 5
+        : titles.some((candidate) => candidate.startsWith(normalizedQuery))
+          ? 4
+          : titles.some((candidate) => candidate.includes(normalizedQuery))
+            ? 3
+            : titles.some((candidate) => queryTokens.every((token) => candidate.includes(token)))
+              ? 2
+              : exactPhraseField >= 0
+                ? 1
+                : 0;
       return [{ item, index, rank }];
     })
     .toSorted(

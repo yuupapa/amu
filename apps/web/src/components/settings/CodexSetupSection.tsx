@@ -71,10 +71,10 @@ export function CodexSetupSection(props: CodexSetupSectionProps) {
           existingReady ? (
             props.provider?.auth.email?.trim() ? (
               <>
-                Signed in as{" "}
+                {uiText("Signed in as")}{" "}
                 <RedactedSensitiveText
                   value={props.provider.auth.email.trim()}
-                  ariaLabel="Toggle account email visibility"
+                  ariaLabel={uiText("Toggle account email visibility")}
                   revealTooltip="Click to reveal email"
                   hideTooltip="Click to hide email"
                   className="break-all"
@@ -576,8 +576,8 @@ function ManagedCodexSetup({
         : installation?.phase === "verifying"
           ? "Checking Codex."
           : installed
-            ? `${installation?.source === "local" ? "Using your installed Codex" : "Managed by T3 Code"}${installation?.installedVersion ? ` · v${installation.installedVersion}` : ""}.`
-            : (installation?.message ?? "T3 Code downloads and manages Codex for you.");
+            ? `${installation?.source === "local" ? "Using your installed Codex" : "Managed by Amu"}${installation?.installedVersion ? ` · v${installation.installedVersion}` : ""}.`
+            : (installation?.message ?? "Amu downloads and manages Codex for you.");
   const accountDescription = finishingSignIn ? (
     uiText("Finishing sign-in...")
   ) : installActive ? (
@@ -586,15 +586,15 @@ function ManagedCodexSetup({
     auth?.phase === "waiting" && requestedAccountEmail ? (
       `Continue as ${requestedAccountEmail} on OpenAI.`
     ) : (
-      (auth?.message ?? uiText("Finish signing in in your browser."))
+      (auth?.message ?? "Finish signing in in your browser.")
     )
   ) : authenticated ? (
     provider?.auth.email?.trim() ? (
       <>
-        Signed in as{" "}
+        {uiText("Signed in as")}{" "}
         <RedactedSensitiveText
           value={provider.auth.email.trim()}
-          ariaLabel="Toggle account email visibility"
+          ariaLabel={uiText("Toggle account email visibility")}
           revealTooltip="Click to reveal email"
           hideTooltip="Click to hide email"
         />
@@ -604,7 +604,7 @@ function ManagedCodexSetup({
       uiText("Signed in with ChatGPT.")
     )
   ) : (
-    (reconnectEmail ?? uiText("Use your ChatGPT subscription."))
+    (reconnectEmail ?? "Use your ChatGPT subscription.")
   );
 
   const handoffUrl =
@@ -654,7 +654,11 @@ function ManagedCodexSetup({
   const callbackCompletion =
     !handoff && auth?.phase === "waiting" && url ? (
       <div className="flex w-full flex-col gap-3 text-xs leading-relaxed text-muted-foreground">
-        <p>If sign-in doesn't return to T3 Code, paste the URL from the final localhost page.</p>
+        <p>
+          {uiText(
+            "If sign-in doesn't return to T3 Code, paste the URL from the final localhost page.",
+          )}
+        </p>
         <form
           className="flex flex-col gap-2 sm:flex-row sm:items-center"
           onSubmit={(event) => {
@@ -674,10 +678,10 @@ function ManagedCodexSetup({
         >
           <div className="min-w-0 flex-1">
             <Input
-              aria-label="ChatGPT sign-in redirect URL"
+              aria-label={uiText("ChatGPT sign-in redirect URL")}
               type="password"
               autoComplete="off"
-              placeholder="Paste the URL from the sign-in tab"
+              placeholder={uiText("Paste the URL from the sign-in tab")}
               value={callbackUrl}
               maxLength={16_384}
               disabled={pending || readOnly}
@@ -701,16 +705,16 @@ function ManagedCodexSetup({
               variant="ghost-muted"
               onClick={() => void ensureLocalApi().shell.openExternal(url)}
             >
-              Try sign-in in your browser
+              {uiText("Try sign-in in your browser")}
               <ExternalLinkIcon className="size-3.5" />
             </Button>
           </div>
         ) : null}
         {handoffUrl ? (
           <details>
-            <summary className="cursor-pointer">Other ways to connect</summary>
+            <summary className="cursor-pointer">{uiText("Other ways to connect")}</summary>
             <Button className="mt-2" size="sm" variant="outline" render={<a href={handoffUrl} />}>
-              Use T3 desktop for automatic return
+              {uiText("Use T3 desktop for automatic return")}
             </Button>
           </details>
         ) : null}
@@ -727,7 +731,7 @@ function ManagedCodexSetup({
   ) : callbackCompletion ? (
     <div className="space-y-3 text-xs leading-relaxed text-muted-foreground">
       <CodexSignInDescription
-        label="Having trouble signing in?"
+        label={uiText("Having trouble signing in?")}
         expanded={callbackHelpOpen}
         controls={callbackHelpId}
         onToggle={() => setCallbackHelpOpen((open) => !open)}
@@ -775,10 +779,10 @@ function ManagedCodexSetup({
             ) : authenticated ? (
               provider?.auth.email?.trim() ? (
                 <>
-                  Signed in as{" "}
+                  {uiText("Signed in as")}{" "}
                   <RedactedSensitiveText
                     value={provider.auth.email.trim()}
-                    ariaLabel="Toggle account email visibility"
+                    ariaLabel={uiText("Toggle account email visibility")}
                     revealTooltip="Click to reveal email"
                     hideTooltip="Click to hide email"
                     className="break-all"
@@ -828,9 +832,9 @@ function ManagedCodexSetup({
                 }}
               >
                 {installActive || pending
-                  ? "Setting up..."
+                  ? uiText("Setting up...")
                   : hasSavedAccount
-                    ? "Reconnect account"
+                    ? uiText("Reconnect account")
                     : uiText("Continue with ChatGPT")}
               </ChatGptConnectionButton>
             )
@@ -863,7 +867,7 @@ function ManagedCodexSetup({
                 disabled={unavailable || busy}
                 onClick={() => void setup("chatgpt-change-account")}
               >
-                Use a different account
+                {uiText("Use a different account")}
               </Button>
             ) : !authActive && !authenticated && allowExistingCli ? (
               <Button
@@ -889,7 +893,7 @@ function ManagedCodexSetup({
   }
 
   return (
-    <section aria-label="Codex setup" className="divide-y divide-border/50">
+    <section aria-label={uiText("Codex setup")} className="divide-y divide-border/50">
       {accountPicker}
       <SettingsRow
         title={uiText("ChatGPT account")}
@@ -941,7 +945,7 @@ function ManagedCodexSetup({
                   disabled={unavailable || busy}
                   onClick={() => setAccountPickerOpen(true)}
                 >
-                  Change account
+                  {uiText("Change account")}
                 </Button>
                 <Button
                   size="sm"
@@ -949,7 +953,7 @@ function ManagedCodexSetup({
                   disabled={unavailable || busy}
                   onClick={() => void run(() => logoutAuth(target))}
                 >
-                  Disconnect
+                  {uiText("Disconnect")}
                 </Button>
               </>
             ) : (
@@ -967,9 +971,9 @@ function ManagedCodexSetup({
                   }}
                 >
                   {pending
-                    ? "Setting up..."
+                    ? uiText("Setting up...")
                     : hasSavedAccount
-                      ? "Reconnect account"
+                      ? uiText("Reconnect account")
                       : uiText("Continue with ChatGPT")}
                 </ChatGptConnectionButton>
                 {hasSavedAccount ? (
@@ -979,7 +983,7 @@ function ManagedCodexSetup({
                     disabled={unavailable || busy}
                     onClick={() => void setup("chatgpt-change-account")}
                   >
-                    Use a different account
+                    {uiText("Use a different account")}
                   </Button>
                 ) : null}
               </>
@@ -1003,7 +1007,7 @@ function ManagedCodexSetup({
           {error ??
             (installation?.phase === "failed"
               ? installation.message
-              : "Could not read Codex setup status. Reconnect and try again.")}
+              : uiText("Could not read Codex setup status. Reconnect and try again."))}
         </p>
       ) : null}
     </section>
@@ -1031,26 +1035,28 @@ export function CodexManagedRuntimeFields({
     <>
       <SettingsRow
         title={uiText("Binary path")}
-        description="Selected by T3 Code."
+        description={uiText("Selected by T3 Code.")}
         control={
           <div className="w-full sm:w-80">
             <Input
-              aria-label="Codex binary path"
+              aria-label={uiText("Codex binary path")}
               value={executablePath}
               title={executablePath}
-              placeholder={installation.error ? "Could not read runtime path" : "Not installed"}
+              placeholder={
+                installation.error ? uiText("Could not read runtime path") : uiText("Not installed")
+              }
               disabled
             />
           </div>
         }
       />
       <SettingsRow
-        title="CODEX_HOME path"
-        description="Shared Codex config, sessions, and state."
+        title={uiText("CODEX_HOME path")}
+        description={uiText("Shared Codex config, sessions, and state.")}
         control={
           <div className="w-full sm:w-80">
             <Input
-              aria-label="Codex home path"
+              aria-label={uiText("Codex home path")}
               value={provider?.runtimePaths?.homePath ?? ""}
               title={provider?.runtimePaths?.homePath}
               placeholder={uiText("Unavailable")}
@@ -1060,19 +1066,19 @@ export function CodexManagedRuntimeFields({
         }
       />
       <SettingsRow
-        title="Shadow home path"
+        title={uiText("Shadow home path")}
         description={
           provider?.runtimePaths?.shadowHomePath
-            ? "Account-specific home sharing the Codex state above."
-            : "This instance uses the shared Codex home directly."
+            ? uiText("Account-specific home sharing the Codex state above.")
+            : uiText("This instance uses the shared Codex home directly.")
         }
         control={
           <div className="w-full sm:w-80">
             <Input
-              aria-label="Codex shadow home path"
+              aria-label={uiText("Codex shadow home path")}
               value={provider?.runtimePaths?.shadowHomePath ?? ""}
               title={provider?.runtimePaths?.shadowHomePath ?? undefined}
-              placeholder={provider?.runtimePaths ? "Not used" : uiText("Unavailable")}
+              placeholder={provider?.runtimePaths ? uiText("Not used") : uiText("Unavailable")}
               disabled
             />
           </div>
@@ -1098,7 +1104,7 @@ function CodexSignInDescription({
     <button
       type="button"
       className="inline-flex items-center gap-1.5 rounded-sm text-left leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      aria-label="Having trouble signing in?"
+      aria-label={uiText("Having trouble signing in?")}
       aria-expanded={expanded}
       aria-controls={controls}
       onClick={onToggle}

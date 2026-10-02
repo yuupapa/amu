@@ -191,6 +191,22 @@ describe("sendQueuedMessage", () => {
     expect(queue()).toBeUndefined();
   });
 
+  it("passes Auto mode to both persisted settings and the queued turn", async () => {
+    io.shell = { ...io.shell, runtimeMode: "approval-required" };
+    const message = enqueue({
+      sendSettings: {
+        modelSelection,
+        runtimeMode: "auto",
+        interactionMode: "default",
+        promptEffort: null,
+      },
+    });
+    await sendQueuedMessage(threadRef, message.id);
+    expect(commandsRun()).toEqual(["runtime", "start"]);
+    expect(io.run.mock.calls[0]?.[2]).toMatchObject({ input: { runtimeMode: "auto" } });
+    expect(io.run.mock.calls[1]?.[2]).toMatchObject({ input: { runtimeMode: "auto" } });
+  });
+
   it("gives a message back to Stop while its upload runs, without starting a turn", async () => {
     let finishUpload!: () => void;
     io.upload.mockReturnValue(new Promise<void>((resolve) => (finishUpload = resolve)));

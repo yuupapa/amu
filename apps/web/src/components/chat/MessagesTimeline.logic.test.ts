@@ -3370,6 +3370,45 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
+  it("keeps a generated image visible outside the settled turn fold", () => {
+    const turnId = TurnId.make("image-turn");
+    const time = (second: number) => new Date(Date.UTC(2026, 8, 8, 0, 0, second)).toISOString();
+    const image: WorkLogEntry = {
+      id: "generated-image",
+      createdAt: time(3),
+      turnId,
+      tone: "tool",
+      label: "画像を生成",
+      viewedImagePath: "/Users/example/.codex/generated_images/t/exec-1.png",
+      generatedImage: true,
+      toolCallId: "exec-1",
+      toolLifecycleStatus: "completed",
+      sourceActivityKind: "tool.completed",
+    };
+    const tools: WorkLogEntry[] = [1, 2, 4].map((second) => ({
+      id: `tool-${second}`,
+      createdAt: time(second),
+      turnId,
+      tone: "tool",
+      label: "Ran command",
+      command: "git status",
+      toolCallId: `call-${second}`,
+      toolLifecycleStatus: "completed",
+      sourceActivityKind: "tool.completed",
+    }));
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: deriveTimelineEntries([], [], [...tools, image]),
+      latestTurn: { turnId, state: "completed", startedAt: time(0), completedAt: time(6) },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    expect(rows.some((row) => row.kind === "work" && row.groupedEntries.includes(image))).toBe(
+      true,
+    );
+  });
+
   it("keeps user input in its own row through tool grouping and turn folding", () => {
     const turnId = TurnId.make("answer-turn");
     const time = (second: number) => new Date(Date.UTC(2026, 8, 8, 0, 0, second)).toISOString();

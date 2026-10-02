@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { useEffect, useId, useRef, useState, type ComponentProps } from "react";
 
 import { cn } from "~/lib/utils";
@@ -53,7 +54,7 @@ export function PullRequestCommentBody({
             setExpanded(!expanded);
           }}
         >
-          {expanded ? "Show less" : "Show full comment"}
+          {expanded ? uiText("Show less") : uiText("Show full comment")}
         </Button>
       ) : null}
     </div>

@@ -1,4 +1,5 @@
 "use client";
+import { uiText } from "~/uiText";
 
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
@@ -199,7 +200,7 @@ export function PreviewView({
         if (error instanceof BrowserSettingsReadError) {
           toastManager.add({
             type: "error",
-            title: "Unable to open browser",
+            title: uiText("Unable to open browser"),
             description: error.message,
           });
         }
@@ -268,8 +269,8 @@ export function PreviewView({
         const error = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
-          title: "Unable to resize browser viewport",
-          description: error instanceof Error ? error.message : "An error occurred.",
+          title: uiText("Unable to resize browser viewport"),
+          description: error instanceof Error ? error.message : uiText("An error occurred."),
         });
         throw error;
       }
@@ -331,8 +332,8 @@ export function PreviewView({
     void operation(runtimeTabId).catch((error) => {
       toastManager.add({
         type: "error",
-        title: "Unable to update popped-out preview",
-        description: error instanceof Error ? error.message : "An error occurred.",
+        title: uiText("Unable to update popped-out preview"),
+        description: error instanceof Error ? error.message : uiText("An error occurred."),
       });
     });
   }, [desktopOverlay?.pictureInPicture, runtimeTabId]);
@@ -354,8 +355,8 @@ export function PreviewView({
                   toastId,
                   stackedThreadToast({
                     type: "error",
-                    title: "Unable to copy recording path",
-                    description: "Clipboard API unavailable.",
+                    title: uiText("Unable to copy recording path"),
+                    description: uiText("Clipboard API unavailable."),
                     actionProps: revealAction,
                   }),
                 );
@@ -376,8 +377,9 @@ export function PreviewView({
                     toastId,
                     stackedThreadToast({
                       type: "error",
-                      title: "Unable to copy recording path",
-                      description: error instanceof Error ? error.message : "An error occurred.",
+                      title: uiText("Unable to copy recording path"),
+                      description:
+                        error instanceof Error ? error.message : uiText("An error occurred."),
                       actionProps: revealAction,
                     }),
                   );
@@ -394,7 +396,7 @@ export function PreviewView({
                 toastId,
                 stackedThreadToast({
                   type: "success",
-                  title: "Recording saved",
+                  title: uiText("Recording saved"),
                   actionProps: revealAction,
                   data: {
                     secondaryActionProps: {
@@ -411,7 +413,7 @@ export function PreviewView({
             toastId = toastManager.add(
               stackedThreadToast({
                 type: "success",
-                title: "Recording saved",
+                title: uiText("Recording saved"),
                 actionProps: revealAction,
                 data: {
                   secondaryActionProps: {
@@ -426,8 +428,8 @@ export function PreviewView({
           (error) => {
             toastManager.add({
               type: "error",
-              title: "Unable to stop recording",
-              description: error instanceof Error ? error.message : "An error occurred.",
+              title: uiText("Unable to stop recording"),
+              description: error instanceof Error ? error.message : uiText("An error occurred."),
             });
           },
         );
@@ -439,7 +441,7 @@ export function PreviewView({
           if (isBrowserRecordingStartCancelledError(error)) return;
           toastManager.add({
             type: "error",
-            title: "Unable to start recording",
+            title: uiText("Unable to start recording"),
             description,
           });
         });
@@ -543,7 +545,7 @@ export function PreviewView({
           toastId = toastManager.add(
             stackedThreadToast({
               type: "success",
-              title: "Screenshot saved",
+              title: uiText("Screenshot saved"),
               actionProps: {
                 children: "Copy image",
                 onClick: copyImage,
@@ -569,8 +571,8 @@ export function PreviewView({
         (error) => {
           toastManager.add({
             type: "error",
-            title: "Unable to capture screenshot",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            title: uiText("Unable to capture screenshot"),
+            description: error instanceof Error ? error.message : uiText("An error occurred."),
           });
         },
       );
@@ -613,10 +615,10 @@ export function PreviewView({
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not capture the picked element",
+              title: uiText("Could not capture the picked element"),
               // The send path reports its own outcome, so only say what this
               // handler knows: the crop was dropped.
-              description: "The annotation was kept without the screenshot.",
+              description: uiText("The annotation was kept without the screenshot."),
             }),
           );
         }

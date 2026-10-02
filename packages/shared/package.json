@@ -358,6 +358,10 @@
     "./codexAuthHandoff": {
       "types": "./src/codexAuthHandoff.ts",
       "import": "./src/codexAuthHandoff.ts"
+    },
+    "./lunaAuto": {
+      "types": "./src/lunaAuto.ts",
+      "import": "./src/lunaAuto.ts"
     }
   },
   "scripts": {

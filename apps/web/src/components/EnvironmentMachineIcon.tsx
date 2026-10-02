@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
 import { CloudIcon, LaptopIcon, MonitorIcon, ServerIcon, type LucideProps } from "lucide-react";
 import type { FunctionComponent, SVGProps } from "react";
@@ -54,10 +55,10 @@ const ICON_BY_KIND: Record<EnvironmentMachineKind, FunctionComponent<LucideProps
 };
 
 export const ENVIRONMENT_MACHINE_KIND_LABELS: Record<EnvironmentMachineKind, string> = {
-  server: "Server",
+  server: uiText("Server"),
   cloud: "Cloud VM",
   linux: "Linux/WSL",
-  desktop: "Desktop",
+  desktop: uiText("Desktop"),
   laptop: "Laptop",
   "mac-mini": "Mini PC",
   "mac-studio": "Workstation",

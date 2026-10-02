@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { useNavigate } from "@tanstack/react-router";
 import { DownloadIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -160,10 +161,12 @@ function ProviderUpdateEnvironmentsNotification() {
     const toastId = toastManager.add(
       stackedThreadToast({
         type: "warning",
-        title: getProviderUpdateInitialToastView({
-          updateProviders: candidateUnion,
-          oneClickProviders: candidateUnion,
-        }).title,
+        title: uiText(
+          getProviderUpdateInitialToastView({
+            updateProviders: candidateUnion,
+            oneClickProviders: candidateUnion,
+          }).title,
+        ),
         description: (
           <ProviderUpdateEnvironmentRows
             onInteract={() => {
@@ -173,7 +176,7 @@ function ProviderUpdateEnvironmentsNotification() {
         ),
         timeout: 0,
         actionProps: {
-          children: "Settings",
+          children: uiText("Settings"),
           onClick: openProviderSettings,
         },
         actionVariant: "outline",

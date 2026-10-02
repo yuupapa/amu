@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, PullRequestRef } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -136,7 +137,7 @@ export function usePullRequestFilesViewed(options: {
         // back, and when the connection went away mid-flight, which the reader is already being
         // told about and which the host never refused.
         if (owned.size > 0 && !isAtomCommandInterrupted(result)) {
-          toastManager.add({ type: "error", title: "Could not update viewed files" });
+          toastManager.add({ type: "error", title: uiText("Could not update viewed files") });
         }
         return;
       }

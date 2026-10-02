@@ -1398,6 +1398,29 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("shows a Codex generated image from its saved path", () => {
+    const savedPath = "/Users/example/.codex/generated_images/thread/exec-1.png";
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "image-generation-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Image view",
+        payload: {
+          toolCallId: "exec-1",
+          itemType: "image_view",
+          data: { imagePath: savedPath, imageGenerated: true },
+        },
+      }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      viewedImagePath: savedPath,
+      generatedImage: true,
+      label: "画像を生成",
+    });
+  });
+
   it("does not use command stdout as the detail when Cursor omits the command input", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

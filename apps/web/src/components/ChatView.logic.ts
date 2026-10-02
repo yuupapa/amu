@@ -1,3 +1,4 @@
+import { uiFormat, uiText } from "~/uiText";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type AssetCreateUrlInput,
@@ -894,13 +895,13 @@ export function buildExpiredTerminalContextToastCopy(
   const noun = count === 1 ? "Expired terminal context" : "Expired terminal contexts";
   if (variant === "empty") {
     return {
-      title: `${noun} won't be sent`,
-      description: "Remove it or re-add it to include terminal output.",
+      title: uiFormat("{0} won't be sent", noun),
+      description: uiText("Remove it or re-add it to include terminal output."),
     };
   }
   return {
-    title: `${noun} omitted from message`,
-    description: "Re-add it if you want that terminal output included.",
+    title: uiFormat("{0} omitted from message", noun),
+    description: uiText("Re-add it if you want that terminal output included."),
   };
 }
 
@@ -1072,8 +1073,10 @@ export function getStartedThreadModelChangeBlockReason(input: {
     return null;
   }
   return {
-    title: "Start a new chat to change models",
-    description: "This provider does not allow switching models after a conversation has started.",
+    title: uiText("Start a new chat to change models"),
+    description: uiText(
+      "This provider does not allow switching models after a conversation has started.",
+    ),
   };
 }
 

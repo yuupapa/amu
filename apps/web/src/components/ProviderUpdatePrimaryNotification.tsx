@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { DownloadIcon } from "lucide-react";
@@ -63,8 +64,8 @@ function addProviderUpdateToast(input: {
   if (input.view.type === "loading" || input.view.type === "success") {
     return toastManager.add({
       type: input.view.type,
-      title: input.view.title,
-      description: input.view.description,
+      title: uiText(input.view.title),
+      description: uiText(input.view.description),
       timeout: 0,
       actionProps: hiddenToastActionProps,
       data: {
@@ -80,11 +81,11 @@ function addProviderUpdateToast(input: {
   toastId = toastManager.add(
     stackedThreadToast({
       type: input.view.type,
-      title: input.view.title,
-      description: input.view.description,
+      title: uiText(input.view.title),
+      description: uiText(input.view.description),
       timeout: 0,
       actionProps: {
-        children: "Settings",
+        children: uiText("Settings"),
         onClick: () => input.openSettings(toastId),
       },
       actionVariant: "outline",
@@ -268,17 +269,17 @@ export function ProviderUpdatePrimaryNotification() {
     toastId = toastManager.add(
       stackedThreadToast({
         type: initialView.type,
-        title: initialView.title,
-        description: initialView.description,
+        title: uiText(initialView.title),
+        description: uiText(initialView.description),
         timeout: 0,
         actionProps:
           oneClickProviders.length > 0
             ? {
-                children: "Update",
+                children: uiText("Update"),
                 onClick: runUpdates,
               }
             : {
-                children: "Settings",
+                children: uiText("Settings"),
                 onClick: openSettings,
               },
         actionVariant: "outline",
@@ -292,7 +293,7 @@ export function ProviderUpdatePrimaryNotification() {
           ...(oneClickProviders.length > 0
             ? {
                 secondaryActionProps: {
-                  children: "Settings",
+                  children: uiText("Settings"),
                   onClick: openSettings,
                 },
                 secondaryActionVariant: "outline" as const,

@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import type { ContextMenuItem } from "@t3tools/contracts";
 
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -9,7 +10,7 @@ export type PullRequestLinkContextMenuAction = "copy-link" | "open-external";
 
 /** Named for the host rather than "externally": the point is where you will land. */
 const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
-  github: "Open on GitHub",
+  github: uiText("Open on GitHub"),
   gitlab: "Open on GitLab",
   forgejo: "Open on Forgejo",
   bitbucket: "Open on Bitbucket",
@@ -24,7 +25,7 @@ function pullRequestLinkContextMenuItems(
   openLabel: string,
 ): readonly ContextMenuItem<PullRequestLinkContextMenuAction>[] {
   return [
-    { id: "copy-link", label: "Copy link", icon: "copy" },
+    { id: "copy-link", label: uiText("Copy link"), icon: "copy" },
     { id: "open-external", label: openLabel },
   ];
 }
@@ -63,7 +64,10 @@ export async function showPullRequestLinkContextMenu({
   } catch {
     toastManager.add({
       type: "error",
-      title: action === "copy-link" ? "Could not copy the link" : "Could not open the link",
+      title:
+        action === "copy-link"
+          ? uiText("Could not copy the link")
+          : uiText("Could not open the link"),
     });
   }
 }

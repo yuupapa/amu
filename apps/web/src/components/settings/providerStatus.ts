@@ -46,13 +46,13 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
       headline: uiText("Disabled"),
       detail:
         provider.message ??
-        uiText("This provider is installed but disabled for new sessions in T3 Code."),
+        "この実行サービスはインストール済みですが、Amuの新しいセッションでは無効です。",
     };
   }
   if (!provider.installed) {
     return {
       headline: uiText("Not found"),
-      detail: provider.message ?? uiText("CLI not detected on PATH."),
+      detail: provider.message ?? "CLI not detected on PATH.",
     };
   }
   if (provider.auth.status === "unauthenticated") {
@@ -65,14 +65,13 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
     return {
       headline: uiText("Needs attention"),
       detail:
-        provider.message ??
-        uiText("The provider is installed, but the server could not fully verify it."),
+        provider.message ?? "The provider is installed, but the server could not fully verify it.",
     };
   }
   if (provider.status === "error") {
     return {
       headline: uiText("Unavailable"),
-      detail: provider.message ?? uiText("The provider failed its startup checks."),
+      detail: provider.message ?? "The provider failed its startup checks.",
     };
   }
   if (provider.auth.status === "authenticated") {
@@ -140,9 +139,7 @@ export function getProviderVersionAdvisoryPresentation(
       title: COMPATIBILITY_TITLES[compatibility.status],
       detail:
         compatibility.message ??
-        (recommendation
-          ? `Use ${recommendation} for full support.`
-          : uiText("Update for full support.")),
+        (recommendation ? `Use ${recommendation} for full support.` : "Update for full support."),
       updateCommand:
         targetVersion || latestIsIncompatible ? null : (advisory?.updateCommand ?? null),
       emphasis: compatibility.status === "graceful" ? "normal" : "strong",

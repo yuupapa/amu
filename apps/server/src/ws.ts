@@ -116,6 +116,7 @@ import * as ProviderMaintenance from "./provider/providerMaintenance.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import { makeLunaPostUpdateCheck } from "./luna/LunaPostUpdateCheck.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
@@ -2448,7 +2449,14 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,
-            providerMaintenanceRunner.updateProvider(input),
+            providerMaintenanceRunner
+              .updateProvider(input)
+              .pipe(
+                Effect.provideService(
+                  ProviderMaintenanceRunner.ProviderPostUpdateCheckRef,
+                  makeLunaPostUpdateCheck(serverSettings.getSettings),
+                ),
+              ),
             {
               "rpc.aggregate": "server",
             },

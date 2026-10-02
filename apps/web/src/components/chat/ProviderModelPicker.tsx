@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
@@ -31,6 +32,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
    * The instance currently selected in the composer. Drives the trigger
    * icon, label and the default-highlighted combobox row.
    */
+  autoSelected?: boolean;
+  onAutoSelect?: () => void;
   activeInstanceId: ProviderInstanceId;
   model: string;
   selectedModels?: ReadonlyArray<{ instanceId: ProviderInstanceId; model: string }>;
@@ -271,7 +274,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           </Tooltip>
           {selectedModel?.isUnavailable && !selectedEntries && props.triggerLabel === undefined ? (
             <Badge variant="outline" size="sm">
-              Unavailable
+              {uiText("Unavailable")}
             </Badge>
           ) : null}
         </span>
@@ -286,6 +289,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         padding="none"
       >
         <ModelPickerContent
+          {...(props.onAutoSelect
+            ? {
+                autoSelected: props.autoSelected === true,
+                onAutoSelect: () => {
+                  props.onAutoSelect?.();
+                  setIsMenuOpen(false);
+                },
+              }
+            : {})}
           activeInstanceId={activeInstanceId}
           model={props.model}
           {...(props.selectedModels !== undefined ? { selectedModels: props.selectedModels } : {})}

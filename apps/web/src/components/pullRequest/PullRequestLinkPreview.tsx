@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, PullRequestRef } from "@t3tools/contracts";
 import {
@@ -131,7 +132,8 @@ export function PullRequestLinkPreview({
                   <span className="min-w-0 truncate">{authorLabel}</span>
                   <span aria-hidden>·</span>
                   <span className="shrink-0">
-                    opened {formatRelativeTimeLabel(detail.createdAt)}
+                    {uiText("opened")}
+                    {formatRelativeTimeLabel(detail.createdAt)}
                   </span>
                 </div>
               </div>

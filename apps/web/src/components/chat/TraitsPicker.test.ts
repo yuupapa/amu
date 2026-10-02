@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind, type ProviderOptionDescriptor } from "@t3tools/contracts";
-import { buildTraitsTriggerDisplay, buildUnavailableModelOptionDescriptors } from "./TraitsPicker";
+import {
+  buildTraitsTriggerDisplay,
+  buildUnavailableModelOptionDescriptors,
+  localizeTraitDisplay,
+} from "./TraitsPicker";
 
 function selectDescriptor(
   id: string,
@@ -62,6 +66,15 @@ function display(descriptors: ReadonlyArray<ProviderOptionDescriptor>) {
 }
 
 describe("buildTraitsTriggerDisplay", () => {
+  it("localizes effort display while keeping the original descriptor and prompt-control labels", () => {
+    const before = structuredClone(EFFORT);
+    const expected = import.meta.env.VITE_T3_UI_LANGUAGE === "en" ? "High · 1M" : "高 · 1M";
+    expect(localizeTraitDisplay(display([EFFORT, CONTEXT_WINDOW]).label)).toBe(expected);
+    expect(EFFORT).toEqual(before);
+    expect(EFFORT.currentValue).toBe("high");
+    expect(localizeTraitDisplay("Ultrathink · 1M")).toBe("Ultrathink · 1M");
+    expect(localizeTraitDisplay("/tmp/High · custom-value")).toBe("/tmp/High · custom-value");
+  });
   it("omits fast mode from the label entirely when it is off", () => {
     expect(display([EFFORT, fastModeDescriptor(false), CONTEXT_WINDOW])).toEqual({
       label: "High · 1M",

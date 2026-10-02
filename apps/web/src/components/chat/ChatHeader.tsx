@@ -1,4 +1,4 @@
-import { uiText } from "~/uiText";
+import { draftThreadDisplayTitle, uiText, uiFormat } from "~/uiText";
 import {
   type EnvironmentId,
   type EditorId,
@@ -234,7 +234,7 @@ export const ChatHeader = memo(function ChatHeader({
       setRenaming(null);
       const resolution = resolveRenameCommit({ title, originalTitle: activeThreadTitle });
       if (resolution.action === "reject-empty") {
-        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+        toastManager.add({ type: "warning", title: uiText("Thread title cannot be empty") });
         return;
       }
       if (resolution.action === "noop") return;
@@ -246,8 +246,8 @@ export const ChatHeader = memo(function ChatHeader({
           const error = squashAtomCommandFailure(result);
           toastManager.add({
             type: "error",
-            title: "Failed to rename thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
+            title: uiText("Failed to rename thread"),
+            description: error instanceof Error ? error.message : uiText("An error occurred."),
           });
         }
       });
@@ -326,7 +326,7 @@ export const ChatHeader = memo(function ChatHeader({
         const api = readLocalApi();
         if (!api) return;
         void api.contextMenu
-          .show([{ id: "project-settings", label: "Project settings", icon: "settings" }], {
+          .show([{ id: "project-settings", label: uiText("Project settings"), icon: "settings" }], {
             x: event.clientX,
             y: event.clientY,
           })
@@ -416,7 +416,7 @@ export const ChatHeader = memo(function ChatHeader({
                   render={
                     <button
                       type="button"
-                      aria-label={`New thread in ${activeProjectName}`}
+                      aria-label={`${uiText("New thread in")} ${activeProjectName}`}
                       onClick={onNewThreadInProject}
                       className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     />
@@ -427,7 +427,10 @@ export const ChatHeader = memo(function ChatHeader({
                     {activeProjectName}
                   </WorkspaceBreadcrumbText>
                 </TooltipTrigger>
-                <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
+                <TooltipPopup side="top">
+                  {uiText("New thread in ")}
+                  {activeProjectName}
+                </TooltipPopup>
               </Tooltip>
             </WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator>
@@ -456,7 +459,7 @@ export const ChatHeader = memo(function ChatHeader({
                   <button
                     ref={titleButtonRef}
                     type="button"
-                    aria-label={`Thread actions for ${activeThreadTitle}`}
+                    aria-label={uiFormat("Thread actions for {0}", activeThreadTitle)}
                     aria-haspopup="menu"
                     onClick={openMenuFromTitle}
                     onDoubleClick={handleTitleDoubleClick}
@@ -479,11 +482,20 @@ export const ChatHeader = memo(function ChatHeader({
           ) : (
             <Tooltip>
               <TooltipTrigger
-                render={<h2 aria-label={activeThreadTitle} className="min-w-0 flex-1" />}
+                render={
+                  <h2
+                    aria-label={draftThreadDisplayTitle(activeThreadTitle, !isServerThread)}
+                    className="min-w-0 flex-1"
+                  />
+                }
               >
-                <WorkspaceBreadcrumbText>{activeThreadTitle}</WorkspaceBreadcrumbText>
+                <WorkspaceBreadcrumbText>
+                  {draftThreadDisplayTitle(activeThreadTitle, !isServerThread)}
+                </WorkspaceBreadcrumbText>
               </TooltipTrigger>
-              <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
+              <TooltipPopup side="top">
+                {draftThreadDisplayTitle(activeThreadTitle, !isServerThread)}
+              </TooltipPopup>
             </Tooltip>
           )}
         </WorkspaceBreadcrumbItem>
@@ -507,7 +519,9 @@ export const ChatHeader = memo(function ChatHeader({
                 ? undefined
                 : "hidden"
             }
-            render={<Button size="icon-sm" variant="ghost" aria-label="More header actions" />}
+            render={
+              <Button size="icon-sm" variant="ghost" aria-label={uiText("More header actions")} />
+            }
           >
             <EllipsisIcon className="size-4" />
           </MenuTrigger>
@@ -515,7 +529,7 @@ export const ChatHeader = memo(function ChatHeader({
           <MenuPopup
             data-chat-header-actions
             keepMounted
-            aria-label="Header actions"
+            aria-label={uiText("Header actions")}
             align="end"
             finalFocus={actionsCollapsed ? undefined : false}
           >

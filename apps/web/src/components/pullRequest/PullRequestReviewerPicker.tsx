@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 /**
  * Asking someone to review, from the row that says who is already reviewing.
  *
@@ -78,8 +79,8 @@ export function PullRequestReviewerPicker({
       toastManager.add({
         type: "error",
         title: candidate.isRequested
-          ? `Could not take back the review request to ${candidate.login}`
-          : `Could not ask ${candidate.login} for a review`,
+          ? uiFormat("Could not take back the review request to {0}", candidate.login)
+          : uiFormat("Could not ask {0} for a review", candidate.login),
         description: readableFailure(
           squashAtomCommandFailure(result),
           "The host refused it. Check that you have write access on this repository, and that they still have access to it.",
@@ -90,15 +91,15 @@ export function PullRequestReviewerPicker({
     toastManager.add({
       type: "success",
       title: candidate.isRequested
-        ? `Review request to ${candidate.login} taken back`
-        : `Review requested from ${candidate.login}`,
+        ? uiFormat("Review request to {0} taken back", candidate.login)
+        : uiFormat("Review requested from {0}", candidate.login),
     });
   };
 
   return (
     <PullRequestCandidatePicker
       icon={<UserPlusIcon className="size-3.5" />}
-      label="Request a review"
+      label={uiText("Request a review")}
       allowed={allowed}
       disabledReason="Asking someone to review needs write access on this repository"
       open={open}
@@ -122,10 +123,10 @@ export function PullRequestReviewerPicker({
         <>
           <PullRequestActorLabel actor={candidate} className="flex-1" />
           {candidate.kind === "team" ? (
-            <span className="shrink-0 text-muted-foreground">team</span>
+            <span className="shrink-0 text-muted-foreground">{uiText("team")}</span>
           ) : null}
           {candidate.isRequested ? (
-            <CheckIcon aria-label="Already asked" className="size-3.5 shrink-0" />
+            <CheckIcon aria-label={uiText("Already asked")} className="size-3.5 shrink-0" />
           ) : null}
         </>
       )}

@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -95,7 +96,7 @@ const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
 function DefaultBadge() {
   return (
     <Badge variant="outline" size="sm" className="min-w-0">
-      Default
+      {uiText("Default")}
     </Badge>
   );
 }
@@ -371,7 +372,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
                   {descriptor.label}
                 </div>
-                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">{value}</div>
+                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                  {localizeTraitDisplay(value)}
+                </div>
               </MenuGroup>
             </div>
           );
@@ -397,8 +400,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
               </div>
               {ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id ? (
                 <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
-                  Your prompt contains &quot;ultrathink&quot; in the text. Remove it to change this
-                  option.
+                  {uiText(
+                    "Your prompt contains &quot;ultrathink&quot; in the text. Remove it to change this option.",
+                  )}
                 </div>
               ) : null}
               <MenuRadioGroup
@@ -418,7 +422,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                     <span className="flex w-full min-w-0 flex-col">
                       <span className="flex w-full min-w-0 items-center justify-between gap-3">
                         <span className="min-w-0 truncate">
-                          {option.label}
+                          {localizeTraitDisplay(option.label)}
                           {option.isDefault ? (
                             <>
                               {" "}
@@ -461,7 +465,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 {(["on", "off"] as const).map((value) => (
                   <MenuRadioItem key={value} value={value} hideIndicator closeOnClick>
                     <span className="flex w-full min-w-0 items-center justify-between gap-3">
-                      <span>{value === "on" ? "On" : "Off"}</span>
+                      <span>{value === "on" ? uiText("On") : uiText("Off")}</span>
                     </span>
                   </MenuRadioItem>
                 ))}
@@ -478,6 +482,14 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
  * Fast mode uses one bolt; Codex Ultrafast uses two. Keep a text label when
  * speed is the only trait so the trigger remains readable.
  */
+/** Display effort labels without changing descriptor ids, values or prompt control words. */
+export function localizeTraitDisplay(label: string): string {
+  return label
+    .split(" · ")
+    .map((part) => (part === "Low" || part === "Medium" || part === "High" ? uiText(part) : part))
+    .join(" · ");
+}
+
 export function buildTraitsTriggerDisplay(input: {
   provider: ProviderDriverKind;
   descriptors: ReadonlyArray<ProviderOptionDescriptor>;
@@ -583,12 +595,13 @@ export const TraitsPicker = memo(function TraitsPicker({
     return null;
   }
 
-  const { label: triggerLabel, speedIcon } = buildTraitsTriggerDisplay({
+  const { label: rawTriggerLabel, speedIcon } = buildTraitsTriggerDisplay({
     provider,
     descriptors,
     primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
     ultrathinkPromptControlled,
   });
+  const triggerLabel = localizeTraitDisplay(rawTriggerLabel);
   const speedLabel = speedIcon === "ultrafast" ? "Ultrafast mode on" : "Fast mode on";
   const accessibleLabel = speedIcon ? `${triggerLabel}, ${speedLabel}` : triggerLabel;
   const fastModeIcon = speedIcon ? (

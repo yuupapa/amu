@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import type {
   EnvironmentId,
   EnvironmentMachineKind,
@@ -91,11 +92,11 @@ export function resolveContextStripLabelsCompact(input: {
 }
 
 export function resolveEnvModeLabel(mode: EnvMode): string {
-  return mode === "worktree" ? "New worktree" : "Current checkout";
+  return mode === "worktree" ? "New worktree" : uiText("Current checkout");
 }
 
 export const WORKTREE_SUBMODULES_LABELS: Record<WorktreeSubmodules, string> = {
-  recursive: "Recursive",
+  recursive: uiText("Recursive"),
   "top-level": "Top level only",
   none: "Skip",
 };

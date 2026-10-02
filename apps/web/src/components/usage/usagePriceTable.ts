@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   parseUsagePriceForm,
   usagePriceForm,
@@ -38,11 +39,13 @@ export function usagePriceCell(
     modelPrice(target, model) ? usagePriceForm(model, modelPrice(target, model))[field] : null,
   );
   if (targets.some((target) => target.prices === null))
-    return { value: "", placeholder: "Unavailable" };
-  if (values.some((value) => value !== values[0])) return { value: "", placeholder: "Mixed" };
+    return { value: "", placeholder: uiText("Unavailable") };
+  if (values.some((value) => value !== values[0]))
+    return { value: "", placeholder: uiText("Mixed") };
   return {
     value: values[0] ?? "",
-    placeholder: values[0] === null ? "Automatic" : optional ? "Input rate" : "0.00",
+    placeholder:
+      values[0] === null ? uiText("Automatic") : optional ? uiText("Input rate") : "0.00",
   };
 }
 

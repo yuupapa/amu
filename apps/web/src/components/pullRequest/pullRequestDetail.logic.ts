@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 import * as Schema from "effect/Schema";
 
 import {
@@ -485,7 +486,7 @@ export function buildPullRequestTimeline(
       id: "created",
       at: detail.createdAt,
       kind: "opened" as const,
-      title: "opened this pull request",
+      title: uiText("opened this pull request"),
       body: null,
       markdown: false,
       url: null,
@@ -501,7 +502,7 @@ export function buildPullRequestTimeline(
       id: commit.oid,
       at: commit.committedDate,
       kind: "commit" as const,
-      title: `Commit ${commit.oid.slice(0, 7)}`,
+      title: uiFormat("Commit {0}", commit.oid.slice(0, 7)),
       body: commit.messageHeadline || null,
       markdown: false,
       url: null,
@@ -517,7 +518,7 @@ export function buildPullRequestTimeline(
       id: comment.id,
       at: comment.createdAt,
       kind: comment.kind === "review" ? ("review" as const) : ("comment" as const),
-      title: comment.kind === "review" ? "reviewed" : "commented",
+      title: comment.kind === "review" ? uiText("reviewed") : uiText("commented"),
       body: visibleBody(comment.body),
       markdown: true,
       url: comment.url,
@@ -535,7 +536,7 @@ export function buildPullRequestTimeline(
             id: "merged",
             at: detail.mergedAt,
             kind: "merged" as const,
-            title: "Pull request merged",
+            title: uiText("Pull request merged"),
             body: null,
             markdown: false,
             url: null,
@@ -555,7 +556,7 @@ export function buildPullRequestTimeline(
             id: "closed",
             at: detail.closedAt,
             kind: "closed" as const,
-            title: "Pull request closed",
+            title: uiText("Pull request closed"),
             body: null,
             markdown: false,
             url: null,

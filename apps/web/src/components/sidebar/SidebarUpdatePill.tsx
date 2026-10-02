@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import { TriangleAlertIcon } from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useId, useRef, useState } from "react";
@@ -102,7 +103,7 @@ function SidebarUpdateArchitectureWarningContent() {
   return (
     <Alert variant="warning">
       <TriangleAlertIcon />
-      <AlertTitle>Intel build on Apple Silicon</AlertTitle>
+      <AlertTitle>{uiText("Intel build on Apple Silicon")}</AlertTitle>
       <AlertDescription>{description}</AlertDescription>
     </Alert>
   );
@@ -193,7 +194,7 @@ function SidebarUpdateControl() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not download update",
+              title: uiText("Could not download update"),
               description: actionError,
             }),
           );
@@ -202,8 +203,9 @@ function SidebarUpdateControl() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not start update download",
-              description: error instanceof Error ? error.message : "An unexpected error occurred.",
+              title: uiText("Could not start update download"),
+              description:
+                error instanceof Error ? error.message : uiText("An unexpected error occurred."),
             }),
           );
         })
@@ -222,8 +224,9 @@ function SidebarUpdateControl() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not confirm update",
-            description: error instanceof Error ? error.message : "Update confirmation failed.",
+            title: uiText("Could not confirm update"),
+            description:
+              error instanceof Error ? error.message : uiText("Update confirmation failed."),
           }),
         );
         return;
@@ -241,7 +244,7 @@ function SidebarUpdateControl() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not install update",
+              title: uiText("Could not install update"),
               description: actionError,
             }),
           );
@@ -250,8 +253,9 @@ function SidebarUpdateControl() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not install update",
-              description: error instanceof Error ? error.message : "An unexpected error occurred.",
+              title: uiText("Could not install update"),
+              description:
+                error instanceof Error ? error.message : uiText("An unexpected error occurred."),
             }),
           );
         })
@@ -270,9 +274,9 @@ function SidebarUpdateControl() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not check for updates",
+            title: uiText("Could not check for updates"),
             description:
-              result.state.message ?? "Automatic updates are not available in this build.",
+              result.state.message ?? uiText("Automatic updates are not available in this build."),
           }),
         );
       })
@@ -280,8 +284,8 @@ function SidebarUpdateControl() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not check for updates",
-            description: error instanceof Error ? error.message : "Update check failed.",
+            title: uiText("Could not check for updates"),
+            description: error instanceof Error ? error.message : uiText("Update check failed."),
           }),
         );
       })
@@ -392,7 +396,7 @@ function SidebarUpdateControl() {
         {showReleaseNotesPopover && state ? (
           <PopoverPopup
             align="center"
-            aria-label="Nightly update release notes"
+            aria-label={uiText("Nightly update release notes")}
             initialFocus={false}
             onKeyDownCapture={(event) => {
               if (

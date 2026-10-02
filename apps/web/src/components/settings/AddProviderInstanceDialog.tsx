@@ -1,4 +1,5 @@
 "use client";
+import { uiText, uiFormat } from "~/uiText";
 
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { CheckIcon } from "lucide-react";
@@ -215,15 +216,15 @@ export function AddProviderInstanceDialog({
       updateSettings({ providerInstances: nextMap });
       toastManager.add({
         type: "success",
-        title: "Provider instance added",
-        description: `${driverOption.label} instance '${instanceId}' was added.`,
+        title: uiText("Provider instance added"),
+        description: uiFormat("{0} instance '{1}' was added.", driverOption.label, instanceId),
       });
       onOpenChange(false);
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Could not add provider instance",
-        description: error instanceof Error ? error.message : "Update failed.",
+        title: uiText("Could not add provider instance"),
+        description: error instanceof Error ? error.message : uiText("Update failed."),
       });
     }
   };
@@ -241,8 +242,13 @@ export function AddProviderInstanceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <WizardPopup size="wide">
         <WizardHeader
-          title="Add provider instance"
-          description={<>Add an account or configure a provider on {environmentLabel}.</>}
+          title={uiText("Add provider instance")}
+          description={
+            <>
+              {uiText("Add an account or configure a provider on ")}
+              {environmentLabel}.
+            </>
+          }
         >
           <AddProviderInstanceWizardSteps
             currentStep={wizardStep}
@@ -255,7 +261,7 @@ export function AddProviderInstanceDialog({
         <WizardPanel>
           <div className={cn("grid gap-2", wizardStep !== 0 && "hidden")}>
             <div id="add-instance-driver-label" className="text-sm font-medium text-foreground">
-              Driver
+              {uiText("Driver")}
             </div>
             <RadioGroup
               value={driver}
@@ -305,7 +311,7 @@ export function AddProviderInstanceDialog({
                       {option.label}
                     </span>
                     <Badge variant="warning" size="sm">
-                      Coming Soon
+                      {uiText("Coming Soon")}
                     </Badge>
                   </RadioPrimitive.Root>
                 );
@@ -314,19 +320,19 @@ export function AddProviderInstanceDialog({
           </div>
 
           <label className={cn("grid gap-2", wizardStep !== 1 && "hidden")}>
-            <span className="text-xs font-medium text-foreground">Label</span>
+            <span className="text-xs font-medium text-foreground">{uiText("Label")}</span>
             <Input
-              placeholder="e.g. Work"
+              placeholder={uiText("e.g. Work")}
               value={label}
               onChange={(event) => setLabel(event.target.value)}
             />
             <span className="text-2xs text-muted-foreground">
-              Shown in the provider list. Optional.
+              {uiText("Shown in the provider list. Optional.")}
             </span>
           </label>
 
           <label className={cn("grid gap-2", wizardStep !== 1 && "hidden")}>
-            <span className="text-xs font-medium text-foreground">Instance ID</span>
+            <span className="text-xs font-medium text-foreground">{uiText("Instance ID")}</span>
             <Input
               placeholder={`${driver}_work`}
               value={instanceId}
@@ -339,13 +345,13 @@ export function AddProviderInstanceDialog({
               <span className="text-2xs text-destructive">{instanceIdError}</span>
             ) : (
               <span className="text-2xs text-muted-foreground">
-                Routing key used by threads and sessions. Letters, digits, '-', or '_'.
+                {uiText("Routing key used by threads and sessions. Letters, digits, '-', or '_'.")}
               </span>
             )}
           </label>
 
           <div className={cn("grid gap-2", wizardStep !== 1 && "hidden")}>
-            <span className="text-xs font-medium text-foreground">Accent color</span>
+            <span className="text-xs font-medium text-foreground">{uiText("Accent color")}</span>
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <ProviderAccentColorPicker
                 displayName={label || driverOption.label}
@@ -368,7 +374,7 @@ export function AddProviderInstanceDialog({
                       )}
                       style={{ backgroundColor: swatch }}
                       onClick={() => setAccentColor(swatch)}
-                      aria-label={`Use ${swatch} accent`}
+                      aria-label={uiFormat("Use {0} accent", swatch)}
                     />
                   );
                 })}
@@ -380,12 +386,12 @@ export function AddProviderInstanceDialog({
                   variant="ghost-muted"
                   onClick={() => setAccentColor("")}
                 >
-                  Clear
+                  {uiText("Clear")}
                 </Button>
               ) : null}
             </div>
             <span className="text-2xs text-muted-foreground">
-              Optional marker shown in the picker.
+              {uiText("Optional marker shown in the picker.")}
             </span>
           </div>
 
@@ -402,7 +408,7 @@ export function AddProviderInstanceDialog({
           ) : wizardStep === 2 ? (
             <div className="grid gap-2">
               <p className="text-sm text-muted-foreground">
-                This driver has no required configuration. You can add the instance now.
+                {uiText("This driver has no required configuration. You can add the instance now.")}
               </p>
             </div>
           ) : null}
@@ -419,19 +425,19 @@ export function AddProviderInstanceDialog({
               setWizardStep((step) => Math.max(0, step - 1));
             }}
           >
-            {wizardStep === 0 ? "Cancel" : "Back"}
+            {wizardStep === 0 ? uiText("Cancel") : uiText("Back")}
           </Button>
           {wizardStep === 0 && driver === "codex" ? (
             <>
               <Button variant="outline" onClick={() => navigateToStep(1)}>
-                Configure manually
+                {uiText("Configure manually")}
               </Button>
               <ChatGptConnectionButton onClick={() => setAddingChatGptAccount(true)} />
             </>
           ) : wizardStep < ADD_PROVIDER_WIZARD_STEPS.length - 1 ? (
-            <Button onClick={() => navigateToStep(wizardStep + 1)}>Next</Button>
+            <Button onClick={() => navigateToStep(wizardStep + 1)}>{uiText("Next")}</Button>
           ) : (
-            <Button onClick={handleSave}>Add instance</Button>
+            <Button onClick={handleSave}>{uiText("Add instance")}</Button>
           )}
         </WizardFooter>
       </WizardPopup>

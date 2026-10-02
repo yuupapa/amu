@@ -1,3 +1,4 @@
+import { uiFormat, uiText } from "~/uiText";
 import { useParams } from "@tanstack/react-router";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
@@ -72,7 +73,7 @@ function EnvironmentCloneToasts({ environmentId }: { environmentId: EnvironmentI
           stackedThreadToast({
             type: "error",
             title,
-            description: error instanceof Error ? error.message : "An error occurred.",
+            description: error instanceof Error ? error.message : uiText("An error occurred."),
           }),
         );
       }
@@ -124,7 +125,7 @@ function EnvironmentCloneToasts({ environmentId }: { environmentId: EnvironmentI
       if (clone.phase === "running") {
         const options = stackedThreadToast({
           type: "loading",
-          title: `Cloning ${name}`,
+          title: uiFormat("Cloning {0}", name),
           description: projectCloneProgressSummary(clone),
           timeout: 0,
           actionProps: {
@@ -150,7 +151,7 @@ function EnvironmentCloneToasts({ environmentId }: { environmentId: EnvironmentI
       if (clone.phase === "done") {
         const options = stackedThreadToast({
           type: "success",
-          title: `Cloned ${name}`,
+          title: uiFormat("Cloned {0}", name),
           description: clone.destinationPath,
           timeout: 8_000,
           actionProps: {
@@ -177,8 +178,12 @@ function EnvironmentCloneToasts({ environmentId }: { environmentId: EnvironmentI
       const cancelled = clone.phase === "cancelled";
       const options = stackedThreadToast({
         type: cancelled ? "info" : "error",
-        title: cancelled ? `Cancelled cloning ${name}` : `Failed to clone ${name}`,
-        description: cancelled ? clone.destinationPath : (clone.error ?? "The clone failed."),
+        title: cancelled
+          ? uiFormat("Cancelled cloning {0}", name)
+          : uiFormat("Failed to clone {0}", name),
+        description: cancelled
+          ? clone.destinationPath
+          : (clone.error ?? uiText("The clone failed.")),
         timeout: 0,
         actionProps: {
           children: "Retry",

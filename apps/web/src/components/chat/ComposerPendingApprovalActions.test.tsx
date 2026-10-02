@@ -14,9 +14,9 @@ describe("ComposerPendingApprovalActions", () => {
       />,
     );
 
-    expect(markup).toContain(">Decline<");
-    expect(markup).toContain(">Approve<");
-    expect(markup).not.toContain(">Cancel<");
+    expect(markup).toContain(">許可しない<");
+    expect(markup).toContain(">今回だけ許可<");
+    expect(markup).not.toContain(">取り消す<");
     expect(markup).not.toContain("Always allow this session");
   });
 
@@ -35,11 +35,11 @@ describe("ComposerPendingApprovalActions", () => {
     );
 
     expect(markup).not.toContain("Always allow Safari");
-    expect(markup).toContain(">Approve<");
+    expect(markup).toContain(">今回だけ許可<");
     expect(markup).not.toContain("Always allow this session");
   });
 
-  it("preserves provider labels for the main decisions", () => {
+  it("translates provider decisions without changing their scope", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalActions
         requestId={ApprovalRequestId.make("approval-1")}
@@ -52,8 +52,8 @@ describe("ComposerPendingApprovalActions", () => {
       />,
     );
 
-    expect(markup).toContain("Allow once");
-    expect(markup).toContain("Deny");
+    expect(markup).toContain(">今回だけ許可<");
+    expect(markup).toContain(">許可しない<");
     expect(markup).not.toContain(">Approve<");
     expect(markup).not.toContain(">Decline<");
   });

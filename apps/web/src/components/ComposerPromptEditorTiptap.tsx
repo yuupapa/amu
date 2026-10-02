@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 import { Extension, Node, wrappingInputRule, type JSONContent } from "@tiptap/core";
 import { TaskList } from "@tiptap/extension-task-list";
 import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
@@ -224,7 +225,7 @@ function ComposerMentionNodeView({ node }: NodeViewProps) {
       kind="mention"
       render={<button type="button" />}
       onClick={() => actions.openMention(path)}
-      aria-label={`Preview ${path}`}
+      aria-label={uiFormat("Preview {0}", path)}
       contentEditable={false}
       spellCheck={false}
       data-composer-mention-chip="true"
@@ -290,11 +291,11 @@ function ComposerSkillNodeView({ node }: NodeViewProps) {
           <p>
             {skill?.description ??
               skillDescription ??
-              "No description is available for this skill."}
+              uiText("No description is available for this skill.")}
           </p>
           {skill?.path ? (
             <Button variant="outline" size="sm" onClick={() => actions.openMention(skill.path)}>
-              View instructions
+              {uiText("View instructions")}
             </Button>
           ) : null}
         </div>

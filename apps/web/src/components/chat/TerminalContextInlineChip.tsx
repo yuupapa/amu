@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 import { TerminalIcon } from "lucide-react";
 
 import type { ContextPresentationCapability } from "../contextPresentationRegistry";
@@ -31,12 +32,14 @@ export function TerminalContextInlineChip(props: TerminalContextInlineChipProps)
               {terminalLabel}
             </span>
             <span className="ml-auto shrink-0 text-secondary-label text-xs">
-              {lineStart === lineEnd ? `Line ${lineStart}` : `Lines ${lineStart}–${lineEnd}`}
+              {lineStart === lineEnd
+                ? uiFormat("Line {0}", lineStart)
+                : uiFormat("Lines {0}–{1}", lineStart, lineEnd)}
             </span>
           </div>
           <pre
             className="max-h-80 overflow-auto whitespace-pre bg-muted p-3 font-mono text-foreground text-xs leading-relaxed outline-none [tab-size:4] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-            aria-label="Captured terminal output"
+            aria-label={uiText("Captured terminal output")}
             tabIndex={0}
           >
             {text}
@@ -52,11 +55,14 @@ export function TerminalContextInlineChip(props: TerminalContextInlineChipProps)
       {...(expired ? { state: "invalid" as const } : {})}
       icon={<TerminalIcon />}
       label={label}
-      aria-label={`Terminal excerpt, ${label}${expired ? ", expired" : ""}`}
+      aria-label={uiFormat("Terminal excerpt, {0}{1}", label, expired ? ", expired" : "")}
       data-terminal-context-expired={expired ? "true" : undefined}
       tooltip={
         expired
-          ? `Terminal context expired. Remove and re-add ${label} to include it in your message.`
+          ? uiFormat(
+              "Terminal context expired. Remove and re-add {0} to include it in your message.",
+              label,
+            )
           : detailsMode === "none"
             ? undefined
             : text

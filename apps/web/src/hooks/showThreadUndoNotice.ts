@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -62,7 +63,8 @@ function refreshNotice() {
                 stackedThreadToast({
                   type: "error",
                   title: failureTitle,
-                  description: error instanceof Error ? error.message : "An error occurred.",
+                  description:
+                    error instanceof Error ? error.message : uiText("An error occurred."),
                 }),
               );
             };

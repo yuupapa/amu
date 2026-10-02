@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { EnvironmentId, type VcsRef } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -511,14 +512,14 @@ describe("resolveEffectiveEnvMode", () => {
 
 describe("resolveEnvModeLabel", () => {
   it("uses explicit workspace labels", () => {
-    expect(resolveEnvModeLabel("local")).toBe("Current checkout");
+    expect(resolveEnvModeLabel("local")).toBe(uiText("Current checkout"));
     expect(resolveEnvModeLabel("worktree")).toBe("New worktree");
   });
 });
 
 describe("resolveCurrentWorkspaceLabel", () => {
   it("describes the main repo checkout when no worktree path is active", () => {
-    expect(resolveCurrentWorkspaceLabel(null)).toBe("Current checkout");
+    expect(resolveCurrentWorkspaceLabel(null)).toBe(uiText("Current checkout"));
   });
 
   it("describes the active checkout as a worktree when one is attached", () => {

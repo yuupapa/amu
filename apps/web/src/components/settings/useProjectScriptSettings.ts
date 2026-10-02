@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   isAtomCommandInterrupted,
   mapAtomCommandResult,
@@ -38,8 +39,8 @@ function reportScriptFailure(result: AtomCommandResult<unknown, unknown>) {
     const error = squashAtomCommandFailure(result);
     toastManager.add({
       type: "error",
-      title: "Failed to save project actions",
-      description: error instanceof Error ? error.message : "An error occurred.",
+      title: uiText("Failed to save project actions"),
+      description: error instanceof Error ? error.message : uiText("An error occurred."),
     });
   }
   return mapAtomCommandResult(result, () => undefined);
@@ -77,7 +78,7 @@ export function useProjectScriptSettings(
   ): Promise<AtomCommandResult<void, unknown>> {
     if (savingRef.current || targets.length === 0) {
       const message = "No available machine, or another action change is saving.";
-      toastManager.add({ type: "error", title: "Actions not saved", description: message });
+      toastManager.add({ type: "error", title: uiText("Actions not saved"), description: message });
       return AsyncResult.failure(Cause.fail(new Error(message)));
     }
     savingRef.current = true;

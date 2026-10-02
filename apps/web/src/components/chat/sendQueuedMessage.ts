@@ -1,3 +1,4 @@
+import { uiFormat, uiText } from "~/uiText";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   runAtomCommand,
@@ -204,8 +205,10 @@ export async function sendQueuedMessage(
     const title = readThreadShell(threadRef)?.title;
     toastManager.add({
       type: "error",
-      title: title ? `Queued message not sent in "${title}"` : "Queued message not sent",
-      description: error instanceof Error ? error.message : "Use Send now to try again.",
+      title: title
+        ? uiFormat('Queued message not sent in "{0}"', title)
+        : uiText("Queued message not sent"),
+      description: error instanceof Error ? error.message : uiText("Use Send now to try again."),
     });
   }
 }

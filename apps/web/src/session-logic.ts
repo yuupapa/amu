@@ -63,6 +63,8 @@ export interface WorkLogEntry {
   label: string;
   detail?: string;
   viewedImagePath?: string;
+  /** Codex `imageGeneration` result saved to disk; shown inline without expanding the row. */
+  generatedImage?: boolean;
   command?: string;
   rawCommand?: string;
   changedFiles?: ReadonlyArray<string>;
@@ -610,6 +612,11 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (viewedImagePath) {
     entry.viewedImagePath = viewedImagePath;
+  }
+  // The server projects Codex `imageGeneration` items down to `imagePath` + `imageGenerated`.
+  if (viewedImagePath && asRecord(payload?.data)?.imageGenerated === true) {
+    entry.generatedImage = true;
+    entry.label = "画像を生成";
   }
   if (commandPreview.command) {
     entry.command = commandPreview.command;

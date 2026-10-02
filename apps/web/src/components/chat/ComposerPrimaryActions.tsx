@@ -133,7 +133,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               onClick={onPreviousPendingQuestion}
               disabled={pendingAction.isResponding}
             >
-              Previous
+              {uiText("Previous")}
             </Button>
           )
         ) : null}
@@ -204,7 +204,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
               onClick={() => void onImplementPlanInNewThread()}
             >
-              Implement in a new thread
+              {uiText("Implement in a new thread")}
             </MenuItem>
           </MenuPopup>
         </Menu>

@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import type { EnvironmentId } from "@t3tools/contracts";
 
 import type {
@@ -72,7 +73,7 @@ export function resolveSettingsScope(
   ): ResolvedSettingsScope => ({
     kind: "unavailable",
     reason,
-    label: "Unavailable selection",
+    label: uiText("Unavailable selection"),
     message,
     members: [],
     environmentIds: [],
@@ -149,7 +150,7 @@ export function resolveSettingsScope(
   }
   return {
     kind: "all",
-    label: "All environments",
+    label: uiText("All environments"),
     members: [],
     environmentIds: environments.map((candidate) => candidate.environmentId),
   };

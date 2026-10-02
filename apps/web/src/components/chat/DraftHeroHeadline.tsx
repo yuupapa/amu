@@ -1,3 +1,4 @@
+import { uiText, uiLanguage } from "~/uiText";
 import type { DraftId } from "~/composerDraftStore";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { resolveEnvironmentMachineKind, type ScopedProjectRef } from "@t3tools/contracts";
@@ -147,7 +148,9 @@ export function DraftHeroHeadline({
             />
           }
         >
-          <span className="min-w-0 truncate">{activeProjectDisplayName ?? "Choose a project"}</span>
+          <span className="min-w-0 truncate">
+            {activeProjectDisplayName ?? uiText("Choose a project")}
+          </span>
         </TooltipTrigger>
         {activeProjectDisplayName ? (
           <TooltipPopup side="top">{activeProjectDisplayName}</TooltipPopup>
@@ -217,7 +220,7 @@ export function DraftHeroHeadline({
         <MenuSeparator />
         <MenuItem onClick={openAddProject}>
           <FolderPlusIcon />
-          New project
+          {uiText("New project")}
         </MenuItem>
       </MenuPopup>
     </Menu>
@@ -227,7 +230,7 @@ export function DraftHeroHeadline({
       onClick={openAddProject}
       className="pointer-events-auto inline cursor-pointer border-muted-foreground/35 border-b border-dotted text-muted-foreground/60 transition-colors hover:border-muted-foreground/60 hover:text-muted-foreground/80 focus-visible:rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
     >
-      {activeProjectTitle ?? "Add a project"}
+      {activeProjectTitle ?? uiText("Add a project")}
     </button>
   );
 
@@ -236,10 +239,14 @@ export function DraftHeroHeadline({
   // in the h1; without an explicit label its widget state bleeds into the
   // announced phrase.
   const headingLabel = hasResolvedProject
-    ? `What should we build in ${activeProjectDisplayName}?`
+    ? uiLanguage === "ja"
+      ? `${activeProjectDisplayName}で何を作りましょうか？`
+      : `What should we build in ${activeProjectDisplayName}?`
     : canChooseProject
-      ? `${activeProjectDisplayName ?? "Choose a project"} to start`
-      : "Add a project to start";
+      ? uiLanguage === "ja"
+        ? `${activeProjectDisplayName ?? "プロジェクトを選択"}で開始`
+        : `${activeProjectDisplayName ?? "Choose a project"} to start`
+      : uiText("Add a project to start");
 
   return (
     <h1
@@ -247,11 +254,23 @@ export function DraftHeroHeadline({
       className="mx-auto w-full max-w-5xl text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl"
     >
       {hasResolvedProject ? (
-        <>What should we build in {projectSelector}?</>
+        <>
+          {uiLanguage === "ja" ? (
+            <>{projectSelector}で何を作りましょうか？</>
+          ) : (
+            <>
+              {uiText("What should we build in")}
+              {projectSelector}?
+            </>
+          )}
+        </>
       ) : canChooseProject ? (
-        <>{projectSelector} to start</>
+        <>
+          {projectSelector}
+          {uiLanguage === "ja" ? "で開始" : uiText(" to start")}
+        </>
       ) : (
-        <>Add a project to start</>
+        <>{uiText("Add a project to start")}</>
       )}
     </h1>
   );

@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 
 import completionUrl from "./assets/notification-completion.mp3";
@@ -5,7 +6,7 @@ import inputUrl from "./assets/notification-input.mp3";
 
 type NotificationMode = ClientSettings["notificationMode"];
 export const NOTIFICATION_MODE_LABELS = {
-  off: "Off",
+  off: uiText("Off"),
   notifications: "Notifications only",
   sound: "Sound only",
   "notifications-and-sound": "Notifications with sound",

@@ -146,6 +146,14 @@ function projectCommandValue(data: Record<string, unknown>): unknown {
   return undefined;
 }
 
+/** Codex `imageGeneration` items carry the PNG inline; clients only need the saved file path. */
+function projectGeneratedImagePath(data: Record<string, unknown>): string | undefined {
+  const item = asRecord(data.item);
+  if (item?.type !== "imageGeneration") return undefined;
+  const savedPath = asTrimmedString(item.savedPath);
+  return savedPath && isWorkspaceImagePreviewPath(savedPath) ? savedPath : undefined;
+}
+
 function projectViewedImagePath(data: Record<string, unknown>): string | undefined {
   const directPath = asTrimmedString(data.imagePath);
   if (directPath && isWorkspaceImagePreviewPath(directPath)) {
@@ -461,9 +469,13 @@ export function projectActivityPayload(
   if (command !== undefined) {
     projectedData.command = command;
   }
-  const imagePath = projectViewedImagePath(data);
+  const generatedImagePath = projectGeneratedImagePath(data);
+  const imagePath = generatedImagePath ?? projectViewedImagePath(data);
   if (imagePath) {
     projectedData.imagePath = imagePath;
+  }
+  if (generatedImagePath || (imagePath && data.imageGenerated === true)) {
+    projectedData.imageGenerated = true;
   }
 
   const changedFiles: string[] = [];

@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 import {
   isModifierPairShortcut,
   type SnapShotModifier,
@@ -125,8 +126,11 @@ export function useSnapShotShortcutRecorder({
         disabled={disabled}
         aria-label={
           displayShortcut
-            ? `Record snapshot shortcut, currently ${formatSnapShotShortcutLabel(displayShortcut)}`
-            : "Change snapshot shortcut"
+            ? uiFormat(
+                "Record snapshot shortcut, currently {0}",
+                formatSnapShotShortcutLabel(displayShortcut),
+              )
+            : uiText("Change snapshot shortcut")
         }
         aria-pressed={recording}
         data-keybinding-capture=""
@@ -136,11 +140,11 @@ export function useSnapShotShortcutRecorder({
         onBlur={stopRecording}
       >
         {recording ? (
-          "Press shortcut…"
+          uiText("Press shortcut…")
         ) : !displayShortcut ? (
-          "Change shortcut"
+          uiText("Change shortcut")
         ) : !allowModifierPairs && isModifierPairShortcut(displayShortcut) ? (
-          "Choose shortcut"
+          uiText("Choose shortcut")
         ) : (
           <SnapShotShortcutKeys shortcut={displayShortcut} />
         )}

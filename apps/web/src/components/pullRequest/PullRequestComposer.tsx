@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 /**
  * The single floating control over a pull request. Commenting on the change and submitting the
  * review that carries the Code tab's line comments used to float as two buttons that crowded
@@ -83,10 +84,14 @@ export function PullRequestComposer({
         // the icon is decorative and a reader who cannot see it still needs the number.
         aria-label={
           pendingComments.length > 0
-            ? `Review pull request, ${pendingComments.length} ${pendingComments.length === 1 ? "comment" : "comments"} pending`
+            ? uiFormat(
+                "Review pull request, {0} {1} pending",
+                pendingComments.length,
+                pendingComments.length === 1 ? "comment" : "comments",
+              )
             : reviewStarted || !canComment
-              ? "Review pull request"
-              : "Comment on pull request"
+              ? uiText("Review pull request")
+              : uiText("Comment on pull request")
         }
       >
         <MessageSquareIcon className="size-4" />
@@ -106,12 +111,12 @@ export function PullRequestComposer({
         sideOffset={8}
         width="lg"
         initialFocus={mode === "review" ? reviewRef : commentRef}
-        aria-label="Pull request composer"
+        aria-label={uiText("Pull request composer")}
       >
         <div className="mb-3 flex items-center justify-between gap-2">
           {canComment && verdicts.length > 0 ? (
             <ToggleGroup
-              aria-label="Composer mode"
+              aria-label={uiText("Composer mode")}
               variant="segmented"
               value={[mode]}
               onValueChange={(next) => {
@@ -119,14 +124,18 @@ export function PullRequestComposer({
                 if (value === "comment" || value === "review") setRequestedMode(value);
               }}
             >
-              <Toggle value="comment">Comment</Toggle>
+              <Toggle value="comment">{uiText("Comment")}</Toggle>
               <Toggle value="review">
-                {pendingComments.length > 0 ? `Review (${pendingComments.length})` : "Review"}
+                {pendingComments.length > 0
+                  ? uiFormat("Review ({0})", pendingComments.length)
+                  : uiText("Review")}
               </Toggle>
             </ToggleGroup>
           ) : (
             <PopoverTitle>
-              {mode === "review" ? "Review pull request" : "Comment on pull request"}
+              {mode === "review"
+                ? uiText("Review pull request")
+                : uiText("Comment on pull request")}
             </PopoverTitle>
           )}
           <div className="flex items-center gap-1">
@@ -134,8 +143,8 @@ export function PullRequestComposer({
               <Button
                 size="icon-xs"
                 variant="ghost"
-                aria-label="Discard pending line comments"
-                title="Discard pending line comments"
+                aria-label={uiText("Discard pending line comments")}
+                title={uiText("Discard pending line comments")}
                 disabled={reviewPending}
                 onClick={() => clearComments(reviewKey)}
               >
@@ -144,7 +153,7 @@ export function PullRequestComposer({
             ) : null}
             <PopoverClose
               render={<Button size="icon-xs" variant="ghost" />}
-              aria-label="Close composer"
+              aria-label={uiText("Close composer")}
             >
               <XIcon className="size-3.5" />
             </PopoverClose>

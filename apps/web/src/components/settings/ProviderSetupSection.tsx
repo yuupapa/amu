@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -72,13 +73,13 @@ export function readAntigravityAuthMethod(config: unknown): AntigravityAuthMetho
 export function ProviderSetupSection(props: ProviderSetupSectionProps) {
   return (
     <section
-      aria-label="Antigravity setup"
+      aria-label={uiText("Antigravity setup")}
       className="@container/setup divide-y divide-border/50 text-xs"
     >
       <SettingsRow
         className="@max-lg/setup:[&>div:first-child]:flex @max-lg/setup:[&>div:first-child]:items-stretch @max-lg/setup:[&>div:first-child]:gap-3"
-        title="Environment"
-        description="Device that runs this provider."
+        title={uiText("Environment")}
+        description={uiText("Device that runs this provider.")}
         control={
           <div className="flex min-w-0 flex-col gap-2 sm:items-end">
             <span className="text-muted-foreground [overflow-wrap:anywhere]">
@@ -86,18 +87,21 @@ export function ProviderSetupSection(props: ProviderSetupSectionProps) {
             </span>
             {!props.enabled && !props.readOnly ? (
               <Button size="sm" variant="outline" onClick={props.onEnable}>
-                Enable Antigravity
+                {uiText("Enable Antigravity")}
               </Button>
             ) : null}
           </div>
         }
       />
       {props.readOnly ? (
-        <SettingsRow title="Setup unavailable" description="Provider setup is read-only." />
+        <SettingsRow
+          title={uiText("Setup unavailable")}
+          description={uiText("Provider setup is read-only.")}
+        />
       ) : props.provider?.setup === undefined ? (
         <SettingsRow
-          title="Update required"
-          description="Update this environment to manage Antigravity."
+          title={uiText("Update required")}
+          description={uiText("Update this environment to manage Antigravity.")}
         />
       ) : (
         <ProviderSetupActions
@@ -279,19 +283,21 @@ function ProviderSetupActions({
   return (
     <div className="divide-y divide-border/50">
       <SettingsRow
-        title="Runtime"
+        title={uiText("Runtime")}
         className="@max-lg/setup:[&>div:first-child]:flex @max-lg/setup:[&>div:first-child]:items-stretch @max-lg/setup:[&>div:first-child]:gap-3"
-        description="Install and manage Antigravity."
+        description={uiText("Install and manage Antigravity.")}
         status={
           <div className="space-y-2">
             {usesCustomBinary ? (
               <p className="text-muted-foreground">
-                Uses the custom binary path below. Installation keeps that path.
+                {uiText("Uses the custom binary path below. Installation keeps that path.")}
               </p>
             ) : null}
             {!installed && !provider.setup?.canInstall ? (
               <p className="text-muted-foreground">
-                Automatic installation unavailable. Set a binary path or use another environment.
+                {uiText(
+                  "Automatic installation unavailable. Set a binary path or use another environment.",
+                )}
               </p>
             ) : null}
           </div>
@@ -306,7 +312,7 @@ function ProviderSetupActions({
               installation.totalBytes !== null &&
               installation.totalBytes > 0 ? (
                 <progress
-                  aria-label="Antigravity download"
+                  aria-label={uiText("Antigravity download")}
                   className="block h-1 w-full accent-foreground"
                   value={installation.downloadedBytes}
                   max={installation.totalBytes}
@@ -335,7 +341,7 @@ function ProviderSetupActions({
                       );
                     }}
                   >
-                    Cancel installation
+                    {uiText("Cancel installation")}
                   </Button>
                 ) : !installActive && provider.setup?.canInstall ? (
                   <Button
@@ -349,13 +355,13 @@ function ProviderSetupActions({
                     {installation?.installedVersion
                       ? installation.version &&
                         installation.version !== installation.installedVersion
-                        ? "Update Antigravity"
-                        : "Reinstall Antigravity"
+                        ? uiText("Update Antigravity")
+                        : uiText("Reinstall Antigravity")
                       : installation?.phase === "failed" || installation?.phase === "cancelled"
-                        ? "Retry installation"
+                        ? uiText("Retry installation")
                         : installed
-                          ? "Install managed runtime"
-                          : "Install Antigravity"}
+                          ? uiText("Install managed runtime")
+                          : uiText("Install Antigravity")}
                   </Button>
                 ) : null}
               </div>
@@ -367,7 +373,7 @@ function ProviderSetupActions({
                         size="icon-sm"
                         variant="ghost"
                         className="col-start-1 row-start-1"
-                        aria-label="Remove downloaded runtime"
+                        aria-label={uiText("Remove downloaded runtime")}
                         disabled={actionsDisabled || authActive}
                         onClick={() => void removeRuntime()}
                       />
@@ -375,7 +381,7 @@ function ProviderSetupActions({
                   >
                     <Trash2Icon className="size-3.5" />
                   </TooltipTrigger>
-                  <TooltipPopup>Remove downloaded runtime</TooltipPopup>
+                  <TooltipPopup>{uiText("Remove downloaded runtime")}</TooltipPopup>
                 </Tooltip>
               ) : null}
             </div>
@@ -387,7 +393,9 @@ function ProviderSetupActions({
         title={methodLabel}
         className="@max-lg/setup:[&>div:first-child]:flex @max-lg/setup:[&>div:first-child]:items-stretch @max-lg/setup:[&>div:first-child]:gap-3"
         description={
-          usesBrowser ? "Connect your Google account." : "Connect with the credentials below."
+          usesBrowser
+            ? uiText("Connect your Google account.")
+            : uiText("Connect with the credentials below.")
         }
         control={
           <div className="flex min-w-0 flex-col gap-2 sm:max-w-56 sm:items-end sm:text-right xl:max-w-72">
@@ -404,10 +412,12 @@ function ProviderSetupActions({
             {authorizationUrl ? (
               <div className="flex flex-wrap gap-2 sm:justify-end">
                 <Button size="sm" variant="outline" onClick={() => void openSignInPage()}>
-                  Open sign-in page
+                  {uiText("Open sign-in page")}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => void copySignInLink()}>
-                  {copiedFlowId === auth?.flowId ? "Link copied" : "Copy sign-in link"}
+                  {copiedFlowId === auth?.flowId
+                    ? uiText("Link copied")
+                    : uiText("Copy sign-in link")}
                 </Button>
               </div>
             ) : null}
@@ -425,7 +435,7 @@ function ProviderSetupActions({
                     );
                   }}
                 >
-                  Cancel sign-in
+                  {uiText("Cancel sign-in")}
                 </Button>
               ) : !authActive && !authenticated && provider.setup?.canAuthenticate ? (
                 <Button
@@ -436,11 +446,11 @@ function ProviderSetupActions({
                 >
                   {usesBrowser
                     ? auth?.phase === "failed" || auth?.phase === "cancelled"
-                      ? "Retry Google sign-in"
-                      : "Sign in with Google"
+                      ? uiText("Retry Google sign-in")
+                      : uiText("Sign in with Google")
                     : auth?.phase === "failed" || auth?.phase === "cancelled"
-                      ? "Retry connection"
-                      : "Connect"}
+                      ? uiText("Retry connection")
+                      : uiText("Connect")}
                 </Button>
               ) : null}
               {!authActive && provider.setup?.canAuthenticate ? (
@@ -450,7 +460,7 @@ function ProviderSetupActions({
                   disabled={actionsDisabled || auth === null}
                   onClick={() => void signOut()}
                 >
-                  {usesBrowser ? "Sign out of Google" : "Disconnect"}
+                  {usesBrowser ? uiText("Sign out of Google") : uiText("Disconnect")}
                 </Button>
               ) : null}
             </div>
@@ -463,7 +473,7 @@ function ProviderSetupActions({
               <>
                 {auth?.expiresAt ? (
                   <p className="text-muted-foreground">
-                    Link expires at{" "}
+                    {uiText("Link expires at")}{" "}
                     <time dateTime={auth.expiresAt}>
                       {new Date(auth.expiresAt).toLocaleTimeString([], {
                         hour: "numeric",
@@ -481,7 +491,7 @@ function ProviderSetupActions({
                   }}
                 >
                   <label htmlFor={`provider-callback-${instanceId}`}>
-                    If the final localhost page does not load, paste its full URL here.
+                    {uiText("If the final localhost page does not load, paste its full URL here.")}
                   </label>
                   <Input
                     id={`provider-callback-${instanceId}`}
@@ -504,13 +514,13 @@ function ProviderSetupActions({
                     className="w-fit"
                     disabled={actionsDisabled || !callbackUrl.trim()}
                   >
-                    Continue
+                    {uiText("Continue")}
                   </Button>
                 </form>
               </>
             ) : auth?.phase === "waiting" ? (
               <p className="text-muted-foreground">
-                Sign-in is open in another client. Complete or cancel it there.
+                {uiText("Sign-in is open in another client. Complete or cancel it there.")}
               </p>
             ) : null}
           </div>
@@ -535,7 +545,7 @@ function ProviderSetupActions({
                 installQuery.refresh();
               }}
             >
-              Retry setup status
+              {uiText("Retry setup status")}
             </Button>
           ) : null}
         </div>

@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 import {
   defaultInstanceIdForDriver,
   PROVIDER_DISPLAY_NAMES,
@@ -244,8 +245,11 @@ export function getProviderUpdateInitialToastView(input: {
     title: getProviderUpdateInitialToastTitle(input.updateProviders),
     description:
       input.oneClickProviders.length > 0
-        ? "Install the update now or review provider settings."
-        : `${formatProviderList(input.updateProviders)} can be updated from provider settings.`,
+        ? uiText("Install the update now or review provider settings.")
+        : uiFormat(
+            "{0} can be updated from provider settings.",
+            formatProviderList(input.updateProviders),
+          ),
   };
 }
 
@@ -257,8 +261,8 @@ function getProviderUpdateRunningToastView(providerCount: number): ProviderUpdat
   return {
     phase: "running",
     type: "loading",
-    title: providerCount === 1 ? "Updating provider" : "Updating providers",
-    description: "Running provider update command.",
+    title: providerCount === 1 ? uiText("Updating provider") : uiText("Updating providers"),
+    description: uiText("Running provider update command."),
   };
 }
 
@@ -269,7 +273,8 @@ export function getProviderUpdateRejectedToastView(
   return {
     phase: "failed",
     type: "error",
-    title: providerCount === 1 ? "Provider update failed" : "Provider updates failed",
+    title:
+      providerCount === 1 ? uiText("Provider update failed") : uiText("Provider updates failed"),
     description: message,
   };
 }
@@ -284,7 +289,10 @@ export function getProviderUpdateProgressToastView(input: {
     return {
       phase: "failed",
       type: "error",
-      title: failedProviders.length === 1 ? "Provider update failed" : "Provider updates failed",
+      title:
+        failedProviders.length === 1
+          ? uiText("Provider update failed")
+          : uiText("Provider updates failed"),
       description: getFailedProviderUpdateDescription(failedProviders),
     };
   }
@@ -298,11 +306,13 @@ export function getProviderUpdateProgressToastView(input: {
       type: "warning",
       title:
         unchangedProviders.length === 1
-          ? "Provider still needs an update"
-          : "Providers still need updates",
-      description: `${formatProviderList(unchangedProviders)} ${
-        unchangedProviders.length === 1 ? "still appears" : "still appear"
-      } outdated. Check provider settings for details.`,
+          ? uiText("Provider still needs an update")
+          : uiText("Providers still need updates"),
+      description: uiFormat(
+        "{0} {1} outdated. Check provider settings for details.",
+        formatProviderList(unchangedProviders),
+        unchangedProviders.length === 1 ? "still appears" : "still appear",
+      ),
     };
   }
 
@@ -321,7 +331,10 @@ export function getProviderUpdateProgressToastView(input: {
     return {
       phase: "succeeded",
       type: "success",
-      title: input.providerCount === 1 ? "Provider updated" : "Provider updates finished",
+      title:
+        input.providerCount === 1
+          ? uiText("Provider updated")
+          : uiText("Provider updates finished"),
       description: getProviderUpdatedDescription(input.providerCount),
       dismissAfterVisibleMs: PROVIDER_UPDATE_SUCCESS_VISIBLE_MS,
     };
@@ -410,12 +423,12 @@ export function getProviderUpdateSidebarPillView(
       tone: "loading",
       title:
         activeProviders.length === 1
-          ? `Updating ${activeProviderName}`
-          : `Updating ${activeProviders.length} providers`,
+          ? uiFormat("Updating {0}", activeProviderName)
+          : uiFormat("Updating {0} providers", activeProviders.length),
       description:
         activeProviders.length === 1
-          ? `${formatProviderList(activeProviders)} update in progress.`
-          : `${formatProviderList(activeProviders)} updates are in progress.`,
+          ? uiFormat("{0} update in progress.", formatProviderList(activeProviders))
+          : uiFormat("{0} updates are in progress.", formatProviderList(activeProviders)),
     };
   }
 
@@ -441,7 +454,7 @@ export function getProviderUpdateSidebarPillView(
       title:
         failedProviders.length === 1
           ? getProviderFailedUpdateTitle(failedProvider)
-          : `${failedProviders.length} provider updates failed`,
+          : uiFormat("{0} provider updates failed", failedProviders.length),
       description: getFailedProviderUpdateDescription(failedProviders),
       dismissible: true,
     });
@@ -465,11 +478,13 @@ export function getProviderUpdateSidebarPillView(
       tone: "warning",
       title:
         unchangedProviders.length === 1
-          ? `${unchangedProviderName} still needs an update`
-          : `${unchangedProviders.length} providers still need updates`,
-      description: `${formatProviderList(unchangedProviders)} ${
-        unchangedProviders.length === 1 ? "still appears" : "still appear"
-      } outdated. Review provider settings for details.`,
+          ? uiFormat("{0} still needs an update", unchangedProviderName)
+          : uiFormat("{0} providers still need updates", unchangedProviders.length),
+      description: uiFormat(
+        "{0} {1} outdated. Review provider settings for details.",
+        formatProviderList(unchangedProviders),
+        unchangedProviders.length === 1 ? "still appears" : "still appear",
+      ),
       dismissible: true,
     });
   }
@@ -491,7 +506,7 @@ export function getProviderUpdateSidebarPillView(
       title:
         succeededProviders.length === 1
           ? getProviderUpdatedTitle(succeededProvider)
-          : `${succeededProviders.length} providers updated`,
+          : uiFormat("{0} providers updated", succeededProviders.length),
       description: getProviderUpdatedDescription(succeededProviders.length),
       dismissAfterVisibleMs: PROVIDER_UPDATE_SUCCESS_VISIBLE_MS,
     });

@@ -195,6 +195,31 @@ describe("projectActivityPayload", () => {
     expect(textRead.payload).not.toMatchObject({ data: { imagePath: expect.anything() } });
   });
 
+  it("projects a Codex generated image to its saved path without the inline PNG", () => {
+    const savedPath = "/Users/example/.codex/generated_images/thread/exec-1.png";
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "image_view",
+        data: {
+          item: {
+            type: "imageGeneration",
+            status: "completed",
+            result: "iVBORw0KGgo".repeat(1000),
+            savedPath,
+          },
+        },
+      }),
+    );
+    const projectedAgain = projectActivityPayload(projected);
+    expect(projected.payload).toMatchObject({
+      data: { imagePath: savedPath, imageGenerated: true },
+    });
+    expect(projectedAgain.payload).toMatchObject({
+      data: { imagePath: savedPath, imageGenerated: true },
+    });
+    expect(JSON.stringify(projected.payload)).not.toContain("iVBORw0KGgo");
+  });
+
   it("slims Codex-shaped mcp_tool_call items to rendered fields plus a result summary", () => {
     const projected = projectActivityPayload(
       activity({

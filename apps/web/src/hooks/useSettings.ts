@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 /**
  * Environment-scoped settings hooks.
  *
@@ -434,7 +435,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         const warnUnsaved = (description = PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE) =>
           toastManager.add({
             type: "warning",
-            title: "Setting not saved",
+            title: uiText("Setting not saved"),
             description,
           });
         if (Object.keys(localPatch).length > 0) {

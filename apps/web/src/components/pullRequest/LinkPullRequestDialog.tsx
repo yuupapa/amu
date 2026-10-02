@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { changeRequestUrlFor as changeRequestWebUrl } from "@t3tools/shared/changeRequestUrl";
 export { changeRequestUrlFor as changeRequestWebUrl } from "@t3tools/shared/changeRequestUrl";
 import {
@@ -202,16 +203,17 @@ function LinkPullRequestDialog({
     <Dialog open={open} onOpenChange={(next) => (pending ? undefined : onOpenChange(next))}>
       <DialogPopup className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Link pull request</DialogTitle>
+          <DialogTitle>{uiText("Link pull request")}</DialogTitle>
           <DialogDescription>
-            Attach a pull request to this thread. A full URL can point at any repository on a host
-            this environment has a project for.
+            {uiText(
+              "Attach a pull request to this thread. A full URL can point at any repository on a host this environment has a project for.",
+            )}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <Input
             ref={inputRef}
-            placeholder="Pull request URL or #42"
+            placeholder={uiText("Pull request URL or #42")}
             value={reference}
             onChange={(event) => {
               setDirty(true);
@@ -240,7 +242,7 @@ function LinkPullRequestDialog({
             onClick={() => onOpenChange(false)}
             disabled={pending}
           >
-            Cancel
+            {uiText("Cancel")}
           </Button>
           <Button
             type="button"
@@ -248,7 +250,7 @@ function LinkPullRequestDialog({
             onClick={() => void submit()}
             disabled={pending || resolved === null || "error" in resolved}
           >
-            {pending ? "Linking..." : "Link"}
+            {pending ? uiText("Linking...") : uiText("Link")}
           </Button>
         </DialogFooter>
       </DialogPopup>

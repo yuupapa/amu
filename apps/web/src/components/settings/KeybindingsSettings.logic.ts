@@ -1,3 +1,4 @@
+import { originalUiText } from "../../uiText";
 import {
   STATIC_KEYBINDING_COMMANDS,
   type KeybindingCommand,
@@ -230,6 +231,7 @@ export function buildKeybindingRows(
     return (
       row.command.toLowerCase().includes(normalizedQuery) ||
       commandLabel(row.command).toLowerCase().includes(normalizedQuery) ||
+      originalUiText(commandLabel(row.command)).toLowerCase().includes(normalizedQuery) ||
       row.key.toLowerCase().includes(normalizedQuery) ||
       row.when.toLowerCase().includes(normalizedQuery) ||
       row.source.toLowerCase().includes(normalizedQuery)
@@ -292,8 +294,17 @@ export function buildKeybindingCommandOptions(
   }
   return [...commands].toSorted(
     (left, right) =>
-      compareUsageCommands(left, right) ?? commandLabel(left).localeCompare(commandLabel(right)),
+      compareUsageCommands(left, right) ??
+      commandSortLabel(left).localeCompare(commandSortLabel(right)),
   );
+}
+
+function commandSortLabel(command: KeybindingCommand): string {
+  const metric = METRIC_OPTIONS.find((option) => option.command === command);
+  if (metric) return `Usage: ${originalUiText(metric.label)}`;
+  const period = WINDOW_OPTIONS.find((option) => option.command === command);
+  if (period) return `Usage: Period: ${originalUiText(period.label)}`;
+  return commandLabel(command);
 }
 
 export function commandLabel(command: KeybindingCommand): string {

@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import type { EnvironmentId, UsageLimitsReport } from "@t3tools/contracts";
 import { limitsNotice } from "@t3tools/shared/usageLimits";
 import { GaugeIcon } from "lucide-react";
@@ -31,7 +32,7 @@ function AccountSummary({ account }: { readonly account: UsageLimitsReport["acco
         <RedactedSensitiveText
           key={label}
           value={label}
-          ariaLabel="Toggle account label visibility"
+          ariaLabel={uiText("Toggle account label visibility")}
           revealTooltip="Click to reveal account"
           hideTooltip="Click to hide account"
           className="max-w-full truncate align-bottom font-sans text-xs leading-normal"
@@ -63,7 +64,7 @@ export function usageLimitsBannerItem(
     variant: "info",
     priority: "notice",
     icon: <GaugeIcon />,
-    title: "Usage limits",
+    title: uiText("Usage limits"),
     description: summary,
     dismissLabel: "Dismiss usage limits",
     onDismiss,
@@ -112,7 +113,7 @@ function UsageLimitsBannerBody({
                   className="self-start"
                   onClick={() => void ensureLocalApi().shell.openExternal(externalUsage.url)}
                 >
-                  Manage usage
+                  {uiText("Manage usage")}
                 </Button>
               ) : null}
               {resetCreditInput && account.limits.resetCredits ? (

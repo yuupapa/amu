@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
@@ -56,8 +57,8 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
         <AlertDescription>
           {chatGptUsageLimit ? (
             <div className="space-y-1">
-              <p className="font-medium">ChatGPT usage limit reached</p>
-              <p>Review your usage settings in ChatGPT to continue.</p>
+              <p className="font-medium">{uiText("ChatGPT usage limit reached")}</p>
+              <p>{uiText("Review your usage settings in ChatGPT to continue.")}</p>
             </div>
           ) : (
             <Tooltip>
@@ -72,7 +73,12 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
           <AlertAction>
             {chatGptUsageLimit ? <ChatGptUsageButton variant="default" size="sm" /> : null}
             {onDismiss ? (
-              <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={uiText("Dismiss error")}
+                onClick={onDismiss}
+              >
                 <XIcon className="text-destructive" />
               </Button>
             ) : null}

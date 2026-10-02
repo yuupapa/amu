@@ -1,3 +1,4 @@
+import { uiText, uiFormat } from "~/uiText";
 import { useAtomValue } from "@effect/atom-react";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { Atom } from "effect/unstable/reactivity";
@@ -98,7 +99,7 @@ export function useAutoBalanceUpdateBanner(
         <PopoverTrigger
           render={<InlineButton />}
           className="max-w-full"
-          aria-label={`${title}. View machines`}
+          aria-label={uiFormat("{0}. View machines", title)}
         >
           <span className="min-w-0 truncate">{title}</span>
         </PopoverTrigger>
@@ -111,14 +112,14 @@ export function useAutoBalanceUpdateBanner(
                   <ServerUpdateProgress state={machine.state} />
                 ) : !machine.remoteUpdate ? (
                   <>
-                    <div className="text-muted-foreground">Manual update required</div>
+                    <div className="text-muted-foreground">{uiText("Manual update required")}</div>
                     <ServerUpdateAction {...machine} />
                   </>
                 ) : (
                   <div className="text-muted-foreground">
                     {machine.connected
-                      ? `Ready to update to ${machine.targetVersion}`
-                      : "Reconnect this machine to update"}
+                      ? uiFormat("Ready to update to {0}", machine.targetVersion)
+                      : uiText("Reconnect this machine to update")}
                   </div>
                 )}
               </div>
@@ -128,7 +129,9 @@ export function useAutoBalanceUpdateBanner(
       </Popover>
     ),
     description:
-      manual > 0 ? `${manual} ${manual === 1 ? "needs" : "need"} a manual update` : undefined,
+      manual > 0
+        ? uiFormat("{0} {1} a manual update", manual, manual === 1 ? "needs" : "need")
+        : undefined,
     actions:
       running === 0 && targets.length > 0 ? (
         <ServerUpdatesAction
@@ -136,10 +139,14 @@ export function useAutoBalanceUpdateBanner(
           variant="ghost"
           label={
             failed > 0
-              ? "Retry"
+              ? uiText("Retry")
               : targets.length === machines.length
-                ? "Update all"
-                : `Update ${targets.length} ${targets.length === 1 ? "machine" : "machines"}`
+                ? uiText("Update all")
+                : uiFormat(
+                    "Update {0} {1}",
+                    targets.length,
+                    targets.length === 1 ? "machine" : "machines",
+                  )
           }
         />
       ) : undefined,

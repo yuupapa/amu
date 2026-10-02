@@ -37,6 +37,22 @@ import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
 const UPDATE_TIMEOUT_MS = 5 * 60_000;
+
+export type ProviderPostUpdateCheckResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
+export type ProviderPostUpdateCheck = (input: {
+  readonly provider: ProviderDriverKind;
+  readonly instanceId: ProviderInstanceId;
+}) => Effect.Effect<ProviderPostUpdateCheckResult>;
+/**
+ * Amu: a smoke check run after a successful update. When it fails, the runner reinstalls the
+ * version that was installed before the update. Defaults to passing so other callers are unchanged.
+ */
+export const ProviderPostUpdateCheckRef = Context.Reference<ProviderPostUpdateCheck>(
+  "@t3tools/server/provider/ProviderPostUpdateCheck",
+  { defaultValue: () => () => Effect.succeed({ ok: true } as const) },
+);
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
 
 export interface ProviderMaintenanceCommandResult {
@@ -318,6 +334,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         : (target.instanceId ?? defaultInstanceIdForDriver(provider));
     const targetVersion = typeof target === "string" ? undefined : target.targetVersion;
     const targetKey = `instance:${instanceId}`;
+    const postUpdateCheck = yield* ProviderPostUpdateCheckRef;
     const capabilities = yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
       instanceId,
       provider,
@@ -420,6 +437,13 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 }),
               );
             }
+            const previousVersion =
+              (yield* providerRegistry.getProviders)
+                .find(
+                  (candidate) =>
+                    candidate.driver === provider && candidate.instanceId === instanceId,
+                )
+                ?.version?.replace(/^v/, "") ?? null;
             const result = yield* runMaintenanceCommand(command);
             const finishedAt = yield* nowIso;
             if (result.timedOut || result.exitCode !== 0) {
@@ -460,6 +484,55 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             const stillOutdated =
               targetVersion === undefined &&
               verifiedProviders.some((verifiedProvider) => isOutdatedProvider(verifiedProvider));
+            if (!couldNotVerify && !stillOutdated) {
+              const check = yield* postUpdateCheck({ provider, instanceId });
+              if (!check.ok) {
+                const rollback =
+                  previousVersion !== null
+                    ? makeTargetedProviderUpdateAction(verified, previousVersion)
+                    : null;
+                if (!rollback) {
+                  return yield* finish(
+                    makeUpdateState({
+                      status: "failed",
+                      startedAt,
+                      finishedAt: yield* nowIso,
+                      message: `更新後の動作確認に失敗しました（${check.reason}）。この入れ方では自動で元の版に戻せません。${previousVersion ? `元の版 ${previousVersion} を入れ直してください。` : ""}`,
+                      output: commandOutput(result),
+                    }),
+                  );
+                }
+                const rollbackResult = yield* runMaintenanceCommand(rollback);
+                const restored =
+                  yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
+                    instanceId,
+                    provider,
+                    { fresh: true },
+                  );
+                const { verifiedProviders: restoredProviders } = yield* verifyRefreshedProvider(
+                  provider,
+                  restored,
+                  instanceId,
+                );
+                const rolledBack =
+                  rollbackResult.exitCode === 0 &&
+                  !rollbackResult.timedOut &&
+                  restoredProviders.some(
+                    (candidate) => candidate.version?.replace(/^v/, "") === previousVersion,
+                  );
+                return yield* finish(
+                  makeUpdateState({
+                    status: "failed",
+                    startedAt,
+                    finishedAt: yield* nowIso,
+                    message: rolledBack
+                      ? `更新後の動作確認に失敗したため、元の版（${previousVersion}）に戻しました。理由: ${check.reason}`
+                      : `更新後の動作確認に失敗し、元の版（${previousVersion}）への切り戻しも確認できませんでした。手動で次を実行してください: ${rollback.command}`,
+                    output: commandOutput(rollbackResult),
+                  }),
+                );
+              }
+            }
             return yield* finish(
               makeUpdateState({
                 status: couldNotVerify || stillOutdated ? "unchanged" : "succeeded",

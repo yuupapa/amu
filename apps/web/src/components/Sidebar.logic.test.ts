@@ -1,3 +1,4 @@
+import { uiFormat } from "~/uiText";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import * as Cause from "effect/Cause";
@@ -278,7 +279,7 @@ describe("buildBulkUnpinContextMenuItem", () => {
   it("counts only the pinned rows of a mixed selection", () => {
     expect(buildBulkUnpinContextMenuItem({ pinnedCount: 2 })).toEqual({
       id: "unpin",
-      label: "Unpin (2)",
+      label: uiFormat("Unpin ({0})", "2"),
     });
   });
 
@@ -296,7 +297,7 @@ describe("buildBulkTitleRegenerationContextMenuItem", () => {
       }),
     ).toEqual({
       id: "regenerate-title",
-      label: "Regenerate titles (3)",
+      label: uiFormat("Regenerate titles ({0})", "3"),
     });
   });
 
@@ -308,7 +309,7 @@ describe("buildBulkTitleRegenerationContextMenuItem", () => {
       }),
     ).toEqual({
       id: "regenerate-title",
-      label: "Regenerating… (2)",
+      label: uiFormat("Regenerating… ({0})", "2"),
       disabled: true,
     });
   });
@@ -327,13 +328,13 @@ describe("buildMultiSelectThreadContextMenuItems", () => {
   it("offers bulk archive with the selected count", () => {
     expect(
       buildMultiSelectThreadContextMenuItems({ count: 3, hasRunningThread: false }),
-    ).toContainEqual({ id: "archive", label: "Archive (3)", disabled: false });
+    ).toContainEqual({ id: "archive", label: uiFormat("Archive ({0})", "3"), disabled: false });
   });
 
   it("disables bulk archive when a selected thread is running", () => {
     expect(
       buildMultiSelectThreadContextMenuItems({ count: 2, hasRunningThread: true }),
-    ).toContainEqual({ id: "archive", label: "Archive (2)", disabled: true });
+    ).toContainEqual({ id: "archive", label: uiFormat("Archive ({0})", "2"), disabled: true });
   });
 });
 

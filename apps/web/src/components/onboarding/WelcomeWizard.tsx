@@ -1,4 +1,4 @@
-import { uiText } from "~/uiText";
+import { uiText, uiFormat } from "~/uiText";
 import { useAuth } from "@clerk/react";
 import { useAtomValue } from "@effect/atom-react";
 import type {
@@ -74,7 +74,7 @@ import { buildProviderInstanceUpdatePatch } from "../settings/SettingsPanels.log
 import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ClaudeAI, OpenAI } from "../Icons";
-import { T3Wordmark } from "../T3Wordmark";
+import { APP_BASE_NAME } from "../../branding";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -101,7 +101,7 @@ type WizardStep = "connection" | "agents" | "import";
 const NO_ENVIRONMENTS: readonly EnvironmentId[] = [];
 
 const AGENT_ONBOARDING_THREAD_ID = ThreadId.make("onboarding-agent-setup");
-const ONBOARDING_STAGES = [uiText("Connect"), uiText("Agents"), uiText("Projects")] as const;
+const ONBOARDING_STAGES = ["Connect", "Agents", "Projects"] as const;
 const SCAN_LIMIT_MESSAGE = uiText(
   uiText("Scan limit reached. Some projects or conversations may be missing."),
 );
@@ -182,7 +182,11 @@ export function WelcomeWizard({
           } else if (importedThreadCount > 0) {
             toastManager.add({
               type: "success",
-              title: `Imported ${importedThreadCount} ${importedThreadCount === 1 ? "thread" : "threads"}`,
+              title: uiFormat(
+                "Imported {0} {1}",
+                importedThreadCount,
+                importedThreadCount === 1 ? uiText("thread") : "threads",
+              ),
             });
           }
           return true;
@@ -222,11 +226,8 @@ export function WelcomeWizard({
         <WizardHeader
           title={uiText("Set up T3 Code")}
           identity={
-            <div className="flex items-baseline gap-1.5" role="img" aria-label="T3 Code">
-              <T3Wordmark className="h-4 w-auto shrink-0" aria-hidden />
-              <span className="text-2xl font-medium tracking-tight text-muted-foreground">
-                Code
-              </span>
+            <div className="flex items-baseline gap-1.5" role="img" aria-label={APP_BASE_NAME}>
+              <span className="text-2xl font-semibold tracking-tight">{APP_BASE_NAME}</span>
             </div>
           }
         >
@@ -471,11 +472,11 @@ function ConnectAccountOption({
           <span className="flex-1 text-left">T3 Connect</span>
           <span className="text-xs text-muted-foreground">
             {!isLoaded
-              ? "Loading sign-in…"
+              ? uiText("Loading sign-in…")
               : !isSignedIn
                 ? uiText("Sign in")
                 : !discoveryReady
-                  ? "Loading computers…"
+                  ? uiText("Loading computers…")
                   : null}
           </span>
           <ChevronRightIcon
@@ -494,17 +495,19 @@ function ConnectAccountOption({
                   selection={{ selectedIds, onChange: onToggleEnvironment, autoSelectedComputers }}
                   refreshWhileEmpty
                   empty={
-                    <p className="py-3 text-sm text-muted-foreground">No computers linked yet.</p>
+                    <p className="py-3 text-sm text-muted-foreground">
+                      {uiText("No computers linked yet.")}
+                    </p>
                   }
                 />
               ) : null}
             </div>
             <p className="text-sm text-muted-foreground">
-              Run this on each computer you want to connect.
+              {uiText("Run this on each computer you want to connect.")}
             </p>
             <CommandBlock command="npx t3 connect" className="mt-3" />
             <p className="mt-3 text-xs text-muted-foreground">
-              Keep T3 Code running. Select the computers you want to set up above.
+              {uiText("Keep T3 Code running. Select the computers you want to set up above.")}
             </p>
           </div>
         </CollapsiblePanel>
@@ -622,8 +625,10 @@ function PairingForm({
             </p>
             <CommandBlock command="npx t3 pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start T3 Code first, or run <code className="font-mono">npx t3 serve</code>. Add{" "}
-              <code className="font-mono">--tailscale</code> to use your tailnet.
+              {uiText("Start T3 Code first, or run")}
+              <code className="font-mono">npx t3 serve</code>
+              {uiText(". Add")} <code className="font-mono">--tailscale</code>{" "}
+              {uiText("to use your tailnet.")}
             </p>
           </CollapsiblePanel>
         </Collapsible>
@@ -669,7 +674,7 @@ function AgentsStep({
               environmentId={environmentId}
               machineLabel={
                 environments.find((environment) => environment.environmentId === environmentId)
-                  ?.label ?? uiText("Computer")
+                  ?.label ?? "Computer"
               }
             />
           ))}
@@ -808,7 +813,7 @@ function ConnectedAgentsStep({
       ) ? (
         <div className="mt-3">
           <Button size="xs" variant="ghost-muted" onClick={() => setAddingAccount(true)}>
-            Connect another ChatGPT account
+            {uiText("Connect another ChatGPT account")}
           </Button>
         </div>
       ) : null}
@@ -1090,8 +1095,9 @@ function AgentInstallTerminal({
         <span className="text-2xs font-medium text-muted-foreground">
           {setupState === "writeFailed" ? (
             <>
-              Run <code className="rounded bg-muted px-1 font-mono">{command}</code> in this
-              terminal.
+              {uiText("Run")}
+              <code className="rounded bg-muted px-1 font-mono">{command}</code>{" "}
+              {uiText("in this terminal.")}
             </>
           ) : setupState === "ready" ? (
             uiText("Review the command, then press Enter to run it.")
@@ -1342,7 +1348,7 @@ function ImportStep({
       } else if (importedThreadCount > 0) {
         importWarningRef.current = `Imported ${importedThreadCount} ${importedThreadCount === 1 ? "thread" : "threads"}. Some thread history could not be imported.`;
       } else {
-        importWarningRef.current = uiText("Could not import thread history.");
+        importWarningRef.current = "Could not import thread history.";
       }
     }
     finishAfterImport();
@@ -1377,7 +1383,8 @@ function ImportStep({
       {candidates.length > 0 ? (
         <div className="mt-5 flex items-center justify-between gap-3 text-xs text-muted-foreground">
           <span role="status">
-            {selected.length} of {candidates.length} selected
+            {selected.length} {uiText("of")}
+            {candidates.length} {uiText("selected")}
           </span>
           <div className="flex items-center gap-1">
             <Button
@@ -1407,7 +1414,7 @@ function ImportStep({
             );
             const label =
               environments.find((environment) => environment.environmentId === scan.environmentId)
-                ?.label ?? uiText("Computer");
+                ?.label ?? "Computer";
             return (
               <fieldset
                 key={scan.environmentId}
@@ -1420,21 +1427,24 @@ function ImportStep({
                 {scan.isPending && scan.data === null ? (
                   <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
                     <Spinner size="md" />
-                    Looking for projects…
+                    {uiText("Looking for projects…")}
                   </div>
                 ) : scan.error !== null ? (
                   <div
                     role="alert"
                     className="flex items-center justify-between gap-3 text-sm text-muted-foreground"
                   >
-                    <span>Could not check projects. {scan.error}</span>
+                    <span>
+                      {uiText("Could not check projects. ")}
+                      {scan.error}
+                    </span>
                     <Button variant="ghost" size="sm" onClick={scan.refresh}>
                       {uiText("Retry")}
                     </Button>
                   </div>
                 ) : scanCandidates.length === 0 ? (
                   <p className="py-2 text-sm text-muted-foreground">
-                    No existing Claude Code or Codex projects found.
+                    {uiText("No existing Claude Code or Codex projects found.")}
                   </p>
                 ) : null}
                 {scan.data?.truncated ? (
@@ -1463,7 +1473,11 @@ function ImportStep({
         >
           {isImporting
             ? uiText("Importing…")
-            : `Import ${selected.length} ${selected.length === 1 ? "project" : "projects"}`}
+            : uiFormat(
+                "Import {0} {1}",
+                selected.length,
+                selected.length === 1 ? "project" : uiText("projects"),
+              )}
         </Button>
       </div>
     </StepShell>
@@ -1530,7 +1544,7 @@ function ImportCandidateList({
                 {uiText("Other folders")}
               </span>
               <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
-                {other.length} {other.length === 1 ? "folder" : "folders"}
+                {uiFormat("{0} folders", other.length)}
               </span>
             </CollapsibleTrigger>
           </div>

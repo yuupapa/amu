@@ -36,7 +36,7 @@ describe("ComposerPendingApprovalPanel", () => {
       />,
     );
 
-    expect(markup).toContain("File read approval");
+    expect(markup).toContain("ファイル読み取りの承認");
   });
 
   it("shows the app name and message for an MCP access request", () => {
@@ -54,7 +54,7 @@ describe("ComposerPendingApprovalPanel", () => {
     );
 
     expect(markup).toContain(">Safari<");
-    expect(markup).toContain("Allow ChatGPT to use Safari?");
+    expect(markup).toContain("ChatGPTが Safari にアクセスすることを許可しますか？");
   });
 
   it("preserves the full app name and approval message", () => {
