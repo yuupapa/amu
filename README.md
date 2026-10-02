@@ -1,133 +1,36 @@
-# T3 Code
+# Amu
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+Amuは、[T3 Code](https://github.com/pingdotgg/t3code)（MITライセンス）をもとに改造したデスクトップアプリです。Claude Code、Codex、Cursorなど、手元のAIエージェントをひとつの画面から使えます。T3 Codeの公式版ではなく、個人が改造して公開しているものです。
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, and Google Antigravity. If they're set up on your computer, T3 Code can control them.
+## T3 Codeからの主な変更点
 
-## "Wait, what are you selling me?"
+- 日本語の画面：メニューやボタンを日本語に置き換えています。
+- オート（Luna）：新しい会話の最初の依頼で、Luna（gpt-6-luna）が使うモデルと思考の強さを選びます。モデル選択の左の列にある杖のアイコンから選べます。詳しくは [docs/user/luna-auto.md](docs/user/luna-auto.md) を見てください。
+- 画像生成の表示：Codexで生成した画像を、会話の中にそのまま表示します。
+- CLIのアップデート：Codex CLIなどに更新があると、サイドバーの下に「アップデート」が出ます。押して確認すると更新します。Codexを更新したあとはLunaの判定に使う設定でCLIを試し起動し、失敗したら自動で元の版に戻します。
+- 名前とアイコン：アプリ名をAmuに、アイコンと起動画面をAmuのものに変えています。
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
+## 必要なもの
 
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
+使うエージェントのCLIを入れて、ログインしておいてください。
 
-## Installation
+- Codex：[Codex CLI](https://developers.openai.com/codex/cli) を入れて `codex login`
+- Claude：[Claude Code](https://claude.com/product/claude-code) を入れて `claude auth login`
 
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, Grok Build, OpenCode, and Antigravity. Install and authenticate at least one provider before use:
->
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `agent login`
-> - Grok Build: install [Grok Build CLI](https://x.ai/cli) and run `grok login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
-> - Antigravity: enable it in Settings, then use **Install Antigravity** and **Sign in with Google**. No CLI is required.
+オート（Luna）は、Codex CLIでChatGPTにログインしているときに使えます。
 
-### Command line
+## ビルド
 
-```bash
-curl -fsSL https://t3.codes/install.sh | sh
-```
-
-On Windows, in PowerShell:
-
-```powershell
-irm https://t3.codes/install.ps1 | iex
-```
-
-Then run `t3` to start the server and open the local web app. `t3 service install` keeps it running in the background, `t3 update` moves to a newer release, and `t3 --help` has the full reference.
-
-To try it once without installing, run `npx t3@latest` instead.
-
-### Desktop app
-
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
-
-#### Windows (`winget`)
+Node.js と pnpm 11 が必要です。
 
 ```bash
-winget install T3Tools.T3Code
+pnpm install
+pnpm build
+pnpm dist:desktop:dmg:arm64
 ```
 
-#### macOS (Homebrew)
+開発中は `pnpm dev:desktop` で起動できます。
 
-```bash
-brew install --cask t3-code
-```
+## ライセンスと元のプロジェクト
 
-#### Debian, Ubuntu (`.deb`)
-
-Download the `.deb` from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), then:
-
-```bash
-sudo apt install ./T3-Code-*.deb
-```
-
-#### Arch Linux (AUR)
-
-Stable:
-
-```bash
-yay -S t3code-bin
-```
-
-Nightly:
-
-```bash
-yay -S t3code-nightly-bin
-```
-
-The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
-
-## Some notes
-
-We are very very early in this project. Expect bugs.
-
-We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
-
-## Documentation
-
-Full docs live in [docs/](./docs). There's no docs site yet.
-
-- [Install and first run](./docs/user/install.md)
-- [Permission modes](./docs/user/permission-modes.md)
-- [Keyboard shortcuts](./docs/user/keybindings.md)
-- [Project settings](./docs/user/project-settings.md)
-- [Remote access from a phone or another machine](./docs/user/remote-access.md)
-- [Keeping app and server in sync](./docs/user/updating.md)
-- [Source control integrations](./docs/user/source-control.md)
-- Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
-- [Run T3 Code as a background service](./docs/user/background-service.md)
-
-Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
-
-## If you REALLY want to contribute still.... read this first
-
-### Install `vp`
-
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
-
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
-
-```bash
-vp i
-```
-
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug or opening a PR.
-
-Have a feature request? Start an [Ideas discussion](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
-
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+元のT3 CodeのREADMEは [docs/upstream-README.md](docs/upstream-README.md) にあります。ライセンスはT3 Codeと同じMITです。[LICENSE](LICENSE) には元の著作権表示（T3 Tools Inc.）をそのまま残しました。「T3」「T3 Code」はT3 Tools Inc.の名称で、Amuは同社と関係がありません。
