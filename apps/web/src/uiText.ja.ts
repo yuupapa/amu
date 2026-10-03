@@ -4091,4 +4091,19 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Built-in default": "組み込みの既定値",
   "Current checkout": "現在のチェックアウト",
   Recursive: "再帰的に取得",
+  "Drag a thread here or pick one from the sidebar":
+    "ここにスレッドをドラッグするか、サイドバーで選んでください",
+  "Empty pane": "空の画面",
+  "Switch split direction": "縦横の分割を切り替え",
+  "Close pane": "この画面を閉じる",
+  "Drag to resize. Double-click to reset.":
+    "ドラッグで大きさを変更。ダブルクリックで半分に戻ります",
+  "Up to 4 panes": "分割は4つまでです",
+  "Close a pane before opening another one.": "別の画面を閉じてから開いてください。",
+  "Open here": "ここで開く",
+  "Split here": "ここに分割して開く",
+  "Open to the right": "右に分割して開く",
+  "Open below": "下に分割して開く",
+  "Drop on the chat area to open it": "会話エリアに落とすと開きます",
+  "Split right with {0}, down with {1}": "{0} で右に、{1} で下に分割できます",
 };

@@ -226,6 +226,12 @@ import {
 } from "../providerInstances";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import {
+  canOpenThreadInSplitPane,
+  commitThreadSplitDrop,
+  openThreadInSplitPane,
+} from "./SplitWorkspace";
+import { useThreadSplitDragStore } from "../threadSplitDragStore";
 import { Button, InlineButton } from "./ui/button";
 import {
   Combobox,
@@ -3185,6 +3191,13 @@ export default function Sidebar() {
     (args) => restrictBelowSidebarLabel(args, dragLabelOffsetRef.current),
     [],
   );
+  // Once the pointer leaves the list, a floating card follows it toward the
+  // chat area; the row goes back to its slot so nothing reorders meanwhile.
+  const holdRowWhileOutsideList = useCallback<Modifier>(
+    ({ transform }) =>
+      useThreadSplitDragStore.getState().outside ? { ...transform, x: 0, y: 0 } : transform,
+    [],
+  );
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
   const attachListMotionRef = useCallback((node: HTMLUListElement | null) => {
     threadListRef.current = node;
@@ -3207,6 +3220,9 @@ export default function Sidebar() {
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
   const finishThreadDrag = useCallback((started: boolean) => {
     dragSensorRef.current = null;
+    // The sensor finishes before dnd-kit reports the drop; let the drop
+    // handler read where the pointer ended first.
+    window.setTimeout(() => useThreadSplitDragStore.getState().end(), 0);
     if (started) {
       listMotionRef.current?.release();
       setDragState(null);
@@ -3387,8 +3403,19 @@ export default function Sidebar() {
         activationY:
           event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
       });
+      // Dragging the row out over the chat area opens it in a split pane.
+      const draggedThread = threadByKey.get(activeKey);
+      if (draggedThread) {
+        useThreadSplitDragStore.getState().start(
+          {
+            kind: "server",
+            threadRef: scopeThreadRef(draggedThread.environmentId, draggedThread.id),
+          },
+          () => threadListRef.current?.getBoundingClientRect() ?? null,
+        );
+      }
     },
-    [sectionByThreadKey],
+    [sectionByThreadKey, threadByKey],
   );
   // Include every visible row in the measured order. Older servers disable
   // pickup on their rows without changing where those rows render.
@@ -3584,6 +3611,15 @@ export default function Sidebar() {
   ]);
   const handleThreadDragEnd = useCallback(
     (event: DragEndEvent) => {
+      const splitDrag = useThreadSplitDragStore.getState();
+      if (splitDrag.target && splitDrag.point && splitDrag.outside) {
+        // Released beside the list: open it in the chat area if it landed on
+        // a pane, and never treat it as a sidebar reorder.
+        const { target, point } = splitDrag;
+        splitDrag.end();
+        commitThreadSplitDrop(target, point);
+        return;
+      }
       const activeKey = String(event.active.id);
       const activeSection = sectionByThreadKey.get(activeKey);
       const target =
@@ -4119,11 +4155,19 @@ export default function Sidebar() {
                 titleRegeneration: supportsTitleRegeneration,
               },
               snoozePresets,
+              splitView: { canOpen: canOpenThreadInSplitPane(threadRef) },
             }),
             position,
           ),
         );
         if (clicked._tag === "Failure") return;
+        if (clicked.value === "open-split-right" || clicked.value === "open-split-down") {
+          openThreadInSplitPane(
+            threadRef,
+            clicked.value === "open-split-right" ? "right" : "bottom",
+          );
+          return;
+        }
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
             clicked.value === "snooze:custom"
@@ -4703,6 +4747,7 @@ export default function Sidebar() {
                   restrictToVerticalAxis,
                   restrictBelowPins,
                   restrictToFirstScrollableAncestor,
+                  holdRowWhileOutsideList,
                 ]}
                 onDragStart={handleThreadDragStart}
                 onDragOver={handleThreadDragOver}
