@@ -113,6 +113,7 @@ const startupDependencies = Layer.mergeAll(
   Layer.mock(GitVcsDriver.GitVcsDriver)({}),
   Layer.succeed(ProviderService.ProviderService, {
     getThreadBinding: () => Effect.succeed(Option.none()),
+    listThreadSessions: () => Effect.succeed([]),
     releaseThreadForHandoff: () => Effect.void,
     startSession: () => Effect.die("unused"),
     sendTurn: () => Effect.die("unused"),

@@ -221,6 +221,10 @@ function providerSwitchEventFor(
       const { type: _type, commandId: _commandId, ...payload } = command;
       return { ...base, type: "thread.provider-switch-resolved", payload };
     }
+    case "thread.provider-switch.close": {
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return { ...base, type: "thread.provider-switch-closed", payload };
+    }
   }
 }
 
@@ -1992,6 +1996,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (
+        command.expectedStatus !== undefined &&
+        (thread.session?.status ?? null) !== command.expectedStatus
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Session of thread '${command.threadId}' is no longer '${command.expectedStatus}'.`,
+        });
+      }
       const sessionSetEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -2329,7 +2342,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     case "thread.provider-switch.await-user":
     case "thread.provider-switch.retry":
     case "thread.provider-switch.abort":
-    case "thread.provider-switch.resolve": {
+    case "thread.provider-switch.resolve":
+    case "thread.provider-switch.close": {
       const thread = yield* requireThread({
         readModel,
         command,

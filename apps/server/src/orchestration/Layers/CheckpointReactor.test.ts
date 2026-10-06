@@ -119,6 +119,7 @@ function createProviderServiceHarness(
       : Effect.succeed([] as ReadonlyArray<ProviderSession>);
   const service: ProviderServiceShape = {
     getThreadBinding: () => Effect.succeed(Option.none()),
+    listThreadSessions: () => Effect.succeed([]),
     releaseThreadForHandoff: () => Effect.void,
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),

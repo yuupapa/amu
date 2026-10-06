@@ -31,6 +31,7 @@ import {
   ThreadProviderSwitchAbortPayloadFields,
   ThreadProviderSwitchAttemptPayloadFields,
   ThreadProviderSwitchAwaitUserPayloadFields,
+  ThreadProviderSwitchClosePayloadFields,
   ThreadProviderSwitchMilestonePayloadFields,
   ThreadProviderSwitchPacketPayloadFields,
   ThreadProviderSwitchRequestedPayloadFields,
@@ -1551,6 +1552,11 @@ const ThreadSessionSetCommand = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
   createdAt: IsoDateTime,
+  /**
+   * Apply only while the thread's session still has this status; decided
+   * against the read model, so a concurrent update (a turn starting) wins.
+   */
+  expectedStatus: Schema.optional(OrchestrationSessionStatus),
 });
 
 const ThreadMessageAssistantDeltaCommand = Schema.Struct({
@@ -1746,6 +1752,12 @@ const ThreadProviderSwitchAwaitUserCommand = Schema.Struct({
   ...ThreadProviderSwitchAwaitUserPayloadFields,
 });
 
+const ThreadProviderSwitchCloseCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-switch.close"),
+  ...providerSwitchCommandBase,
+  ...ThreadProviderSwitchClosePayloadFields,
+});
+
 const ThreadTurnAssignmentRecordCommand = Schema.Struct({
   type: Schema.Literal("thread.turn-assignment.record"),
   ...providerSwitchCommandBase,
@@ -1783,6 +1795,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadProviderSwitchPacketCommand,
   ThreadProviderSwitchAttemptCommand,
   ThreadProviderSwitchAwaitUserCommand,
+  ThreadProviderSwitchCloseCommand,
   ThreadTurnAssignmentRecordCommand,
   ThreadMessageDeliveryStateSetCommand,
 ]);
@@ -1836,6 +1849,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.provider-switch-retry-requested",
   "thread.provider-switch-aborted",
   "thread.provider-switch-resolved",
+  "thread.provider-switch-closed",
   "thread.turn-assignment-recorded",
   "thread.message-delivery-state-set",
 ]);
@@ -2156,6 +2170,10 @@ export const ThreadProviderSwitchResolvedPayload = Schema.Struct({
   ...providerSwitchPayloadBase,
   ...ThreadProviderSwitchResolvePayloadFields,
 });
+export const ThreadProviderSwitchClosedPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadProviderSwitchClosePayloadFields,
+});
 export const ThreadTurnAssignmentRecordedPayload = Schema.Struct({
   ...providerSwitchPayloadBase,
   ...ThreadTurnAssignmentPayloadFields,
@@ -2411,6 +2429,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.provider-switch-resolved"),
     payload: ThreadProviderSwitchResolvedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-switch-closed"),
+    payload: ThreadProviderSwitchClosedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

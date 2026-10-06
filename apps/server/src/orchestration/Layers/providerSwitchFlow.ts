@@ -81,6 +81,22 @@ export interface ProviderSwitchFlowDeps {
     readonly createdAt: string;
   }) => Effect.Effect<unknown, ProviderSwitchStepError>;
   readonly resolveCwd: (thread: OrchestrationThreadShell) => Effect.Effect<string | null>;
+  /** The thread and the switch's trigger message, to resume a stored switch. */
+  readonly loadThread: (threadId: ThreadId) => Effect.Effect<OrchestrationThreadShell | null>;
+  readonly loadMessage: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<ProviderSwitchTrigger["message"] | null>;
+  /** A switch stopped to wait for the user: the thread session must not stay "starting". */
+  readonly markSessionFailed: (input: {
+    readonly threadId: ThreadId;
+    readonly detail: string;
+  }) => Effect.Effect<unknown, ProviderSwitchStepError>;
+  /** The full model selection last used on the thread, only when it names this exact party. */
+  readonly cachedSelection: (
+    threadId: ThreadId,
+    party: { readonly instanceId: ProviderInstanceId; readonly model: string },
+  ) => ModelSelection | undefined;
 }
 
 export type ProviderSwitchDecision =
@@ -113,6 +129,44 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
     Effect.gen(function* () {
       const base = { commandId: yield* commandId(tag), createdAt: yield* deps.nowIso };
       yield* deps.dispatch(build(base));
+    });
+
+  /**
+   * One run per thread at a time. A resume that arrives mid-run (retry,
+   * resend, recovery) is not dropped: the running fiber re-reads the state
+   * and runs again once it finishes, so nothing is sent twice or lost.
+   */
+  const running = new Map<ThreadId, { rerun: boolean }>();
+  const runExclusive = <A, E, R>(
+    threadId: ThreadId,
+    run: Effect.Effect<A, E, R>,
+  ): Effect.Effect<void, E, R> =>
+    Effect.suspend(() => {
+      const active = running.get(threadId);
+      if (active !== undefined) {
+        active.rerun = true;
+        return Effect.void;
+      }
+      const entry = { rerun: false };
+      running.set(threadId, entry);
+      // Reruns pick their work from the state then, not the first caller's run.
+      const rerunUntilSettled: Effect.Effect<void, E, R> = Effect.suspend(() => {
+        if (!entry.rerun) return Effect.void;
+        entry.rerun = false;
+        return driveThread(threadId).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider switch rerun failed", {
+              threadId,
+              cause: describeCause(cause),
+            }),
+          ),
+          Effect.flatMap(() => rerunUntilSettled),
+        );
+      });
+      return run.pipe(
+        Effect.flatMap(() => rerunUntilSettled),
+        Effect.ensuring(Effect.sync(() => running.delete(threadId))),
+      );
     });
 
   const readPending = (threadId: ThreadId) =>
@@ -186,16 +240,26 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
     // An unknown target keeps the existing path, which reports it.
     if (Option.isNone(desired)) return { kind: "native" } as ProviderSwitchDecision;
 
-    const active = (yield* deps.providerService.listSessions()).find(
-      (session) => session.threadId === thread.id,
-    );
+    const binding = yield* deps.providerService
+      .getThreadBinding(thread.id)
+      .pipe(Effect.orElseSucceed(() => Option.none()));
+    // Only this thread's sessions: another thread's stale binding never
+    // blocks this decision. The bound instance's session is the active one.
+    const threadSessions = yield* deps.providerService.listThreadSessions(thread.id);
+    const active =
+      threadSessions.find(
+        (session) =>
+          Option.isSome(binding) && session.providerInstanceId === binding.value.instanceId,
+      ) ?? threadSessions[0];
     const activeInfo =
       active?.providerInstanceId === undefined
         ? Option.none()
         : yield* instanceDriver(active.providerInstanceId);
-    const binding = yield* deps.providerService
-      .getThreadBinding(thread.id)
-      .pipe(Effect.orElseSucceed(() => Option.none()));
+    // A session left by a discarded switch may lack its packet (§3.1).
+    const switchRow = yield* deps.switches.getStateByThreadId({ threadId: thread.id });
+    const unconfirmedInstanceId = Option.isSome(switchRow)
+      ? (switchRow.value.state.handoffUnconfirmedInstanceId ?? null)
+      : null;
     const bindingInfo = Option.isSome(binding)
       ? yield* instanceDriver(binding.value.instanceId)
       : Option.none();
@@ -222,7 +286,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
               driver: bindingInfo.value.driver,
               continuationKey: bindingInfo.value.continuationKey,
               hasResumeCursor: binding.value.hasResumeCursor,
-              awaitingHandoffDelivery: false,
+              awaitingHandoffDelivery: binding.value.instanceId === unconfirmedInstanceId,
             }
           : null,
       activeSession:
@@ -231,7 +295,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
               instanceId: active.providerInstanceId,
               driver: activeInfo.value.driver,
               continuationKey: activeInfo.value.continuationKey,
-              awaitingHandoffDelivery: false,
+              awaitingHandoffDelivery: active.providerInstanceId === unconfirmedInstanceId,
             }
           : null,
       desired: {
@@ -269,7 +333,11 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
     }
     // §7.3: the old provider must be idle and not waiting on the user.
     const oldModel = currentModel ?? "前のモデル";
-    if (thread.session?.status === "running" || thread.session?.status === "starting") {
+    if (
+      thread.session?.status === "running" ||
+      thread.session?.status === "starting" ||
+      active?.status === "running"
+    ) {
       return {
         kind: "refuse",
         detail: `${oldModel}が作業中です。停止してから切り替えてください。`,
@@ -319,6 +387,9 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
         }),
         "await-user",
       );
+      yield* deps
+        .markSessionFailed({ threadId, detail })
+        .pipe(Effect.catchCause(() => Effect.void));
     });
 
   /** A message saved pending must settle, even if the feature was turned off since. */
@@ -442,12 +513,32 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
 
     // 2. A live session for the new provider, started by a succeeded attempt.
     const latestStart = pending.attempts.findLast((attempt) => attempt.kind === "start");
-    const live = (yield* deps.providerService.listSessions()).some(
-      (session) =>
-        session.threadId === threadId && session.providerInstanceId === pending!.to.instanceId,
-    );
+    const toInstanceId = pending.to.instanceId;
+    // Only a recorded, succeeded start counts as live; this thread's sessions
+    // are read on their own, so another thread's stale binding cannot fail it.
+    const live =
+      latestStart?.status === "succeeded" &&
+      (yield* deps.providerService.listThreadSessions(threadId).pipe(
+        Effect.map((sessions) =>
+          sessions.some((session) => session.providerInstanceId === toInstanceId),
+        ),
+        Effect.orElseSucceed(() => false),
+      ));
     let generation = latestStart?.generation ?? null;
-    if (latestStart?.status !== "succeeded" || !live) {
+    if (!live) {
+      // A session of the new provider may survive an earlier start whose
+      // bookkeeping and undo both failed: stop it by instance first.
+      if (latestStart !== undefined) {
+        const cleared = yield* deps.providerService
+          .releaseThreadForHandoff(threadId, { alsoStopInstanceId: toInstanceId })
+          .pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              failRetryable(describeCause(cause)).pipe(Effect.as(false)),
+            ),
+          );
+        if (!cleared) return;
+      }
       const attemptId = lastAttemptId(pending) + 1;
       generation =
         pending.attempts.reduce(
@@ -622,6 +713,9 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
           kind: "submit",
           status: "succeeded",
           turnId: sent.turnId,
+          ...(sent.model !== undefined && sent.model.trim().length > 0
+            ? { model: sent.model }
+            : {}),
         }),
         "submit-succeeded",
       );
@@ -733,6 +827,262 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
     return switchId;
   });
 
+  /**
+   * Continues a stored switch: after retry or resolve(resend), and at startup.
+   * The trigger message and target come from the stored switch, never from
+   * the client.
+   */
+  const resumeSwitchInner = Effect.fn("resumeProviderSwitch")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly switchId: ProviderSwitchId;
+  }) {
+    const pending = yield* readPending(input.threadId);
+    if (
+      pending === null ||
+      pending.switchId !== input.switchId ||
+      pending.status !== "in-progress"
+    ) {
+      return;
+    }
+    const thread = yield* deps.loadThread(input.threadId);
+    const message = yield* deps.loadMessage({
+      threadId: input.threadId,
+      messageId: pending.triggerMessageId,
+    });
+    if (thread === null || message === null) {
+      yield* awaitUser(
+        input.threadId,
+        input.switchId,
+        pending.deliveryUncertain && !pending.resendAllowed
+          ? "unknown-delivery"
+          : "failed-retryable",
+        "乗り換えに使う発言が見つかりませんでした。",
+      );
+      return;
+    }
+    const toSelection = deps.cachedSelection(input.threadId, pending.to) ?? {
+      instanceId: pending.to.instanceId,
+      model: pending.to.model,
+    };
+    yield* continueSwitch({
+      thread,
+      switchId: input.switchId,
+      trigger: {
+        message,
+        interactionMode: thread.interactionMode,
+        toSelection,
+      },
+    });
+  });
+
+  const resumeSwitch = (input: {
+    readonly threadId: ThreadId;
+    readonly switchId: ProviderSwitchId;
+  }) => runExclusive(input.threadId, resumeSwitchInner(input));
+
+  /** Whatever the thread's unresolved switch needs now: run on, finish an abort, or nothing. */
+  function driveThread(threadId: ThreadId) {
+    return Effect.gen(function* () {
+      const pending = yield* readPending(threadId);
+      if (pending === null) return;
+      const input = { threadId, switchId: pending.switchId };
+      if (pending.status === "closing") {
+        yield* finishAbortedSwitchRetried(input);
+      } else if (pending.status === "in-progress") {
+        yield* resumeSwitchInner(input);
+      }
+    });
+  }
+
+  /**
+   * Finishes an aborted switch (§8.2): stop a session the switch itself
+   * started and unbind it, so a blank session never receives the next send;
+   * the old session is left alone if the switch never stopped it. "Return to
+   * previous" restores the old model selection (its cursor is gone, so the
+   * next send hands over). Only then is the switch resolved: until close
+   * commits, sends stay refused and a restart repeats this cleanup.
+   */
+  const finishAbortedSwitch = Effect.fn("finishAbortedSwitch")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly switchId: ProviderSwitchId;
+  }) {
+    const pending = yield* readPending(input.threadId);
+    if (pending === null || pending.switchId !== input.switchId || pending.status !== "closing") {
+      return;
+    }
+    let releasedInstanceId: ProviderInstanceId | undefined;
+    if (pending.milestone !== "requested") {
+      const binding = yield* deps.providerService.getThreadBinding(input.threadId);
+      if (Option.isSome(binding) && binding.value.instanceId === pending.to.instanceId) {
+        yield* deps.providerService.releaseThreadForHandoff(input.threadId);
+      } else {
+        // A session on the new instance whose start was never recorded in the
+        // binding is stopped by instance; the old binding is left as it is.
+        yield* deps.providerService.releaseThreadForHandoff(input.threadId, {
+          alsoStopInstanceId: pending.to.instanceId,
+        });
+      }
+      releasedInstanceId = pending.to.instanceId;
+    }
+    if (pending.closing?.returnToPrevious === true) {
+      const previous = deps.cachedSelection(input.threadId, pending.from) ?? {
+        instanceId: pending.from.instanceId,
+        model: pending.from.model,
+      };
+      yield* dispatchSwitch(
+        (base) => ({
+          type: "thread.meta.update",
+          commandId: base.commandId,
+          threadId: input.threadId,
+          modelSelection: previous,
+        }),
+        "return-to-previous",
+      );
+    }
+    yield* dispatchSwitch(
+      (base) => ({
+        type: "thread.provider-switch.close",
+        ...base,
+        threadId: input.threadId,
+        switchId: input.switchId,
+        ...(releasedInstanceId !== undefined ? { releasedInstanceId } : {}),
+      }),
+      "close",
+    );
+  });
+
+  /** The abort cleanup with its retries; every caller uses this one. */
+  const finishAbortedSwitchRetried = (input: {
+    readonly threadId: ThreadId;
+    readonly switchId: ProviderSwitchId;
+  }) =>
+    finishAbortedSwitch(input).pipe(
+      Effect.retry({ times: 3, schedule: Schedule.exponential("200 millis") }),
+    );
+
+  const cleanUpAbortedSwitch = (input: {
+    readonly threadId: ThreadId;
+    readonly switchId: ProviderSwitchId;
+  }) => runExclusive(input.threadId, finishAbortedSwitchRetried(input));
+
+  /**
+   * Startup recovery (§9.1), from recorded facts only. Returns the switches to
+   * resume; the caller runs them after the reactor is subscribed.
+   */
+  /**
+   * Startup recovery (§9.1), one run per thread through the same guard as
+   * resume, so it can never act on a switch a live run is still driving.
+   */
+  const recoverAtStartup = Effect.fn("recoverProviderSwitchesAtStartup")(function* () {
+    const rows = yield* deps.switches.listStates();
+    return rows
+      .filter((row) => row.state.pending !== null && row.state.pending.status !== "awaiting-user")
+      .map((row) => ({ threadId: row.threadId, switchId: row.state.pending!.switchId }));
+  });
+
+  /** Recovers one thread's switch from its current state, then runs it on. */
+  const recoverThread = (input: {
+    readonly threadId: ThreadId;
+    readonly switchId: ProviderSwitchId;
+  }) =>
+    runExclusive(
+      input.threadId,
+      Effect.gen(function* () {
+        const pending = yield* readPending(input.threadId);
+        if (pending === null || pending.switchId !== input.switchId) return;
+        if (pending.status === "closing") {
+          yield* finishAbortedSwitchRetried(input);
+          return;
+        }
+        if (pending.status !== "in-progress") return;
+        // One switch failing to recover must not stop the others.
+        const outcome = yield* recoverOne(input.threadId, pending).pipe(
+          Effect.catchCause((cause) =>
+            awaitUser(
+              input.threadId,
+              pending.switchId,
+              pending.deliveryUncertain && !pending.resendAllowed
+                ? "unknown-delivery"
+                : "failed-retryable",
+              describeCause(cause),
+            ).pipe(
+              Effect.catchCause((waitCause) =>
+                Effect.logError("provider switch recovery and its wait both failed", {
+                  threadId: input.threadId,
+                  switchId: pending.switchId,
+                  cause: describeCause(cause),
+                  waitCause: describeCause(waitCause),
+                }),
+              ),
+              Effect.as("handled" as const),
+            ),
+          ),
+        );
+        if (outcome === "resume") yield* resumeSwitchInner(input);
+      }),
+    );
+
+  const recoverOne = Effect.fn("recoverProviderSwitch")(function* (
+    threadId: ThreadId,
+    pending: OrchestrationPendingProviderSwitch,
+  ) {
+    const latestSubmit = pending.attempts.findLast((attempt) => attempt.kind === "submit");
+    if (latestSubmit?.status === "planned") {
+      // Sent or not, nobody recorded the outcome: never send it again by itself.
+      yield* awaitUser(
+        threadId,
+        pending.switchId,
+        "unknown-delivery",
+        "再起動したため、送信が届いたか確認できませんでした。",
+      );
+      return "handled" as const;
+    }
+    if (
+      latestSubmit?.status === "succeeded" &&
+      latestSubmit.turnId !== null &&
+      !pending.resendAllowed
+    ) {
+      // The provider accepted it (turnId and model recorded); only delivered was missing.
+      const turnId = latestSubmit.turnId;
+      const attemptId = latestSubmit.attemptId;
+      const model = latestSubmit.model ?? undefined;
+      yield* dispatchSwitch(
+        (base) => ({
+          type: "thread.provider-switch.milestone",
+          ...base,
+          threadId,
+          switchId: pending.switchId,
+          milestone: "delivered",
+          attemptId,
+          turnId,
+          ...(model !== undefined ? { model } : {}),
+        }),
+        "recover-delivered",
+      );
+      return "handled" as const;
+    }
+    // Nothing was sent since the last grant. A start left planned died with the process.
+    const danglingStart = pending.attempts.find(
+      (attempt) => attempt.kind === "start" && attempt.status === "planned",
+    );
+    if (danglingStart !== undefined) {
+      yield* dispatchSwitch(
+        (base) => ({
+          type: "thread.provider-switch.attempt",
+          ...base,
+          threadId,
+          switchId: pending.switchId,
+          attemptId: danglingStart.attemptId,
+          kind: "start",
+          status: "failed",
+          detail: "再起動で中断しました。",
+        }),
+        "recover-start",
+      );
+    }
+    return "resume" as const;
+  });
+
   const refuseSwitch = (input: {
     readonly threadId: ThreadId;
     readonly messageId: MessageId;
@@ -758,6 +1108,11 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
     refuseSwitch,
     recordNativeTurnAssignment,
     markSendRejected,
+    resumeSwitch,
+    cleanUpAbortedSwitch,
+    recoverAtStartup,
+    recoverThread,
+    runExclusive,
   };
 }
 

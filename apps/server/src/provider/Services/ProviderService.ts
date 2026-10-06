@@ -108,7 +108,23 @@ export interface ProviderServiceShape {
    */
   readonly releaseThreadForHandoff: (
     threadId: ThreadId,
+    options?: {
+      /**
+       * Also stop the thread's session on this instance even when the binding
+       * names another one (a session whose start was never recorded).
+       */
+      readonly alsoStopInstanceId?: ProviderInstanceId;
+    },
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * The thread's live sessions on every instance, as the adapters see them,
+   * without the binding checks of listSessions: a mismatch in another thread
+   * (or in this one) never fails it. Used by cross-provider switches.
+   */
+  readonly listThreadSessions: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<ProviderSession>, ProviderServiceError>;
 
   /**
    * Stop a provider session.

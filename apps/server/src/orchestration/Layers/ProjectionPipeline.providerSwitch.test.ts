@@ -255,6 +255,7 @@ engineLayer("provider switch persistence", (it) => {
           detail: "start failed",
         },
         { type: "thread.provider-switch.abort", ...base(), returnToPrevious: false },
+        { type: "thread.provider-switch.close", ...base() },
       ]);
       const rows = yield* sql<{ readonly deliveryState: string | null }>`
         SELECT delivery_state AS "deliveryState"

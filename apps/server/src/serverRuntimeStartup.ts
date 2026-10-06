@@ -649,7 +649,9 @@ export const reconcileProviderSessions = Effect.gen(function* () {
       (session.status === "running" || session.status === "starting" || preparedWhileReady) &&
       binding.value.resumeCursor != null &&
       thread.archivedAt === null &&
-      thread.deletedAt === null
+      thread.deletedAt === null &&
+      // An unresolved provider switch owns the thread; its own recovery runs it (§9.1).
+      (thread.providerSwitch?.pending ?? null) === null
     ) {
       const prepared = yield* Effect.gen(function* () {
         yield* directory.upsert({

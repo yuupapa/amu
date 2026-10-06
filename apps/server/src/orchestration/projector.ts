@@ -18,6 +18,7 @@ import {
   ThreadProviderSwitchMilestoneReachedPayload,
   ThreadProviderSwitchPacketBuiltPayload,
   ThreadProviderSwitchRequestedPayload,
+  ThreadProviderSwitchClosedPayload,
   ThreadProviderSwitchResolvedPayload,
   ThreadProviderSwitchRetryRequestedPayload,
   type OrchestrationThreadProviderSwitchState,
@@ -236,6 +237,7 @@ const PROVIDER_SWITCH_PAYLOAD_SCHEMAS = {
   "thread.provider-switch-retry-requested": ThreadProviderSwitchRetryRequestedPayload,
   "thread.provider-switch-aborted": ThreadProviderSwitchAbortedPayload,
   "thread.provider-switch-resolved": ThreadProviderSwitchResolvedPayload,
+  "thread.provider-switch-closed": ThreadProviderSwitchClosedPayload,
 } as const satisfies Record<ProviderSwitchEvent["type"], unknown>;
 
 /** Patch for a thread's switch state; leaves threads that never had one untouched. */
@@ -1200,6 +1202,7 @@ export function projectEvent(
     case "thread.provider-switch-retry-requested":
     case "thread.provider-switch-aborted":
     case "thread.provider-switch-resolved":
+    case "thread.provider-switch-closed":
       return decodeForEvent(
         PROVIDER_SWITCH_PAYLOAD_SCHEMAS[event.type] as Schema.Decoder<
           ProviderSwitchEvent["payload"],

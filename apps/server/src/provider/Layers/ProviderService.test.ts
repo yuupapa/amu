@@ -2411,6 +2411,46 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("lists one thread's sessions even while another thread's binding is stale", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const healthy = asThreadId("thread-per-thread-healthy");
+      const stale = asThreadId("thread-per-thread-stale");
+      for (const threadId of [healthy, stale]) {
+        yield* provider.startSession(threadId, {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: fixtureCwd("project"),
+          runtimeMode: "full-access",
+        });
+      }
+      // A Claude session for the stale thread that its (Codex) binding never recorded.
+      yield* routing.claude.adapter.startSession({
+        threadId: stale,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+
+      const healthySessions = yield* provider.listThreadSessions(healthy);
+      assert.deepEqual(
+        healthySessions.map((session) => session.providerInstanceId),
+        [codexInstanceId],
+      );
+      const staleSessions = yield* provider.listThreadSessions(stale);
+      assert.deepEqual(staleSessions.map((session) => session.provider).toSorted(), [
+        "claudeAgent",
+        "codex",
+      ]);
+      yield* routing.claude.adapter.stopSession(stale);
+      for (const threadId of [healthy, stale]) {
+        yield* provider.stopSession({ threadId });
+      }
+    }),
+  );
+
   it.effect("releases a thread for a handoff: cursor cleared, runtime payload replaced", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
@@ -5552,6 +5592,95 @@ postAcceptWriteFails.layer("ProviderServiceLive after acceptance", (it) => {
       assert.strictEqual(postAcceptWriteFails.codex.sendTurn.mock.calls.length, 1);
       assert.ok(result.turnId);
       assert.strictEqual(result.providerInstanceId, codexInstanceId);
+    }),
+  );
+});
+
+/**
+ * Steps the test clock until the fiber finishes: one big jump can land before
+ * a retry starts sleeping, and that sleep would then never end.
+ */
+const advanceUntilDone = <A, E>(fiber: Fiber.Fiber<A, E>): Effect.Effect<A, E> =>
+  Effect.gen(function* () {
+    for (let step = 0; step < 200; step += 1) {
+      if (fiber.pollUnsafe() !== undefined) break;
+      yield* TestClock.adjust("50 millis");
+      yield* Effect.yieldNow;
+    }
+    return yield* Fiber.join(fiber);
+  });
+
+const startWriteFails = makeProviderServiceLayer({
+  directory: {
+    upsert: () =>
+      Effect.fail(
+        new ProviderValidationError({ operation: "test", issue: "binding write failed" }),
+      ),
+    recordImportedTranscript: () => Effect.die("unused"),
+    getProvider: () => Effect.die("unused"),
+    getBinding: () => Effect.succeedNone,
+    listThreadIds: () => Effect.succeed([] as never),
+    listBindings: () => Effect.succeed([] as never),
+  },
+});
+
+startWriteFails.layer("ProviderServiceLive failed start bookkeeping", (it) => {
+  it.effect("stops a provider session whose binding could not be recorded", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-start-write-fails");
+      const error = yield* provider
+        .startSession(threadId, {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: fixtureCwd("project"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+      assert.ok(error);
+      // The adapter session was started, then stopped: nothing unbound survives.
+      assert.strictEqual(startWriteFails.codex.startSession.mock.calls.length, 1);
+      assert.deepEqual(startWriteFails.codex.stopSession.mock.calls.at(-1), [threadId]);
+      assert.strictEqual(yield* startWriteFails.codex.adapter.hasSession(threadId), false);
+    }),
+  );
+
+  it.effect("stops by instance a session whose failed start could not even be stopped", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-start-undo-fails");
+      const original = startWriteFails.codex.stopSession.getMockImplementation()!;
+      startWriteFails.codex.stopSession.mockImplementation(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "codex",
+              method: "session.stop",
+              detail: "stop failed",
+            }),
+          ) as never,
+      );
+      // The undo stop backs off between retries: advance the test clock.
+      const starting = yield* provider
+        .startSession(threadId, {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: fixtureCwd("project"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip, Effect.forkChild);
+      yield* advanceUntilDone(starting);
+      // Undo failed: the session is alive and no binding names it.
+      assert.strictEqual(yield* startWriteFails.codex.adapter.hasSession(threadId), true);
+
+      startWriteFails.codex.stopSession.mockImplementation(original);
+      const releasing = yield* provider
+        .releaseThreadForHandoff(threadId, { alsoStopInstanceId: codexInstanceId })
+        .pipe(Effect.forkChild);
+      yield* advanceUntilDone(releasing);
+      assert.strictEqual(yield* startWriteFails.codex.adapter.hasSession(threadId), false);
     }),
   );
 });

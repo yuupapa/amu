@@ -35,7 +35,8 @@ export type ProviderSwitchCommand = Extract<
       | "thread.provider-switch.await-user"
       | "thread.provider-switch.retry"
       | "thread.provider-switch.abort"
-      | "thread.provider-switch.resolve";
+      | "thread.provider-switch.resolve"
+      | "thread.provider-switch.close";
   }
 >;
 
@@ -50,7 +51,8 @@ export type ProviderSwitchEvent = Extract<
       | "thread.provider-switch-awaiting-user"
       | "thread.provider-switch-retry-requested"
       | "thread.provider-switch-aborted"
-      | "thread.provider-switch-resolved";
+      | "thread.provider-switch-resolved"
+      | "thread.provider-switch-closed";
   }
 >;
 
@@ -148,9 +150,19 @@ export function checkProviderSwitchCommand(
     case "thread.provider-switch.retry":
       return requireAwaiting(pending, "failed-retryable", "retry");
     case "thread.provider-switch.abort":
+      if (pending.status === "closing") {
+        // The same abort again is a no-op.
+        return pending.closing?.returnToPrevious === command.returnToPrevious
+          ? null
+          : `Provider switch '${pending.switchId}' is already closing.`;
+      }
       return requireAwaiting(pending, "failed-retryable", "abort");
     case "thread.provider-switch.resolve":
       return requireAwaiting(pending, "unknown-delivery", `resolve(${command.decision})`);
+    case "thread.provider-switch.close":
+      return pending.status === "closing"
+        ? null
+        : `Provider switch '${pending.switchId}' was not aborted.`;
   }
 }
 
@@ -267,9 +279,9 @@ function checkAttempt(
     return `Attempt ${command.attemptId} reserved generation ${existing.generation}.`;
   }
   if (existing.status === command.status) {
-    return existing.turnId === turnId
+    return existing.turnId === turnId && (existing.model ?? null) === (command.model ?? null)
       ? null
-      : `Attempt ${command.attemptId} already ${existing.status} with a different turn.`;
+      : `Attempt ${command.attemptId} already ${existing.status} with a different turn or model.`;
   }
   if (existing.status !== "planned") {
     return `Attempt ${command.attemptId} already ${existing.status}.`;
@@ -319,6 +331,9 @@ function checkAwaitUser(
   pending: OrchestrationPendingProviderSwitch,
   command: CommandOf<"thread.provider-switch.await-user">,
 ): string | null {
+  if (pending.status === "closing") {
+    return `Provider switch '${pending.switchId}' is closing.`;
+  }
   if (command.attemptId !== lastAttemptId(pending)) {
     return `The wait names attempt ${command.attemptId}; the latest is ${lastAttemptId(pending)}.`;
   }
@@ -384,6 +399,22 @@ function resolvePending(
   };
 }
 
+const closedRecord = (
+  state: OrchestrationThreadProviderSwitchState,
+  reason: "aborted" | "discarded",
+): Partial<OrchestrationThreadProviderSwitchState> =>
+  state.pending === null
+    ? {}
+    : {
+        lastClosed: {
+          switchId: state.pending.switchId,
+          from: state.pending.from,
+          to: state.pending.to,
+          reason,
+          oldStopped: state.pending.milestone !== "requested",
+        },
+      };
+
 const abandonPlanned = (attempts: ReadonlyArray<ProviderSwitchAttemptState>) =>
   attempts.map((attempt) =>
     attempt.status === "planned" ? { ...attempt, status: "abandoned" as const } : attempt,
@@ -437,6 +468,7 @@ export function applyProviderSwitchEvent(
         return state;
       }
       return resolvePending(state, payload.switchId, {
+        handoffUnconfirmedInstanceId: null,
         lastDelivered: {
           switchId: pending.switchId,
           attemptId: payload.attemptId,
@@ -491,7 +523,12 @@ export function applyProviderSwitchEvent(
         const existing = pending.attempts[index];
         if (existing === undefined || existing.status !== "planned") return pending;
         const attempts = pending.attempts.slice();
-        attempts[index] = { ...existing, status: payload.status, turnId: payload.turnId ?? null };
+        attempts[index] = {
+          ...existing,
+          status: payload.status,
+          turnId: payload.turnId ?? null,
+          ...(payload.model !== undefined ? { model: payload.model } : {}),
+        };
         return { ...pending, attempts };
       });
     }
@@ -520,10 +557,40 @@ export function applyProviderSwitchEvent(
           : pending,
       );
     case "thread.provider-switch-aborted":
-      return resolvePending(state, event.payload.switchId);
+      return patchPending(state, event.payload.switchId, (pending) =>
+        pending.status === "awaiting-user" && pending.awaitingReason === "failed-retryable"
+          ? {
+              ...pending,
+              status: "closing",
+              awaitingReason: null,
+              closing: { returnToPrevious: event.payload.returnToPrevious },
+            }
+          : pending,
+      );
+    case "thread.provider-switch-closed":
+      if (state.pending?.status !== "closing") return state;
+      return resolvePending(state, event.payload.switchId, {
+        ...closedRecord(state, "aborted"),
+        // Only a session cleanup actually stopped stops being unconfirmed.
+        ...(event.payload.releasedInstanceId !== undefined &&
+        event.payload.releasedInstanceId === state.handoffUnconfirmedInstanceId
+          ? { handoffUnconfirmedInstanceId: null }
+          : {}),
+      });
     case "thread.provider-switch-resolved":
       if (event.payload.decision === "discard") {
-        return resolvePending(state, event.payload.switchId);
+        const startedNew =
+          state.pending?.switchId === event.payload.switchId &&
+          state.pending.attempts.some(
+            (attempt) => attempt.kind === "start" && attempt.status === "succeeded",
+          );
+        return resolvePending(state, event.payload.switchId, {
+          ...closedRecord(state, "discarded"),
+          // The new session is left running and may not have the packet.
+          ...(startedNew && state.pending !== null
+            ? { handoffUnconfirmedInstanceId: state.pending.to.instanceId }
+            : {}),
+        });
       }
       return patchPending(state, event.payload.switchId, (pending) =>
         pending.status === "awaiting-user" && pending.awaitingReason === "unknown-delivery"

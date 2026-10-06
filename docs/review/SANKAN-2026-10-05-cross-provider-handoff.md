@@ -1193,3 +1193,228 @@ server・contractsの型チェックは成功。SQLテスト本体19件と反例
 server・contractsの型チェックは成功。SQLテスト本体19件と前回の反例は、読み取り専用ハーネスで再検証しました。Vitest全体は再実行していません。コード変更なしです。
 
 **次の部分（retry/resolve/abortと起動時の復旧）に進んでよいです。** 復旧でも、§4.5の「pendingを推測でdelivered／rejectedに変えない」方針を維持してください。
+
+## コードレビュー: Phase 1 第2部分（retry・resolve・abort の処理と起動時の復旧、2026-10-06）
+
+経過: 第1巡 Red（Major7）→ 第2巡 Red（Major3・Minor2）→ 第3巡 Red（Major3）→ 第4巡 Red（Major1）→ 第5巡 Red（Major1）→ 第6巡 Red（Major1）→ 第7巡 Green
+
+### 第1巡（Codex 原文）
+
+判定: **Red**
+
+Blockerなし、Major 7件、Minorなしです。二重送信と、再起動後に操作を復旧できない経路があります。
+
+1. Major — 同じswitchを二重にresumeして送信できる  
+   [ProviderCommandReactor.ts:2007](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:2007)、起動時側:2200
+
+   activation後の復旧とretry/resendイベントは、独立してresumeをforkします。retryがDBへ反映された後、イベント処理前に復旧がその状態を読むと、両方から同じswitchを進められます。同じattemptIdのplannedは冪等として受理されるため、二重実行を防ぎません。ハーネスでsendTurnが2回になることを確認しました。
+
+   直し方: threadId/switchIdごとに実行中のfiberを管理し、再開を一本化してください。復旧対象の確定と通常イベントの処理開始にも順序を設けます。activation直後のretryと、送信受付待ちを重ねるテストが必要です。
+
+2. Major — resendの許可を古い成功記録で閉じる  
+   [providerSwitchFlow.ts:849](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:849)
+
+   `submit成功 → delivered記録失敗 → unknown-delivery → resolve(resend) → 新しいsubmit前に再起動`で起きます。resendAllowedを確認せず、前のsubmitのturnIdでdeliveredにしてしまい、許可された再送を行いません。実際のengineとSQL保存を使ったハーネスでも再現しました。
+
+   直し方: 未使用のresendAllowedを復旧判定に反映し、古い成功記録で現在の再開を完了させないようにしてください。この順序と、再開後のstartだけがplannedで残る場合をテストに加えます。
+
+3. Major — abort後の掃除を再起動で失う  
+   [providerSwitchFlow.ts:795](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:795)、復旧の除外条件:836
+
+   abortは先にpendingを消し、その後でセッション停止とモデル復元を行います。コミット後・掃除前の停止やreleaseの失敗では、次の起動時に`pending === null`として対象外になります。白紙の新セッションや新しいモデル選択が残り、解決済みなのでabortも再受付できません。lastClosedにはreturnToPreviousと掃除の完了記録がありません。
+
+   直し方: returnToPreviousと掃除の未完了/完了を永続化し、未完了のabortを起動時にも処理してください。掃除が終わるまで通常送信を拒否し、abort保存直後の再起動と停止失敗をテストします。
+
+4. Major — 同じinstanceの別モデルをキャッシュから選んでしまう  
+   [providerSwitchFlow.ts:774](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:774)、元に戻す側:817
+
+   cachedSelectionはinstanceIdだけを照合します。同じinstanceのモデルAからBへ乗り換える際、開始失敗後のretryではキャッシュのAを再開先に使えます。開始成功後のabort(returnToPrevious)では、更新済みのキャッシュBを旧モデルとして復元する誤りです。両方をハーネスで確認しました。
+
+   直し方: 保存済みpending.to/lastClosed.fromのモデルを必ず使用してください。完全な選択をキャッシュから使う場合はモデルまで照合するか、from/toの選択を別々に保持します。同一instance・異なるモデルのretryとabortを追加してください。
+
+5. Major — 一件の復旧失敗で他のswitchも復旧しない  
+   [providerSwitchFlow.ts:834](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:834)、[ProviderCommandReactor.ts:2208](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:2208)
+
+   ループ内のdispatchが一度失敗すると、集めたtoResumeも返されず、後続スレッドも処理されません。呼び出し側はログだけで終了します。残ったin-progressの操作は通常送信を拒否し、retry/abort/resolveの受付条件にも入りません。
+
+   直し方: スレッドごとに失敗を処理して他の復旧を続け、失敗した操作にも再試行または判断待ちへ移す経路を設けてください。複数スレッドの途中で一件だけ記録を失敗させるテストが必要です。
+
+6. Major — 復旧でプロバイダーの報告モデルを失う  
+   [providerSwitchFlow.ts:853](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:853)
+
+   通常経路ではsubmit-succeededにturnIdだけを保存し、報告モデルは次のdeliveredコマンドに渡しています。その間に停止すると、復旧はmodelなしでdeliveredを作り、担当記録にpending.to.modelの要求名を使います。別名を解決するプロバイダーでは、実際の担当モデルと異なる記録です。
+
+   直し方: 成功したsubmitのイベントと状態に報告モデルも保存し、復旧のdeliveredへ渡してください。別名を使い、submit成功保存後・delivered前に停止するテストを追加します。
+
+7. Major — discard後、引き継ぎ未確認のセッションをnative継続する  
+   [ProviderCommandReactor.ts:2079](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:2079)、[providerSwitchFlow.ts:236](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:236)
+
+   送信が受付前に失敗してdiscardした場合も、新セッションは白紙のまま残ります。次のdecideではawaitingHandoffDeliveryを常にfalseにするため、nativeとして通常本文だけを送ります。セッションを止めない処理は§8.2に合いますが、§3.1の「配達前の新セッションをnativeの根拠にしない」条件を満たしません。
+
+   直し方: セッションと乗り換え操作の対応、引き継ぎの配達確認を保持し、未確認ならnativeの根拠から外してください。実行中のターンを停止せず、次の送信時に再判定します。discard後の通常送信までテストに加えてください。
+
+server・contractsの型チェックは通過しました。再現確認には、コードを変更せず実行するインメモリのハーネスを使用しています。
+
+**次の部分（世代の付与と古いイベントの破棄）に進んでよいか: 現状では不可です。** 上記の修正と境界条件のテストを先に完了してください。
+
+### 第2巡（Codex 原文）
+
+判定: **Red**
+
+Blockerなし、Major 3件、Minor 2件です。前回の再送許可・キャッシュ選択・スレッド別復旧・報告モデルの問題は解消しています。二重送信も防げていますが、後始末の取りこぼしと、discard後のセッション保護に問題が残ります。
+
+1. Major — runExclusiveがabortの後始末を取りこぼす  
+   [providerSwitchFlow.ts:145](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:145)、再実行側:152
+
+   実行中に別の処理が来るとrerunだけを立て、最初に渡されたrunを繰り返します。resumeがawait-userを保存した後、markSessionFailedの完了前にabortすると、cleanupは実行されずに戻ります。その後、元のresumeがclosingを読んで終了するため、後始末が成功可能でもclosingに残ります。ハーネスではrelease 0回、close 0件でした。
+
+   直し方: 後から来た処理も保持するか、現在のpending・switchId・statusからresume/cleanupを選ぶ共通処理を再実行してください。await-user保存後のセッション更新をDeferredで止め、その間にabortするテストが必要です。
+
+2. Major — 受付不明にすると実行中のターンまでerrorにする  
+   [providerSwitchFlow.ts:373](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:373)、[ProviderCommandReactor.ts:1321](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1321)
+
+   markSessionFailedはunknown-deliveryでも呼ばれ、既存処理の:442でrunningもerror・`activeTurnId: null`へ変えます。turn.startedが届いた後に送信の応答やdeliveredの記録が失敗すると、実際には作業中でも、その記録を消してしまいます。
+
+   その後discardして送信すると、decideの作業中ガードを通過し、乗り換えの旧セッション停止で実行中のターンを止められます。実際のengine・SQLを使ったハーネスで、running→error/nullと、その後のhandoff許可を確認しました。
+
+   直し方: startingの残留解消と、runningのターンの扱いを分けてください。受付不明でも観測済みのrunning/activeTurnIdを保持し、decideでもプロバイダーの稼働状態を確認します。`turn.started → 記録失敗 → discard → 次の送信`でターンを止めないテストが必要です。
+
+3. Major — 旧セッションを残したabortでも未確認フラグを消す  
+   [providerSwitchState.ts:575](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:575)、[providerSwitchFlow.ts:862](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:862)
+
+   discardで未確認になったセッションへ再び引き継ごうとし、旧セッションの停止が失敗してrequestedのままabortすると起きます。後始末は旧セッションに触れませんが、closedでhandoffUnconfirmedInstanceIdを無条件にnullにします。その結果、引き継ぎを受けていないセッションをnative継続できます。ハーネスでも停止0回のままフラグが消え、nativeと判定されました。
+
+   直し方: closedでの無条件クリアをやめてください。対象セッションを停止したことが確認できた場合、または新しい引き継ぎのdelivered時に解除します。`discard → 停止失敗 → abort → 次の送信`までテストしてください。
+
+4. Minor — 成功結果の冪等照合にmodelが含まれない  
+   [providerSwitchState.ts:281](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:281)
+
+   記録済みと同じattemptId・turnIdなら、modelだけ異なるsucceededも受理します。イベントには新しいmodelを保存しますが、projectorは結果済みとして無視するため、成功を返した内容と状態が一致しません。model Aの後にBを送って受理され、状態にはAが残ることを確認しました。
+
+   直し方: modelも結果の同一性照合に含めてください。旧イベントのmodel未設定の扱いも決め、同じmodelの重複と異なるmodelの再記録をテストします。
+
+5. Minor — 復旧と判断待ちの記録が両方失敗してもログが出ない  
+   [providerSwitchFlow.ts:948](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:948)
+
+   awaitUserの失敗を無視してhandledを返すため、呼び出し元のログ処理にも届きません。ハーネスでは両方のdispatchを失敗させてもrecoverThreadが成功終了し、状態はin-progressのままでした。「それも失敗すればログのみ」という今回の方針を満たしていません。
+
+   直し方: 最後の失敗をthreadId・switchId付きでログに残してください。他のスレッドの復旧は継続する形で構いません。
+
+server・contractsの型チェックは通過しました。再現確認は読み取り専用のハーネスで行い、コードは変更していません。Vitest全体は再実行していません。
+
+**次の部分（世代の付与と古いイベントの破棄）に進んでよいか: 現状では不可です。** Major 3件を修正し、競合と後続操作のテストを通してから進めてください。
+
+### 第3巡（Codex 原文）
+
+判定: **Red**
+
+Blockerなし、Major 3件、Minorなしです。前回の取りこぼし・未確認フラグ・model照合・復旧ログは解消しました。running保護は一部解消で、確認と更新の間の競合が残ります。
+
+1. Major — binding保存失敗後のabortが新セッションを残して解決する  
+   [providerSwitchFlow.ts:890](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:890)、[ProviderService.ts:1411](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1411)
+
+   startSessionはプロバイダーの開始後にbindingを書きます。そこで保存が失敗すると、新セッションは生きていますが、bindingは停止済みの旧instanceを指したままです。flowはstartをfailedとして判断待ちにします。その後のabortではbindingがtoと違うため停止を省略し、closeで解決してしまいます。残ったセッションとbindingの不一致で、ProviderService.listSessionsも失敗します。
+
+   実装のstartSession/listSessionsを使ったハーネスで、`開始失敗 → abort後も新セッションが生存 → pendingはnull → listSessions失敗`を確認しました。
+
+   直し方: startSession側で開始後の内部記録失敗時に作ったセッションを停止するか、abortの後始末で実際に開始したtoのセッションも確認してください。停止完了を確認するまでcloseせず、adapter開始成功後のbinding書き込みだけを失敗させるテストが必要です。
+
+2. Major — startingの確認後にrunningへ変わると上書きする  
+   [ProviderCommandReactor.ts:1324](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1324)、既存ヘルパー:428・442
+
+   最初のresolveThreadShellでstartingを確認した後、呼び出すヘルパーが再び状態を読みます。この間にturn.startedがrunning/activeTurnIdを保存すると、ヘルパーはそのrunningをerror・`activeTurnId: null`に変えます。ヘルパーの読み取り後からdispatchまでの間にも同じ競合があります。
+
+   実際のengine・SQLを使い、最初の確認直後にrunningを保存するとerror/nullになることを確認しました。プロバイダー側の作業中ガードは修正済みですが、スレッドの実行状態は失われます。
+
+   直し方: startingだけを変更する条件を、deciderで現在状態を照合する条件付き更新にしてください。turn.startedの反映を確認と更新の間に挟み、runningとactiveTurnIdが残るテストが必要です。同じ世代の通常イベントでも起きるため、次の部分の古いイベント破棄だけでは解決しません。
+
+3. Major — driveThreadの後始末だけ再試行しない  
+   [providerSwitchFlow.ts:865](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:865)、再実行時の失敗処理:157
+
+   通常のcleanupと起動時復旧には再試行がありますが、実行中のabortをdriveThreadへ回した場合はfinishAbortedSwitchを一度だけ呼びます。一時的な停止失敗でも、警告を出して終了し、closingに残ります。
+
+   ハーネスでは、最初の停止だけを失敗させると停止1回・close 0件で終了しました。後始末を明示的に再実行すると、次の停止は成功して解決します。
+
+   直し方: 再試行付きの後始末を共通化し、driveThreadからも呼んでください。await-user保存後の処理をDeferredで止め、abortを重ね、最初の停止だけ失敗させるテストを追加します。
+
+コードは変更していません。server・contractsの型チェックは通過しました。再現確認はインメモリのハーネスによるもので、Vitest全体は再実行していません。
+
+**次の部分（世代の付与と古いイベントの破棄）に進んでよいか: 現状では不可です。** Major 3件を修正し、対応する境界条件のテストを通してから進めてください。
+
+### 第4巡（Codex 原文）
+
+判定: **Red**
+
+Blocker: なし。Major: 1件。Minor: なし。
+
+**Major 1 — binding保存失敗後の停止も失敗すると、新セッションを残したままabortが完了する**
+
+対象: [ProviderService.ts:1419](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1419)、[providerSwitchFlow.ts:891](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:891)
+
+開始後のbinding保存に失敗すると新セッションを停止しますが、その停止の失敗はログだけにしています。bindingが旧instanceのままなので、続くabortの後始末では新セッションを停止せず、closeを確定します。
+
+binding書き込み失敗と「最初の停止だけ失敗」を組み合わせて再現しました。abort後も新セッションが生存し、pendingはnullになります。さらに、[ProviderService.ts:2111](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:2111)の不一致チェックでlistSessionsも失敗します。
+
+直し方: 開始を取り消す停止を再試行し、生存確認を行ってください。停止できない場合も、bindingの保存成功に依存せず、作成したinstanceを後始末できるようにする必要があります。停止を確認するまでclosingを解決せず、この複合失敗をテストに追加してください。
+
+前回の残り2件（expectedStatusによる競合拒否、重なったabortの後始末再試行）は修正を確認しました。server/contractsの型チェックは通過。再現は現行処理を使うインメモリハーネスで確認し、Vitestは再実行していません。コードは変更していません。
+
+次の部分（世代の付与と古いイベントの破棄）に進んでよいか: **上記Majorを修正してから進んでください。**
+
+### 第5巡（Codex 原文）
+
+判定: **Red**
+
+Blocker: なし。Major: 1件。Minor: なし。
+
+前回のMajorは解消しました。abortでinstance指定の停止が行われ、停止失敗中はclosingに残り、停止できれば解決することを確認しました。
+
+**Major 1 — 取り消しに失敗して残った新セッションをretryでは回収できない**
+
+対象: [providerSwitchFlow.ts:511](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:511)、[ProviderService.ts:2142](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:2142)
+
+binding保存と取り消しの停止が失敗すると、新セッションが生きたままfailed-retryableになります。この状態でretryすると、残存セッションを片付ける前にlistSessionsを呼ぶため、旧bindingとの不一致で失敗します。新しいstart試行に進めず、再びfailed-retryableとなる経路です。
+
+保存と停止の障害を解消してから2回retryしても、開始試行は1件のまま、停止回数も増えないことを再現しました。abortでは回復できますが、「もう一度試す」では回復できません。
+
+直し方: 成功が記録されていないstart試行の再開では、listSessionsより先にto.instanceIdの残存セッションを停止・確認し、その後で新しい開始試行に進めてください。今回の複合失敗から、障害解消後のretryでdeliveredまで進むテストも追加してください。
+
+server/contractsの型チェックは通過。再現は現行処理を使うインメモリハーネスで確認しました。Vitestは再実行していません。コード変更はありません。
+
+次の部分（世代の付与と古いイベントの破棄）に進んでよいか: **上記Majorを修正してから進んでください。**
+
+### 第6巡（Codex 原文）
+
+判定: **Red**
+
+Blocker: なし。Major: 1件。Minor: なし。
+
+前回のMajorは解消しました。残存セッションをinstance指定で停止し、retryで再開始してdeliveredまで進むことを確認しました。
+
+**Major 1 — 別スレッドの残存セッションが、復旧・retryを妨げる**
+
+対象: [providerSwitchFlow.ts:523](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:523)、[ProviderCommandReactor.ts:613](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:613)、[ProviderService.ts:2142](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:2142)
+
+listSessionsのbinding不一致は`Effect.die`で返されます。`orElseSucceed`は通常のエラーだけを拾うため、この不一致を「稼働していない」として処理できません。
+
+Bに未記録の新セッションが残り、Aにstart成功記録がある状態でAを再開すると、Bの不一致でAもfailed-retryableへ戻ります。現行flowと実際のlistSessionsを使い、Aの停止・開始・送信がすべて0回になることを再現しました。
+
+さらに、handoff開始でもensureSessionForThreadが全スレッドのlistSessionsを呼びます。flow側のcatchだけを直しても、開始時に同じ不一致で失敗する経路が残ります。
+
+直し方: 乗り換えの稼働確認とhandoff開始では、対象スレッドだけのセッション取得・検証にしてください。falseへのフォールバックを維持するなら、`Effect.die`も拾い、割り込みは伝播させる必要があります。Bを判断待ちに残したまま、Aが復旧・retryでdeliveredまで進む2スレッドのテストも追加してください。
+
+server/contractsの型チェックは通過。実行確認はインメモリハーネスで行い、Vitestは再実行していません。コード変更はありません。
+
+次の部分（世代の付与と古いイベントの破棄）に進んでよいか: **上記Majorを修正してから進んでください。**
+
+### 第7巡（Codex 原文）
+
+判定: **Green**
+
+Blocker: なし。Major: なし。Minor: なし。
+
+前回のMajorは解消しました。別スレッドBのbinding不一致を残したまま、Aのretry・起動時復旧がそれぞれ開始1回・送信1回でdeliveredまで進むことを確認しました。handoff開始の照会もlistThreadSessionsを使い、通常経路は従来のlistSessionsを維持しています。
+
+server/contractsの型チェックとgit diff --checkは通過。実行確認は現行処理を使うインメモリハーネスで行いました。Vitestは再実行していません。コード変更はありません。
+
+次の部分（世代の付与と古いイベントの破棄）に進んでよいか: **進んでよいです。**

@@ -60,6 +60,7 @@ const makeProviderService = (liveThreadIds: ReadonlyArray<ThreadId> = []) =>
     sendTurn: () => Effect.die("unused"),
     compactThread: () => Effect.die("unused"),
     getThreadBinding: () => Effect.succeed(Option.none()),
+    listThreadSessions: () => Effect.succeed([]),
     releaseThreadForHandoff: () => Effect.void,
     interruptTurn: () => Effect.die("unused"),
     respondToRequest: () => Effect.die("unused"),

@@ -124,6 +124,7 @@ function createProviderServiceHarness() {
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
   const service: ProviderServiceShape = {
     getThreadBinding: () => Effect.succeed(Option.none()),
+    listThreadSessions: () => Effect.succeed([]),
     releaseThreadForHandoff: () => Effect.void,
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),

@@ -10,6 +10,7 @@ import {
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
+  type ProviderSwitchId,
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
@@ -88,7 +89,10 @@ type ProviderIntentEvent = Extract<
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
       | "thread.settled"
-      | "thread.session-set";
+      | "thread.session-set"
+      | "thread.provider-switch-retry-requested"
+      | "thread.provider-switch-resolved"
+      | "thread.provider-switch-aborted";
   }
 >;
 
@@ -601,10 +605,24 @@ const make = Effect.gen(function* () {
 
     const desiredRuntimeMode = thread.runtimeMode;
     const requestedModelSelection = options?.modelSelection;
+    // A handoff reads only this thread's sessions, so a stale binding in
+    // another thread cannot fail the new provider's start.
     const resolveActiveSession = (threadId: ThreadId) =>
-      providerService
-        .listSessions()
-        .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
+      options?.handoff === true
+        ? providerService
+            .listThreadSessions(threadId)
+            .pipe(
+              Effect.map((sessions) =>
+                sessions.find(
+                  (session) => session.providerInstanceId === requestedModelSelection?.instanceId,
+                ),
+              ),
+            )
+        : providerService
+            .listSessions()
+            .pipe(
+              Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)),
+            );
 
     const activeSession = yield* resolveActiveSession(threadId);
     const activeThreadSession =
@@ -1293,6 +1311,66 @@ const make = Effect.gen(function* () {
           ),
         ),
       ),
+    loadThread: (threadId) =>
+      resolveThreadShell(threadId).pipe(
+        Effect.map((thread) => thread ?? null),
+        Effect.orElseSucceed(() => null),
+      ),
+    loadMessage: (input) =>
+      projectionSnapshotQuery.getTurnStartMessage(input).pipe(
+        Effect.map((turnStart) =>
+          Option.isSome(turnStart) && turnStart.value.message.role === "user"
+            ? {
+                id: turnStart.value.message.id,
+                text: turnStart.value.message.text,
+                context: turnStart.value.message.context,
+                attachments: turnStart.value.message.attachments,
+              }
+            : null,
+        ),
+        Effect.orElseSucceed(() => null),
+      ),
+    // Only a session the switch left "starting" is settled, and only if it is
+    // still starting when the update is decided: a turn that started in the
+    // meantime keeps its running state and activeTurnId.
+    markSessionFailed: (input) =>
+      Effect.gen(function* () {
+        const thread = yield* resolveThreadShell(input.threadId);
+        const session = thread?.session;
+        if (session === null || session === undefined || session.status !== "starting") return;
+        const now = DateTime.formatIso(yield* DateTime.now);
+        yield* orchestrationEngine.dispatch({
+          type: "thread.session.set",
+          commandId: yield* serverCommandId("provider-switch-session-failed"),
+          threadId: input.threadId,
+          session: {
+            ...session,
+            status: "error",
+            activeTurnId: null,
+            lastError: input.detail.length > 0 ? input.detail : null,
+            updatedAt: now,
+          },
+          createdAt: now,
+          expectedStatus: "starting",
+        });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.fail(
+            new ProviderSwitchStepError({
+              step: "session-failed",
+              detail: formatFailureDetail(cause),
+            }),
+          ),
+        ),
+      ),
+    cachedSelection: (threadId, party) => {
+      const cached = threadModelSelections.get(threadId);
+      return cached !== undefined &&
+        cached.instanceId === party.instanceId &&
+        cached.model === party.model
+        ? cached
+        : undefined;
+    },
     resolveCwd: (thread) =>
       resolveProject(thread.projectId).pipe(
         Effect.map(
@@ -1639,20 +1717,23 @@ const make = Effect.gen(function* () {
         return;
       }
       yield* providerSwitchFlow
-        .continueSwitch({
-          thread,
-          switchId,
-          trigger: {
-            message: {
-              id: message.id,
-              text: message.text,
-              context: message.context,
-              attachments: message.attachments,
+        .runExclusive(
+          thread.id,
+          providerSwitchFlow.continueSwitch({
+            thread,
+            switchId,
+            trigger: {
+              message: {
+                id: message.id,
+                text: message.text,
+                context: message.context,
+                attachments: message.attachments,
+              },
+              interactionMode: event.payload.interactionMode,
+              toSelection: switchDecision.toSelection,
             },
-            interactionMode: event.payload.interactionMode,
-            toSelection: switchDecision.toSelection,
-          },
-        })
+          }),
+        )
         .pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("provider switch could not record its failure", {
@@ -1976,6 +2057,32 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /** Finishes an aborted switch off the worker; a restart repeats it if this fails. */
+  const forkProviderSwitchCleanup = (threadId: ThreadId, switchId: ProviderSwitchId) =>
+    providerSwitchFlow.cleanUpAbortedSwitch({ threadId, switchId }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider switch abort cleanup failed; it runs again at startup", {
+          threadId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+      Effect.forkScoped,
+      Effect.asVoid,
+    );
+
+  /** Runs a stored switch forward off the worker, like a send. */
+  const forkProviderSwitchResume = (threadId: ThreadId, switchId: ProviderSwitchId) =>
+    providerSwitchFlow.resumeSwitch({ threadId, switchId }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider switch could not resume", {
+          threadId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+      Effect.forkScoped,
+      Effect.asVoid,
+    );
+
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
     event: ProviderIntentEvent,
   ) {
@@ -2031,6 +2138,22 @@ const make = Effect.gen(function* () {
         return;
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
+        return;
+      case "thread.provider-switch-retry-requested":
+      case "thread.provider-switch-resolved": {
+        // discard closes the switch; the new session may be running the turn,
+        // so it is left alone (§8.2).
+        if (
+          event.type === "thread.provider-switch-resolved" &&
+          event.payload.decision !== "resend"
+        ) {
+          return;
+        }
+        yield* forkProviderSwitchResume(event.payload.threadId, event.payload.switchId);
+        return;
+      }
+      case "thread.provider-switch-aborted":
+        yield* forkProviderSwitchCleanup(event.payload.threadId, event.payload.switchId);
         return;
       case "thread.settled": {
         const thread = yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId);
@@ -2103,7 +2226,10 @@ const make = Effect.gen(function* () {
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested" ||
-        event.type === "thread.settled"
+        event.type === "thread.settled" ||
+        event.type === "thread.provider-switch-retry-requested" ||
+        event.type === "thread.provider-switch-resolved" ||
+        event.type === "thread.provider-switch-aborted"
       ) {
         return yield* worker.enqueue(event);
       }
@@ -2136,11 +2262,40 @@ const make = Effect.gen(function* () {
         );
       }),
     );
+    // §9.1: switches left in progress by the previous process.
+    const recoverSwitches = providerSwitchFlow.recoverAtStartup().pipe(
+      Effect.flatMap((entries) =>
+        Effect.forEach(
+          entries,
+          (entry) =>
+            providerSwitchFlow.recoverThread(entry).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("provider switch could not recover", {
+                  threadId: entry.threadId,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+              Effect.forkScoped,
+            ),
+          { discard: true },
+        ),
+      ),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.interrupt;
+        }
+        return Effect.logWarning("provider command reactor failed to recover provider switches", {
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
     const activation = yield* ServerActivation;
     if (activation === undefined) {
       yield* recoverTitles;
+      yield* recoverSwitches;
     } else {
       yield* forkParked(recoverTitles);
+      yield* forkParked(recoverSwitches);
     }
   });
 

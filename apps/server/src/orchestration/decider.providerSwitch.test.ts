@@ -143,6 +143,8 @@ const retry = (id = switchId) =>
   ({ type: "thread.provider-switch.retry", ...base(), switchId: id }) as const;
 const abort = () =>
   ({ type: "thread.provider-switch.abort", ...base(), switchId, returnToPrevious: false }) as const;
+const close = (id = switchId) =>
+  ({ type: "thread.provider-switch.close", ...base(), switchId: id }) as const;
 const resolve = (decision: "resend" | "discard") =>
   ({ type: "thread.provider-switch.resolve", ...base(), switchId, decision }) as const;
 const revert = (
@@ -283,6 +285,7 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
           lastDelivered: { switchId, attemptId: 2, turnId, boundaryTurnCount: 3 },
           resolvedSwitchIds: [switchId],
           hasHistory: true,
+          handoffUnconfirmedInstanceId: null,
           revertsInFlight: [],
         });
       }),
@@ -543,11 +546,14 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
     it.effect("abort closes the switch and cancels the message in the same commit", () =>
       Effect.gen(function* () {
         const model = yield* runModel(yield* started, [awaitUser("failed-retryable", 1)]);
-        const { model: closed, types } = yield* run(model, [abort()]);
+        const { model: closing, types } = yield* run(model, [abort()]);
         expect(types).toEqual([
           "thread.provider-switch-aborted",
           "thread.message-delivery-state-set",
         ]);
+        // Still unresolved until its cleanup closes it.
+        expect(switchState(closing)?.pending?.status).toBe("closing");
+        const closed = yield* runModel(closing, [close()]);
         expect(switchState(closed)).toMatchObject({
           pending: null,
           lastDelivered: null,
@@ -740,10 +746,14 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
     it.effect("refuses to reopen a delivered, aborted or discarded switch", () =>
       Effect.gen(function* () {
         expect(yield* refusal(yield* deliveredModel, request())).toContain("already resolved");
-        const aborted = yield* runModel(yield* started, [
+        const closing = yield* runModel(yield* started, [
           awaitUser("failed-retryable", 1),
           abort(),
         ]);
+        // While closing the switch is still unresolved: no retry, no new switch.
+        expect(yield* refusal(closing, retry())).toContain("not awaiting the user");
+        expect(yield* refusal(closing, awaitUser("failed-retryable", 1))).toContain("is closing");
+        const aborted = yield* runModel(closing, [close()]);
         expect(yield* refusal(aborted, request())).toContain("already resolved");
         expect(yield* refusal(aborted, retry())).toContain("already resolved");
         const discarded = yield* runModel(yield* submitting, [
@@ -785,6 +795,24 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
         const model = yield* started;
         expect(yield* refusal(model, startPlanned(1, 6))).toContain("planned differently");
         expect(yield* refusal(model, { ...submitPlanned(1) })).toContain("planned differently");
+      }),
+    );
+
+    it.effect("refuses a repeated submit result with a different reported model", () =>
+      Effect.gen(function* () {
+        const model = yield* runModel(yield* submitting, [
+          { ...attemptResult("submit", 2, "succeeded", turnId), model: "model-a" },
+        ]);
+        expect(
+          yield* refusal(model, {
+            ...attemptResult("submit", 2, "succeeded", turnId),
+            model: "model-b",
+          }),
+        ).toContain("different turn or model");
+        const { types } = yield* run(model, [
+          { ...attemptResult("submit", 2, "succeeded", turnId), model: "model-a" },
+        ]);
+        expect(types).toEqual(["thread.provider-switch-attempt-recorded"]);
       }),
     );
 
@@ -1100,7 +1128,11 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
 
     it.effect("a switch resolved long ago still cannot be reopened", () =>
       Effect.gen(function* () {
-        let model = yield* runModel(yield* started, [awaitUser("failed-retryable", 1), abort()]);
+        let model = yield* runModel(yield* started, [
+          awaitUser("failed-retryable", 1),
+          abort(),
+          close(),
+        ]);
         for (let index = 2; index <= 60; index += 1) {
           const id = ProviderSwitchId.make(`switch-${index}`);
           model = yield* runModel(model, [
@@ -1126,6 +1158,7 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
               switchId: id,
               returnToPrevious: false,
             },
+            close(id),
           ]);
         }
         expect(switchState(model)?.resolvedSwitchIds).toHaveLength(60);
@@ -1330,6 +1363,39 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
         expect(
           events.find((event) => event.type === "thread.turn-assignment-recorded")?.payload,
         ).toMatchObject({ model: codex.model });
+      }),
+    );
+  });
+
+  describe("conditional session update", () => {
+    const sessionSet = (status: "starting" | "running" | "error", expectedStatus?: "starting") =>
+      ({
+        type: "thread.session.set",
+        ...base(),
+        session: {
+          threadId,
+          status,
+          providerName: "codex",
+          providerInstanceId: codex.instanceId,
+          runtimeMode: "full-access",
+          activeTurnId: status === "running" ? turnId : null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        ...(expectedStatus !== undefined ? { expectedStatus } : {}),
+      }) as const;
+
+    it.effect("applies only while the session still has the expected status", () =>
+      Effect.gen(function* () {
+        const starting = yield* runModel(yield* readModelWithThread, [sessionSet("starting")]);
+        const { types } = yield* run(starting, [sessionSet("error", "starting")]);
+        expect(types).toEqual(["thread.session-set"]);
+
+        // A turn started in between: the stale update is refused.
+        const running = yield* runModel(starting, [sessionSet("running")]);
+        expect(yield* refusal(running, sessionSet("error", "starting"))).toContain(
+          "no longer 'starting'",
+        );
       }),
     );
   });

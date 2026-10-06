@@ -34,6 +34,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -58,6 +59,7 @@ import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { TerminalManager } from "../../terminal/Manager.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
+import { sha256Hex } from "../providerSwitchState.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
@@ -203,6 +205,8 @@ describe("ProviderCommandReactor", () => {
     let nextSessionIndex = 1;
     let sendTurnCount = 0;
     const runtimeSessions: Array<ProviderSession> = [];
+    // The persisted binding: the last session started for each thread.
+    const boundSessions = new Map<ThreadId, ProviderSession>();
     const modelSelection = input?.threadModelSelection ?? {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5-codex",
@@ -265,6 +269,7 @@ describe("ProviderCommandReactor", () => {
         Effect.tap((startedSession) =>
           Effect.sync(() => {
             runtimeSessions.push(startedSession);
+            boundSessions.set(startedSession.threadId, startedSession);
           }),
         ),
       );
@@ -370,17 +375,30 @@ describe("ProviderCommandReactor", () => {
     ];
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
-    // Stops the thread's live session, like the real release for a handoff.
+    // Stops the thread's live session and unbinds it, like the real release.
     const releaseThreadForHandoff = vi.fn((threadId: ThreadId) =>
       Effect.sync(() => {
         const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
         if (index >= 0) runtimeSessions.splice(index, 1);
+        boundSessions.delete(threadId);
       }),
     );
     const service: ProviderServiceShape = {
-      getThreadBinding: () => Effect.succeed(Option.none()),
+      getThreadBinding: (threadId) =>
+        Effect.succeed(
+          Option.fromNullishOr(boundSessions.get(threadId)).pipe(
+            Option.map((session) => ({
+              instanceId: session.providerInstanceId!,
+              driver: session.provider,
+              hasResumeCursor: true,
+              model: session.model ?? null,
+            })),
+          ),
+        ),
       releaseThreadForHandoff:
         releaseThreadForHandoff as ProviderServiceShape["releaseThreadForHandoff"],
+      listThreadSessions: (threadId) =>
+        Effect.succeed(runtimeSessions.filter((session) => session.threadId === threadId)),
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       compactThread,
@@ -642,6 +660,23 @@ describe("ProviderCommandReactor", () => {
               FROM projection_turn_assignments
               ORDER BY recorded_at ASC, message_id ASC
             `;
+          }),
+        ),
+      readSwitchAttempts: () =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const rows = yield* sql<{ readonly state: string }>`
+              SELECT state_json AS "state" FROM projection_thread_provider_switch_state
+              WHERE thread_id = 'thread-1'
+            `;
+            if (rows[0] === undefined) return [];
+            const decoded = (yield* Schema.decodeUnknownEffect(
+              Schema.fromJsonString(Schema.Unknown),
+            )(rows[0].state)) as {
+              pending: { attempts: ReadonlyArray<{ status: string }> } | null;
+            };
+            return decoded.pending?.attempts ?? [];
           }),
         ),
       readDeliveryState: (messageId: string) =>
@@ -4827,6 +4862,830 @@ describe("ProviderCommandReactor", () => {
       await startTurn(harness, "first", "最初の依頼");
       await waitFor(async () => (await deliveryState(harness, "message-first")) === "delivered");
       expect(await harness.readTurnAssignments()).toEqual([]);
+    });
+
+    const dispatchSwitchCommand = (harness: Harness, command: Record<string, unknown>) =>
+      harness.runEffect(
+        harness.engine.dispatch({
+          threadId: ThreadId.make("thread-1"),
+          createdAt: now,
+          ...command,
+        } as never),
+      );
+
+    const failNextSend = (harness: Harness) =>
+      harness.sendTurn.mockImplementationOnce(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "claudeAgent",
+              method: "turn.start",
+              detail: "connection reset",
+            }),
+          ) as never,
+      );
+
+    const appendMessage = (harness: Harness, id: string, text: string) =>
+      harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.message.user.append",
+          commandId: CommandId.make(`cmd-append-${id}`),
+          threadId: ThreadId.make("thread-1"),
+          message: { messageId: asMessageId(`message-${id}`), text, attachments: [] },
+          createdAt: now,
+        }),
+      );
+
+    const codexParty = {
+      instanceId: ProviderInstanceId.make("codex"),
+      driver: ProviderDriverKind.make("codex"),
+      model: "gpt-5-codex",
+    };
+    const claudeParty = {
+      instanceId: claudeSelection.instanceId,
+      driver: ProviderDriverKind.make("claudeAgent"),
+      model: claudeSelection.model,
+    };
+
+    it("retries a switch whose new session failed to start", async () => {
+      let claudeStarts = 0;
+      const harness = await createHarness({
+        crossProviderHandoff: true,
+        startSessionEffect: (session) =>
+          session.providerInstanceId === ProviderInstanceId.make("claudeAgent") &&
+          claudeStarts++ === 0
+            ? Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "claudeAgent",
+                  method: "session.start",
+                  detail: "not signed in yet",
+                }),
+              )
+            : Effect.succeed(session),
+      });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.retry",
+        commandId: CommandId.make("cmd-handoff-retry"),
+        switchId,
+      });
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+      expect(await deliveryState(harness, "message-switch")).toBe("delivered");
+    });
+
+    it("resends the same stored packet after the user chooses to send again", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      failNextSend(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.resolve",
+        commandId: CommandId.make("cmd-handoff-resend"),
+        switchId,
+        decision: "resend",
+      });
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      const packets = harness.sendTurn.mock.calls
+        .slice(1)
+        .map((call) => (call[0] as { input: string }).input);
+      expect(packets).toHaveLength(2);
+      expect(packets[1]).toBe(packets[0]);
+    });
+
+    it("closes without sending again when the user discards an unknown delivery", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      failNextSend(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.resolve",
+        commandId: CommandId.make("cmd-handoff-discard"),
+        switchId,
+        decision: "discard",
+      });
+      await waitFor(
+        async () => (await deliveryState(harness, "message-switch")) === "unknown-discarded",
+      );
+      await harness.drain();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+      // The new session may be running the turn: it is not stopped.
+      expect(harness.releaseThreadForHandoff).toHaveBeenCalledTimes(1);
+      expect((await switchState(harness))?.pending).toBeNull();
+    });
+
+    it("on abort stops the session the switch started and can return to the old model", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      // Too long for any packet: fails after the new session started.
+      await startTurn(harness, "switch", "あ".repeat(119_000), claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+      expect(harness.releaseThreadForHandoff).toHaveBeenCalledTimes(1);
+
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.abort",
+        commandId: CommandId.make("cmd-handoff-abort"),
+        switchId,
+        returnToPrevious: true,
+      });
+      await waitFor(() => harness.releaseThreadForHandoff.mock.calls.length === 2);
+      await waitFor(async () => (await deliveryState(harness, "message-switch")) === "cancelled");
+      await waitFor(async () => {
+        const readModel = await harness.readModel();
+        const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+        return thread?.modelSelection.instanceId === ProviderInstanceId.make("codex");
+      });
+    });
+
+    it("recovers at startup: a start left planned is failed, then the switch runs", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true, deferReactorStart: true });
+      const switchId = "switch-recover-start";
+      await appendMessage(harness, "recover-first", "最初の依頼");
+      await appendMessage(harness, "recover-trigger", "Claude で続けて");
+      for (const command of [
+        {
+          type: "thread.provider-switch.request",
+          commandId: CommandId.make("cmd-recover-request"),
+          switchId,
+          from: codexParty,
+          to: claudeParty,
+          triggerMessageId: asMessageId("message-recover-trigger"),
+          boundaryTurnCount: 0,
+        },
+        {
+          type: "thread.provider-switch.milestone",
+          commandId: CommandId.make("cmd-recover-stopped"),
+          switchId,
+          milestone: "old-stopped",
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover-start"),
+          switchId,
+          attemptId: 1,
+          kind: "start",
+          status: "planned",
+          generation: 1,
+        },
+      ]) {
+        await dispatchSwitchCommand(harness, command);
+      }
+
+      await harness.startReactor();
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      const packet = (harness.sendTurn.mock.calls.at(-1)?.[0] as { input: string }).input;
+      expect(packet).toContain("最初の依頼");
+      expect(packet.endsWith("Claude で続けて")).toBe(true);
+    });
+
+    it("recovers at startup: a send left planned waits for the user and is not resent", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true, deferReactorStart: true });
+      const switchId = "switch-recover-submit";
+      await appendMessage(harness, "recover2-trigger", "Claude で続けて");
+      const packetText = "[[AMU-HANDOFF v1]]";
+      for (const command of [
+        {
+          type: "thread.provider-switch.request",
+          commandId: CommandId.make("cmd-recover2-request"),
+          switchId,
+          from: codexParty,
+          to: claudeParty,
+          triggerMessageId: asMessageId("message-recover2-trigger"),
+          boundaryTurnCount: 0,
+        },
+        {
+          type: "thread.provider-switch.milestone",
+          commandId: CommandId.make("cmd-recover2-stopped"),
+          switchId,
+          milestone: "old-stopped",
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover2-start"),
+          switchId,
+          attemptId: 1,
+          kind: "start",
+          status: "planned",
+          generation: 1,
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover2-started"),
+          switchId,
+          attemptId: 1,
+          kind: "start",
+          status: "succeeded",
+        },
+        {
+          type: "thread.provider-switch.packet",
+          commandId: CommandId.make("cmd-recover2-packet"),
+          switchId,
+          packetId: "packet-recover2",
+          text: packetText,
+          sha256: sha256Hex(packetText),
+          chars: packetText.length,
+          includedMessages: 0,
+          omittedMessages: 0,
+          truncated: false,
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover2-submit"),
+          switchId,
+          attemptId: 2,
+          kind: "submit",
+          status: "planned",
+        },
+      ]) {
+        await dispatchSwitchCommand(harness, command);
+      }
+
+      await harness.startReactor();
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      expect((await switchState(harness))?.pending?.awaitingReason).toBe("unknown-delivery");
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    });
+
+    it("never runs one switch twice: a resume during a run re-checks instead", async () => {
+      let claudeStarts = 0;
+      let releaseGate: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      const harness = await createHarness({
+        crossProviderHandoff: true,
+        startSessionEffect: (session) => {
+          if (session.providerInstanceId !== ProviderInstanceId.make("claudeAgent")) {
+            return Effect.succeed(session);
+          }
+          claudeStarts += 1;
+          return claudeStarts === 1
+            ? Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "claudeAgent",
+                  method: "session.start",
+                  detail: "first start fails",
+                }),
+              )
+            : Effect.promise(() => gate).pipe(Effect.as(session));
+        },
+      });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.retry",
+        commandId: CommandId.make("cmd-handoff-retry-once"),
+        switchId,
+      });
+      await waitFor(() => claudeStarts === 2);
+      // A second start of the reactor runs startup recovery against the same switch.
+      await harness.startReactor();
+      releaseGate!();
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      await harness.drain();
+      expect(claudeStarts).toBe(2);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps an aborted switch unresolved until its cleanup finishes", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "あ".repeat(119_000), claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+      harness.releaseThreadForHandoff.mockImplementation(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "claudeAgent",
+              method: "session.stop",
+              detail: "stuck",
+            }),
+          ) as never,
+      );
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.abort",
+        commandId: CommandId.make("cmd-handoff-abort-stuck"),
+        switchId,
+        returnToPrevious: false,
+      });
+      await waitFor(() => harness.releaseThreadForHandoff.mock.calls.length >= 5);
+      await harness.drain();
+      expect((await switchState(harness))?.pending?.status).toBe("closing");
+
+      await startTurn(harness, "while-closing", "まだ送れない");
+      await waitFor(
+        async () => (await deliveryState(harness, "message-while-closing")) === "rejected",
+      );
+
+      // After a restart the cleanup runs again and the switch resolves.
+      harness.releaseThreadForHandoff.mockImplementation(() => Effect.void as never);
+      await harness.startReactor();
+      await waitFor(async () => (await switchState(harness))?.pending === null);
+      expect((await switchState(harness))?.resolvedSwitchIds).toEqual([switchId]);
+    });
+
+    it("hands over again after a discarded switch instead of continuing natively", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      failNextSend(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.resolve",
+        commandId: CommandId.make("cmd-handoff-discard-then-send"),
+        switchId,
+        decision: "discard",
+      });
+      await waitFor(async () => (await switchState(harness))?.pending === null);
+
+      await startTurn(harness, "after-discard", "続きをお願い", claudeSelection);
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      const sent = (harness.sendTurn.mock.calls.at(-1)?.[0] as { input: string }).input;
+      expect(sent.startsWith("[[AMU-HANDOFF v1]]")).toBe(true);
+      expect((await switchState(harness))?.handoffUnconfirmedInstanceId).toBeNull();
+    });
+
+    it("recovers at startup: an accepted send after a granted resend is sent again, not completed", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true, deferReactorStart: true });
+      const switchId = "switch-recover-resend";
+      await appendMessage(harness, "recover3-trigger", "Claude で続けて");
+      const packetText = "[[AMU-HANDOFF v1]]";
+      for (const command of [
+        {
+          type: "thread.provider-switch.request",
+          commandId: CommandId.make("cmd-recover3-request"),
+          switchId,
+          from: codexParty,
+          to: claudeParty,
+          triggerMessageId: asMessageId("message-recover3-trigger"),
+          boundaryTurnCount: 0,
+        },
+        {
+          type: "thread.provider-switch.milestone",
+          commandId: CommandId.make("cmd-recover3-stopped"),
+          switchId,
+          milestone: "old-stopped",
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover3-start"),
+          switchId,
+          attemptId: 1,
+          kind: "start",
+          status: "planned",
+          generation: 1,
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover3-started"),
+          switchId,
+          attemptId: 1,
+          kind: "start",
+          status: "succeeded",
+        },
+        {
+          type: "thread.provider-switch.packet",
+          commandId: CommandId.make("cmd-recover3-packet"),
+          switchId,
+          packetId: "packet-recover3",
+          text: packetText,
+          sha256: sha256Hex(packetText),
+          chars: packetText.length,
+          includedMessages: 0,
+          omittedMessages: 0,
+          truncated: false,
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover3-submit"),
+          switchId,
+          attemptId: 2,
+          kind: "submit",
+          status: "planned",
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover3-submitted"),
+          switchId,
+          attemptId: 2,
+          kind: "submit",
+          status: "succeeded",
+          turnId: asTurnId("turn-old"),
+        },
+        {
+          type: "thread.provider-switch.await-user",
+          commandId: CommandId.make("cmd-recover3-wait"),
+          switchId,
+          attemptId: 2,
+          resumeCount: 0,
+          reason: "unknown-delivery",
+          detail: "delivered was not recorded",
+        },
+        {
+          type: "thread.provider-switch.resolve",
+          commandId: CommandId.make("cmd-recover3-resend"),
+          switchId,
+          decision: "resend",
+        },
+      ]) {
+        await dispatchSwitchCommand(harness, command);
+      }
+
+      await harness.startReactor();
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      const delivered = (await switchState(harness))!.lastDelivered!;
+      expect(delivered.attemptId).toBeGreaterThan(2);
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect((harness.sendTurn.mock.calls[0]?.[0] as { input: string }).input).toBe(packetText);
+    });
+
+    it("recovers at startup with the model the provider reported", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true, deferReactorStart: true });
+      const switchId = "switch-recover-model";
+      await appendMessage(harness, "recover4-trigger", "Claude で続けて");
+      const packetText = "[[AMU-HANDOFF v1]]";
+      for (const command of [
+        {
+          type: "thread.provider-switch.request",
+          commandId: CommandId.make("cmd-recover4-request"),
+          switchId,
+          from: codexParty,
+          to: { ...claudeParty, model: "opus-5.5" },
+          triggerMessageId: asMessageId("message-recover4-trigger"),
+          boundaryTurnCount: 0,
+        },
+        {
+          type: "thread.provider-switch.milestone",
+          commandId: CommandId.make("cmd-recover4-stopped"),
+          switchId,
+          milestone: "old-stopped",
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover4-start"),
+          switchId,
+          attemptId: 1,
+          kind: "start",
+          status: "planned",
+          generation: 1,
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover4-started"),
+          switchId,
+          attemptId: 1,
+          kind: "start",
+          status: "succeeded",
+        },
+        {
+          type: "thread.provider-switch.packet",
+          commandId: CommandId.make("cmd-recover4-packet"),
+          switchId,
+          packetId: "packet-recover4",
+          text: packetText,
+          sha256: sha256Hex(packetText),
+          chars: packetText.length,
+          includedMessages: 0,
+          omittedMessages: 0,
+          truncated: false,
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover4-submit"),
+          switchId,
+          attemptId: 2,
+          kind: "submit",
+          status: "planned",
+        },
+        {
+          type: "thread.provider-switch.attempt",
+          commandId: CommandId.make("cmd-recover4-submitted"),
+          switchId,
+          attemptId: 2,
+          kind: "submit",
+          status: "succeeded",
+          turnId: asTurnId("turn-recover4"),
+          model: "claude-opus-5-5",
+        },
+      ]) {
+        await dispatchSwitchCommand(harness, command);
+      }
+
+      await harness.startReactor();
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      expect(await harness.readTurnAssignments()).toEqual([
+        {
+          messageId: "message-recover4-trigger",
+          instanceId: "claudeAgent",
+          model: "claude-opus-5-5",
+        },
+      ]);
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    });
+
+    it("retries a same-instance model switch with the new model, not a cached one", async () => {
+      let newModelStarts = 0;
+      const harness = await createHarness({
+        crossProviderHandoff: true,
+        requiresNewThreadForModelChange: true,
+        startSessionEffect: (session) =>
+          session.model === "gpt-6.1-sol" && newModelStarts++ === 0
+            ? Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "codex",
+                  method: "session.start",
+                  detail: "first start fails",
+                }),
+              )
+            : Effect.succeed(session),
+      });
+      // The first turn names its model, so the selection cache holds it.
+      await startTurn(harness, "first", "最初の依頼", {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      });
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-same-instance-ready"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "ready",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      await startTurn(harness, "switch", "新しいモデルで続けて", {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-6.1-sol",
+      });
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.retry",
+        commandId: CommandId.make("cmd-same-instance-retry"),
+        switchId,
+      });
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      expect(harness.startSession.mock.calls.at(-1)?.[1]).toMatchObject({
+        modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" },
+      });
+    });
+
+    it("still finishes an abort that arrives while a resume is running", async () => {
+      let claudeStarts = 0;
+      let releaseGate: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      const harness = await createHarness({
+        crossProviderHandoff: true,
+        startSessionEffect: (session) => {
+          if (session.providerInstanceId !== ProviderInstanceId.make("claudeAgent")) {
+            return Effect.succeed(session);
+          }
+          claudeStarts += 1;
+          const failure = new ProviderAdapterRequestError({
+            provider: "claudeAgent",
+            method: "session.start",
+            detail: "start fails",
+          });
+          // The retry's start fails only after the abort is already queued.
+          return claudeStarts === 1
+            ? Effect.fail(failure)
+            : Effect.promise(() => gate).pipe(Effect.andThen(Effect.fail(failure)));
+        },
+      });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.retry",
+        commandId: CommandId.make("cmd-abort-race-retry"),
+        switchId,
+      });
+      await waitFor(() => claudeStarts === 2);
+      releaseGate!();
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.abort",
+        commandId: CommandId.make("cmd-abort-race-abort"),
+        switchId,
+        returnToPrevious: false,
+      });
+      await waitFor(async () => (await switchState(harness))?.pending === null);
+      expect((await switchState(harness))?.resolvedSwitchIds).toEqual([switchId]);
+    });
+
+    it("keeps an unconfirmed session protected when an abort never stopped it", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      failNextSend(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const firstSwitch = (await switchState(harness))!.pending!.switchId;
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.resolve",
+        commandId: CommandId.make("cmd-unconfirmed-discard"),
+        switchId: firstSwitch,
+        decision: "discard",
+      });
+      await waitFor(async () => (await switchState(harness))?.pending === null);
+      expect((await switchState(harness))?.handoffUnconfirmedInstanceId).toBe("claudeAgent");
+
+      // The next switch cannot stop the unconfirmed session, then is aborted.
+      harness.releaseThreadForHandoff.mockImplementation(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "claudeAgent",
+              method: "session.stop",
+              detail: "stuck",
+            }),
+          ) as never,
+      );
+      await startTurn(harness, "again", "もう一度", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const secondSwitch = (await switchState(harness))!.pending!.switchId;
+      expect((await switchState(harness))?.pending?.milestone).toBe("requested");
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.abort",
+        commandId: CommandId.make("cmd-unconfirmed-abort"),
+        switchId: secondSwitch,
+        returnToPrevious: false,
+      });
+      await waitFor(async () => (await switchState(harness))?.pending === null);
+      expect((await switchState(harness))?.handoffUnconfirmedInstanceId).toBe("claudeAgent");
+    });
+
+    it("never marks a running turn failed when its delivery becomes unknown", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      harness.sendTurn.mockImplementationOnce(
+        () =>
+          Effect.gen(function* () {
+            // The new provider's turn is already running when the send reports failure.
+            yield* harness.engine.dispatch({
+              type: "thread.session.set",
+              commandId: CommandId.make("cmd-running-before-failure"),
+              threadId: ThreadId.make("thread-1"),
+              session: {
+                threadId: ThreadId.make("thread-1"),
+                status: "running",
+                providerName: "claudeAgent",
+                providerInstanceId: claudeSelection.instanceId,
+                runtimeMode: "approval-required",
+                activeTurnId: asTurnId("turn-running"),
+                lastError: null,
+                updatedAt: now,
+              },
+              createdAt: now,
+            });
+            return yield* new ProviderAdapterRequestError({
+              provider: "claudeAgent",
+              method: "turn.start",
+              detail: "response lost",
+            });
+          }) as never,
+      );
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.session?.status).toBe("running");
+      expect(thread?.session?.activeTurnId).toBe("turn-running");
+    });
+
+    it("retries the cleanup of an abort that a running resume picks up", async () => {
+      let claudeStarts = 0;
+      let releaseGate: (() => void) | undefined;
+      const gate = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      const harness = await createHarness({
+        crossProviderHandoff: true,
+        startSessionEffect: (session) => {
+          if (session.providerInstanceId !== ProviderInstanceId.make("claudeAgent")) {
+            return Effect.succeed(session);
+          }
+          claudeStarts += 1;
+          return claudeStarts === 1
+            ? Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "claudeAgent",
+                  method: "session.start",
+                  detail: "start fails",
+                }),
+              )
+            : // The retry's start succeeds only after the abort is queued.
+              Effect.promise(() => gate).pipe(Effect.as(session));
+        },
+      });
+      await firstCodexTurn(harness);
+      // Too long for a packet: after the retry starts the session, it waits again.
+      await startTurn(harness, "switch", "あ".repeat(119_000), claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const switchId = (await switchState(harness))!.pending!.switchId;
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.retry",
+        commandId: CommandId.make("cmd-drive-retry"),
+        switchId,
+      });
+      await waitFor(() => claudeStarts === 2);
+      let releases = 0;
+      harness.releaseThreadForHandoff.mockImplementation(((threadId: ThreadId) =>
+        releases++ === 0
+          ? Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "claudeAgent",
+                method: "session.stop",
+                detail: "transient",
+              }),
+            )
+          : Effect.sync(() => {
+              const index = harness.runtimeSessions.findIndex(
+                (session) => session.threadId === threadId,
+              );
+              if (index >= 0) harness.runtimeSessions.splice(index, 1);
+            })) as never);
+      releaseGate!();
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.abort",
+        commandId: CommandId.make("cmd-drive-abort"),
+        switchId,
+        returnToPrevious: false,
+      });
+      await waitFor(async () => (await switchState(harness))?.pending === null);
+      // The first cleanup attempt failed and the retry stopped the session.
+      expect(releases).toBeGreaterThanOrEqual(2);
+    });
+
+    it("retry clears a new session left by a failed start, then delivers", async () => {
+      let claudeStarts = 0;
+      let leftover: ProviderSession | undefined;
+      const harness = await createHarness({
+        crossProviderHandoff: true,
+        startSessionEffect: (session) => {
+          if (session.providerInstanceId !== ProviderInstanceId.make("claudeAgent")) {
+            return Effect.succeed(session);
+          }
+          claudeStarts += 1;
+          if (claudeStarts === 1) {
+            // The provider started it, then recording and undo both failed.
+            leftover = session;
+            return Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: "claudeAgent",
+                method: "session.start",
+                detail: "binding write and undo failed",
+              }),
+            );
+          }
+          return Effect.succeed(session);
+        },
+      });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      harness.runtimeSessions.push(leftover!);
+      const switchId = (await switchState(harness))!.pending!.switchId;
+
+      await dispatchSwitchCommand(harness, {
+        type: "thread.provider-switch.retry",
+        commandId: CommandId.make("cmd-leftover-retry"),
+        switchId,
+      });
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      expect(harness.releaseThreadForHandoff).toHaveBeenLastCalledWith(ThreadId.make("thread-1"), {
+        alsoStopInstanceId: ProviderInstanceId.make("claudeAgent"),
+      });
+      expect(claudeStarts).toBe(2);
     });
   });
 });

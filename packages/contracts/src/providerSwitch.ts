@@ -60,6 +60,8 @@ export const ProviderSwitchAttemptState = Schema.Struct({
   status: Schema.Literals(["planned", "succeeded", "failed", "abandoned"]),
   generation: Schema.NullOr(NonNegativeInt),
   turnId: Schema.NullOr(TurnId),
+  /** A succeeded submit: the model the provider reported. Optional for stored states. */
+  model: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 export type ProviderSwitchAttemptState = typeof ProviderSwitchAttemptState.Type;
 
@@ -80,8 +82,14 @@ export const OrchestrationPendingProviderSwitch = Schema.Struct({
   to: ProviderSwitchParty,
   triggerMessageId: MessageId,
   boundaryTurnCount: NonNegativeInt,
-  status: Schema.Literals(["in-progress", "awaiting-user"]),
+  /**
+   * closing: the user aborted; the switch stays unresolved (sends refused)
+   * until its new session is stopped and the selection restored (§8.2).
+   */
+  status: Schema.Literals(["in-progress", "awaiting-user", "closing"]),
   awaitingReason: Schema.NullOr(ProviderSwitchAwaitReason),
+  /** Set while closing. Optional for stored states. */
+  closing: Schema.optional(Schema.NullOr(Schema.Struct({ returnToPrevious: Schema.Boolean }))),
   milestone: ProviderSwitchOpenMilestone,
   packet: Schema.NullOr(ProviderSwitchPacketFingerprint),
   /** Every attempt of this switch, in attemptId order. */
@@ -119,6 +127,29 @@ export const OrchestrationThreadProviderSwitchState = Schema.Struct({
   resolvedSwitchIds: Schema.Array(ProviderSwitchId),
   /** Any switch was ever requested on this thread. */
   hasHistory: Schema.Boolean,
+  /**
+   * The switch most recently closed by abort or discard, so cleanup knows
+   * which session the switch itself started (§8.2). Optional: stored states
+   * from before it decode without it.
+   */
+  lastClosed: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        switchId: ProviderSwitchId,
+        from: ProviderSwitchParty,
+        to: ProviderSwitchParty,
+        reason: ProviderSwitchCloseReason,
+        /** The old session had been stopped (milestone old-stopped or later). */
+        oldStopped: Schema.Boolean,
+      }),
+    ),
+  ),
+  /**
+   * A session of this instance may be bound without having received its
+   * packet (the switch was discarded). It never counts as a native
+   * continuation; the next delivered switch clears it (§3.1).
+   */
+  handoffUnconfirmedInstanceId: Schema.optional(Schema.NullOr(ProviderInstanceId)),
   /**
    * Event ids of accepted reverts not yet reverted or failed. In-memory
    * only: a restart drops in-flight reverts, so the command read model
@@ -183,6 +214,8 @@ export const ThreadProviderSwitchAttemptPayloadFields = {
   status: ProviderSwitchAttemptStatus,
   generation: Schema.optional(NonNegativeInt),
   turnId: Schema.optional(TurnId),
+  /** submit succeeded: the model the provider reported. */
+  model: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(Schema.String),
 } as const;
 
@@ -203,6 +236,13 @@ export const ThreadProviderSwitchRetryPayloadFields = {
 export const ThreadProviderSwitchAbortPayloadFields = {
   switchId: ProviderSwitchId,
   returnToPrevious: Schema.Boolean,
+} as const;
+
+/** Server: an aborted switch finished its cleanup and is resolved. */
+export const ThreadProviderSwitchClosePayloadFields = {
+  switchId: ProviderSwitchId,
+  /** The instance whose session cleanup stopped and unbound, if any. */
+  releasedInstanceId: Schema.optional(ProviderInstanceId),
 } as const;
 
 export const ThreadProviderSwitchResolvePayloadFields = {

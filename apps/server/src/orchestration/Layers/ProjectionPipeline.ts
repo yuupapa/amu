@@ -1057,7 +1057,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.provider-switch-awaiting-user":
         case "thread.provider-switch-retry-requested":
         case "thread.provider-switch-aborted":
-        case "thread.provider-switch-resolved": {
+        case "thread.provider-switch-resolved":
+        case "thread.provider-switch-closed": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -2012,6 +2013,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.provider-switch-retry-requested":
         case "thread.provider-switch-aborted":
         case "thread.provider-switch-resolved":
+        case "thread.provider-switch-closed":
           yield* foldProviderSwitchEvent(event);
           return;
 

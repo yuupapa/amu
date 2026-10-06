@@ -46,6 +46,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
@@ -1404,13 +1405,31 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           providerInstanceId: resolvedInstanceId,
         };
 
-        yield* stopStaleSessionsForThread({
-          threadId,
-          currentInstanceId: resolvedInstanceId,
-        });
-        yield* upsertSessionBinding(sessionWithInstance, threadId, {
-          modelSelection: input.modelSelection,
-        });
+        // The provider session is live now. If recording it fails, stop it
+        // before failing, so no unbound session survives a failed start.
+        yield* Effect.gen(function* () {
+          yield* stopStaleSessionsForThread({
+            threadId,
+            currentInstanceId: resolvedInstanceId,
+          });
+          yield* upsertSessionBinding(sessionWithInstance, threadId, {
+            modelSelection: input.modelSelection,
+          });
+        }).pipe(
+          Effect.onError(() =>
+            adapter.stopSession(threadId).pipe(
+              Effect.retry({ times: 2, schedule: Schedule.exponential("100 millis") }),
+              Effect.andThen(clearMcpSession(threadId)),
+              Effect.catchCause((cause) =>
+                // A cross-provider abort stops it by instance later.
+                Effect.logWarning("startSession: could not stop a session whose start failed", {
+                  threadId,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            ),
+          ),
+        );
         yield* analytics.record("provider.session.started", {
           provider: sessionWithInstance.provider,
           runtimeMode: input.runtimeMode,
@@ -1923,10 +1942,38 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  /** Stops the thread's adapter session on one instance and confirms it is gone. */
+  const stopInstanceSession = Effect.fn("stopInstanceSession")(function* (
+    threadId: ThreadId,
+    instanceId: ProviderInstanceId,
+  ) {
+    const adapter = yield* registry.getByInstance(instanceId).pipe(Effect.option);
+    if (Option.isNone(adapter)) return;
+    if (!(yield* adapter.value.hasSession(threadId))) return;
+    yield* adapter.value
+      .stopSession(threadId)
+      .pipe(
+        Effect.retry({ times: 2, schedule: Schedule.exponential("100 millis") }),
+        Effect.ignore,
+      );
+    if (yield* adapter.value.hasSession(threadId)) {
+      return yield* toValidationError(
+        "ProviderService.releaseThreadForHandoff",
+        `The provider session of thread '${threadId}' on '${instanceId}' did not stop.`,
+      );
+    }
+    yield* clearMcpSession(threadId);
+  });
+
   const releaseThreadForHandoff: ProviderServiceMethod<"releaseThreadForHandoff"> = Effect.fn(
     "releaseThreadForHandoff",
-  )(function* (threadId) {
+  )(function* (threadId, options) {
     const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    // A session whose start was never recorded is not in the binding.
+    const extra = options?.alsoStopInstanceId;
+    if (extra !== undefined && extra !== binding?.providerInstanceId) {
+      yield* stopInstanceSession(threadId, extra);
+    }
     if (binding === undefined) return;
     // A deleted or disabled old instance has no session to stop; the cursor
     // is cleared either way.
@@ -2117,6 +2164,32 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       return sessions;
     },
   );
+
+  const listThreadSessions: ProviderServiceMethod<"listThreadSessions"> = Effect.fn(
+    "listThreadSessions",
+  )(function* (threadId) {
+    const entries = yield* getAdapterEntries;
+    const found = yield* Effect.forEach(entries, ([instanceId, adapter]) =>
+      adapter
+        .hasSession(threadId)
+        .pipe(
+          Effect.flatMap((has) =>
+            has
+              ? adapter
+                  .listSessions()
+                  .pipe(
+                    Effect.map((sessions) =>
+                      sessions
+                        .filter((session) => session.threadId === threadId)
+                        .map((session) => ({ ...session, providerInstanceId: instanceId })),
+                    ),
+                  )
+              : Effect.succeed([] as ProviderSession[]),
+          ),
+        ),
+    );
+    return found.flat();
+  });
 
   const getCapabilities: ProviderServiceMethod<"getCapabilities"> = (instanceId) =>
     registry.getByInstance(instanceId).pipe(Effect.map((adapter) => adapter.capabilities));
@@ -2351,6 +2424,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     stopSession,
     getThreadBinding,
     releaseThreadForHandoff,
+    listThreadSessions,
     listSessions,
     getCapabilities,
     getInstanceInfo,
