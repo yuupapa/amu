@@ -2015,6 +2015,19 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* foldProviderSwitchEvent(event);
           return;
 
+        case "thread.turn-assignment-recorded":
+          yield* projectionThreadProviderSwitchRepository.recordTurnAssignment({
+            threadId: event.payload.threadId,
+            turnId: event.payload.turnId,
+            messageId: event.payload.messageId,
+            instanceId: event.payload.instanceId,
+            driver: event.payload.driver,
+            model: event.payload.model,
+            generation: event.payload.generation,
+            recordedAt: event.payload.createdAt,
+          });
+          return;
+
         default:
           return;
       }

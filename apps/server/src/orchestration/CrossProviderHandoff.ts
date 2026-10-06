@@ -18,6 +18,8 @@ export const HANDOFF_REQUIRED_RECENT_USER_MESSAGES = 3;
 export interface HandoffUserMessage {
   readonly turn: number | null;
   readonly text: string;
+  /** Code points the source query already cut off the end of `text`. */
+  readonly omittedChars?: number;
   /** Composer context kinds and labels only; bodies never cross providers. */
   readonly contextLabels: ReadonlyArray<string>;
 }
@@ -28,8 +30,15 @@ export type HandoffLogEntry =
       readonly turn: number | null;
       readonly model: string | null;
       readonly text: string;
+      /** Code points the source query already cut off the end of `text`. */
+      readonly omittedChars?: number;
     }
-  | { readonly kind: "tool"; readonly turn: number | null; readonly summary: string };
+  | {
+      readonly kind: "tool";
+      readonly turn: number | null;
+      readonly summary: string;
+      readonly omittedChars?: number;
+    };
 
 export interface HandoffChangedFile {
   readonly path: string;
@@ -55,7 +64,11 @@ export interface HandoffSource {
   readonly userMessages: ReadonlyArray<HandoffUserMessage>;
   /** Delivered user messages the source query left out because of its read limits. */
   readonly omittedUserMessages: number;
-  readonly plan: { readonly markdown: string; readonly implemented: boolean } | null;
+  readonly plan: {
+    readonly markdown: string;
+    readonly implemented: boolean;
+    readonly omittedChars?: number;
+  } | null;
   /** Null when no baseline or latest checkpoint is available. */
   readonly changes: ReadonlyArray<HandoffChangedFile> | null;
   readonly state: {
@@ -110,19 +123,41 @@ interface Clipped {
   readonly truncated: boolean;
 }
 
-function clip(text: string, max: number): Clipped {
+/**
+ * Characters as a reader counts them (code points), the same unit as SQLite's
+ * length() and substr(). Budgets and the provider limit stay in UTF-16 units.
+ */
+export function codePointLength(text: string): number {
+  let count = 0;
+  for (const _ of text) count += 1;
+  return count;
+}
+
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+
+/**
+ * Cuts `text` to at most `max` UTF-16 units without splitting a character.
+ * The omission note counts code points, including `alreadyOmitted`: code
+ * points the source query cut before this text reached us.
+ */
+function clip(text: string, max: number, alreadyOmitted = 0): Clipped {
   const escaped = escapeHandoffText(text);
-  if (escaped.length <= max) {
+  if (escaped.length <= max && alreadyOmitted === 0) {
     return { text: escaped, truncated: false };
   }
-  const omitted = escaped.length - max;
-  return { text: `${escaped.slice(0, max)}…（${omitted}字省略）`, truncated: true };
+  let end = Math.min(max, escaped.length);
+  if (end < escaped.length && end > 0 && isHighSurrogate(escaped.charCodeAt(end - 1))) {
+    end -= 1;
+  }
+  const kept = escaped.slice(0, end);
+  const omitted = codePointLength(escaped) - codePointLength(kept) + alreadyOmitted;
+  return { text: `${kept}…（${omitted}字省略）`, truncated: true };
 }
 
 const turnLabel = (turn: number | null) => (turn === null ? "ターン不明" : `ターン${turn}`);
 
 function renderUser(message: HandoffUserMessage): Clipped {
-  const body = clip(message.text, HANDOFF_MESSAGE_MAX_CHARS);
+  const body = clip(message.text, HANDOFF_MESSAGE_MAX_CHARS, message.omittedChars);
   const context =
     message.contextLabels.length === 0
       ? ""
@@ -135,13 +170,13 @@ function renderUser(message: HandoffUserMessage): Clipped {
 
 function renderLog(entry: HandoffLogEntry): Clipped {
   if (entry.kind === "tool") {
-    const summary = clip(entry.summary, HANDOFF_MESSAGE_MAX_CHARS);
+    const summary = clip(entry.summary, HANDOFF_MESSAGE_MAX_CHARS, entry.omittedChars);
     return {
       text: `  - tool (${turnLabel(entry.turn)}): ${summary.text}`,
       truncated: summary.truncated,
     };
   }
-  const body = clip(entry.text, HANDOFF_MESSAGE_MAX_CHARS);
+  const body = clip(entry.text, HANDOFF_MESSAGE_MAX_CHARS, entry.omittedChars);
   const model = entry.model === null ? "担当モデル不明" : escapeHandoffText(entry.model);
   return {
     text: `[assistant: ${model}] (${turnLabel(entry.turn)}) ${body.text}`,
@@ -189,7 +224,7 @@ function renderState(state: HandoffSource["state"]): Clipped {
 }
 
 function renderPlan(plan: NonNullable<HandoffSource["plan"]>): Clipped {
-  const body = clip(plan.markdown, HANDOFF_MESSAGE_MAX_CHARS);
+  const body = clip(plan.markdown, HANDOFF_MESSAGE_MAX_CHARS, plan.omittedChars);
   const status = plan.implemented ? "（実装済み）" : "";
   return { text: `[[AMU-PLAN]]${status}\n${body.text}`, truncated: body.truncated };
 }

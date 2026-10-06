@@ -480,4 +480,56 @@ engineLayer("provider switch persistence", (it) => {
       assert.strictEqual(reloaded?.updatedAt, later);
     }),
   );
+
+  it.effect("records which model answered each turn, first record wins", () =>
+    Effect.gen(function* () {
+      const switches = yield* ProjectionThreadProviderSwitchRepository;
+      const threadId = ThreadId.make("thread-turn-assignment");
+      const messageId = MessageId.make("message-turn-assignment");
+      const turnId = TurnId.make("turn-assigned-1");
+      const record = (party: typeof claude, at: string) =>
+        ({
+          type: "thread.turn-assignment.record",
+          commandId: commandId(),
+          threadId,
+          createdAt: at,
+          messageId,
+          turnId,
+          instanceId: party.instanceId,
+          driver: party.driver,
+          model: party.model,
+          generation: 3,
+        }) satisfies OrchestrationCommand;
+      yield* dispatchAll([...threadSetup(threadId, messageId), record(claude, createdAt)]);
+      // Steering reuses the turn id: the same record again changes nothing.
+      yield* dispatchAll([record(claude, "2026-10-06T10:05:00.000Z")]);
+      const first = yield* switches.listTurnAssignments({ threadId });
+      assert.deepEqual(first, [
+        {
+          threadId,
+          turnId,
+          messageId,
+          instanceId: claude.instanceId,
+          driver: claude.driver,
+          model: claude.model,
+          generation: 3,
+          changedMidTurn: false,
+          recordedAt: createdAt,
+        },
+      ]);
+      // A different model mid-turn keeps the first answerer and flags it.
+      yield* dispatchAll([record(codex, "2026-10-06T10:06:00.000Z")]);
+      const changed = yield* switches.listTurnAssignments({ threadId });
+      assert.strictEqual(changed.length, 1);
+      assert.strictEqual(changed[0]?.model, claude.model);
+      assert.strictEqual(changed[0]?.changedMidTurn, true);
+
+      // A re-created thread id starts without assignments.
+      yield* dispatchAll([
+        { type: "thread.delete", commandId: commandId(), threadId },
+        ...threadSetup(threadId, MessageId.make("message-turn-assignment-2")),
+      ]);
+      assert.deepEqual(yield* switches.listTurnAssignments({ threadId }), []);
+    }),
+  );
 });

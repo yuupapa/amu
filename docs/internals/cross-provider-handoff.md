@@ -180,7 +180,7 @@ decider が判断に使う読み取りモデル（in-memory の read model）に
 | `cancelled`         | 送信前の失敗で「やめる」を選んだとき（「未送信・取消」と表示）                   | 入らない         |
 | `unknown-discarded` | 届いたか不明で「送らずに閉じる」を選んだとき（「届いたか不明・再送なし」と表示） | 入らない         |
 
-この機能より前の発言は `delivered` とみなします。サーバーの圧縮キューにあった発言が再起動で失われた場合は、起動時に `pending` のまま残っている発言を `rejected`（理由: 再起動で送信されませんでした）にします。発言の順番は、発言を保存したイベントの順序番号で決めます。
+この機能より前の発言は `delivered` とみなします。サーバーの圧縮キューにあった発言が再起動で失われた場合は、起動時に `pending` のまま残っている発言を `rejected`（理由: 再起動で送信されませんでした）にします。発言の順番は、作成時刻と messageId の順で決めます（16 章）。
 
 ### 4.6 全体の流れ
 
@@ -243,10 +243,11 @@ decider が判断に使う読み取りモデル（in-memory の read model）に
 担当モデルは、projection の再構築で同じ値が得られるように、イベントで記録します。
 
 - `delivered` を記録するとき（乗り換えの経路）と、通常の送信で sendTurn が turnId を返したとき（通常の経路）の両方で、`thread.turn-assignment-recorded` を dispatch します。値は、そのとき稼働していたセッションの instance、解決済みのモデル、generation です。
-- `projection_turns` に `assigned_instance_id`、`assigned_model`、`assigned_generation` の 3 列を足します。この SQL projector は、送信要求の時点で pending 行を作り、`thread.session-set` のときに turnId と結びつけます（`ProjectionPipeline.ts:1388`、`:1445`、`:1550`）。担当記録のイベントは messageId と turnId の両方を持つので、どちらの順で届いても同じ行に書けます。
+- 担当は `projection_turn_assignments`（主キーは thread_id と turn_id）に記録します。列は message_id、instance_id、driver、model、generation、changed_mid_turn です。`projection_turns` の行は多くの経路で書き直されるため、別のテーブルにしています（16 章）。担当記録のイベントは messageId と turnId の両方を持つので、ターンの行と担当記録のどちらが先に届いても結果は同じです。
+- ユーザー発言のターン番号は、担当記録の messageId → turnId の対応を優先して求めます。pending 行の対応（`pending_message_id`）は、その発言に担当記録がなく、かつそのターンが別の発言に割り当てられていないときだけ使います。
 - 実行中に追加の指示（steering）を送り、同じ turnId が使われた場合（`ClaudeAdapter.ts:5151`）は、最初の担当記録だけを残します。同じターンの途中でモデルを変えた場合は、表示に「途中で変更あり」と添えます。
 - 担当記録がないターン（この機能より前のターン、インポートした発言）は、「担当モデル不明」とします。
-- repository、スナップショット、配信の契約にも同じ 3 項目を足します。
+- スナップショットと配信の契約に担当を載せるのは Phase 1（15 章 P11）です。
 
 ## 6. 引き継ぎパケット
 
@@ -283,7 +284,7 @@ decider が判断に使う読み取りモデル（in-memory の read model）に
 
 ### 6.4 取得範囲と読み取り量 [N10][N11]
 
-- **入れる発言の選び方**: 送信状態が `delivered` の発言だけを入れます（4.5）。`pending`、`rejected`、`cancelled`、`unknown-discarded` の発言は入れません。今回の発言（triggerMessageId）は `[[AMU-NOW]]` に入れるので、履歴からは除きます。発言の並びは、保存したイベントの順序番号で決めます。[P9]
+- **入れる発言の選び方**: 送信状態が `delivered` の発言だけを入れます（4.5）。`pending`、`rejected`、`cancelled`、`unknown-discarded` の発言は入れません。今回の発言（triggerMessageId）は `[[AMU-NOW]]` に入れるので、履歴からは除きます。発言の並びは、作成時刻と messageId の順で決めます（16 章）。[P9]
 - **専用クエリ** `getHandoffSource(threadId, boundarySeq)`:
   - 最初のユーザー発言は別に 1 件だけ取る
   - 残りのユーザー発言は新しい順に、最大 200 件・合計 20 万字まで取る。本文の切り詰め（1 件 6,000 字）は SQL の `substr` で行う
@@ -293,7 +294,7 @@ decider が判断に使う読み取りモデル（in-memory の read model）に
 
 ### 6.5 今回の発言の展開と予算 [N7][R9]
 
-- `ProviderService.sendTurn` のテキスト展開を、純粋関数 `expandTurnInputText(text, attachments, contextRecords, options)` に切り出します。この関数は、コンポーザー文脈の展開、引用の展開、添付パスの追記、captured-window 情報の追記を、今と同じ順で行います。必要な設定値は引数で受け取ります。
+- 送信テキストの展開は、2 つの純粋関数に分けて切り出しました（16 章）。コンポーザー文脈の展開は `expandTurnInputText`（`apps/server/src/orchestration/turnInputText.ts`）、引用の展開・添付パスの追記・captured-window 情報の追記は `expandProviderTurnText`（`apps/server/src/provider/providerTurnText.ts`）で、今と同じ順で行います。添付の保存先などの設定値は引数で受け取ります。
 - パケットを作るときは、今回の発言だけをこの関数で 1 回展開し、`[[AMU-NOW]]` に入れます。履歴には展開をかけません。
 - 送信要求には、内部専用の項目 `inputTextExpanded: true` を付けます。sendTurn はこれを見て、上の 4 つのテキスト展開だけを省きます。添付ファイルをネイティブで送る処理と、最終入力の検証（上限 120,000 字）は省きません。クライアントからはこの項目を送れないようにします。
 - 予算は `max(0, min(設定値, 120_000 − 展開後の今回発言の字数 − 2_000))`。設定値の既定は 6 万字です。
@@ -538,9 +539,19 @@ B1（Phase 2 用）: 各ドライバーで、6 万字のパケットが受け付
 | 指摘                     | Phase | 実装でやること                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 確認するテスト                                                                       |
 | ------------------------ | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | P6 世代の割り当て漏れ    | 1     | 世代の割り当て元を `ProviderService` の 1 か所にする。開始の試行の `planned` で予約した値を使う。直接の recover（`ProviderService.ts:1299`）、Claude の rollback 時の内部再開始（`ClaudeAdapter.ts:5488`）、Codex の managed runtime 変更時の内部再開始（`CodexAdapter.ts:2604`）も、この割り当て元から世代を受け取る。比較に使う世代は、アダプターの開始より前に binding へ保存する。Claude は生成関数（`offerRuntimeEvent`、`:2132`）が context を受け取るように変える。Codex はセッションごとの変換 fiber（`:2369`）で、生成したすべてのイベントに付ける | 内部再開始の後も、古い世代のイベントが捨てられ、新しい世代のイベントが受け付けられる |
-| P7 担当記録と pending 行 | 0     | 担当記録のイベントで、turnId の行を確保し、messageId との対応をその場で修正する。pending 行に先に書く場合は、turnId の行へ移すときに担当列もコピーし、messageId を照合する（`ProjectionTurns.ts:267`、`ProjectionPipeline.ts:1514`、`:1550`、`:1578`）。モデルと世代は、その送信の受付結果と同時に固定する（`ProviderSendTurnInput` の結果に model と generation を足す）                                                                                                                                                                                   | A の受付前に B の要求が保存されても、A と B の担当が入れ替わらない                   |
+| P7 担当記録と pending 行 | 0     | 担当は `projection_turn_assignments` に、messageId と turnId の組で記録する（5.4）。ターン番号は担当記録の対応を優先し、別の発言に割り当てられたターンの pending 行は使わない。モデルと世代は、その送信の受付結果と同時に固定する（Phase 1 で `ProviderSendTurnInput` の結果に model と generation を足す）                                                                                                                                                                                                                                                 | A の受付前に B の要求が保存されても、A と B の担当とターン番号が入れ替わらない       |
 | P10 LOG の読み取り量     | 0     | LOG にも、取得件数（200 件）、1 件あたりの字数（2,000 字）、合計字数（10 万字）の上限を付け、SQL で切り詰める。PLAN と STATE は別に必要な分だけ取る                                                                                                                                                                                                                                                                                                                                                                                                         | 1 ターンに 1,000 件の activity があっても、読み取りが上限内に収まる                  |
 | P11 新しい状態の配信     | 1     | スナップショット、ライブ配信、再接続時の再送（`ws.ts:346`、`:2196`）で、乗り換えの状態、担当記録、発言の送信状態を同じ形で届ける。`packet-built` は本文を除いた通知にし、全文は専用 RPC だけで返す。旧クライアントには新しいイベントを送らず、判断待ちの状態は既存のエラー表示の形で伝える                                                                                                                                                                                                                                                                  | 再接続しても状態が一致する。通常の配信にパケット本文が載らない                       |
 | P12 許可リスト           | 0     | 3.1 で直した（乗り換え元と移行先の両方を判定）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 単体テスト                                                                           |
 | R13 受入条件             | 1     | 11 章に、結果を保存する前の強制終了、`/compact` での乗り換えなし、別端末からの送信、担当記録の到着順を足す                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 結合テスト                                                                           |
 | 6.5 の補足               | 0     | コンポーザー文脈の展開は、今は `ProviderCommandReactor.ts:1495` にある。`expandTurnInputText` に移すときは、この呼び出しも置き換える                                                                                                                                                                                                                                                                                                                                                                                                                        | 既存の sendTurn テスト                                                               |
+
+## 16. 実装メモ（Phase 0、2026-10-06）
+
+実装の途中で、設計から次の 3 点を変えました。
+
+1. **担当記録は別のテーブルにする（5.4 の変更）**: `projection_turns` に列を足す代わりに、`projection_turn_assignments`（thread_id と turn_id が主キー）を作りました。`projection_turns` の行は多くの経路で書き直されるため、列を足すと担当の値が消えるおそれがあります。担当記録のイベントは messageId と turnId の両方を持つので、ターンの行と担当記録のどちらが先に届いても結果は同じです。同じターンに 2 回目の記録が来たときは最初の記録を残し、instance かモデルが違えば `changed_mid_turn` を立てます。
+2. **送信テキストの展開は 2 つの関数に分ける（6.5 の変更）**: コンポーザー文脈の展開は `apps/server/src/orchestration/turnInputText.ts` の `expandTurnInputText`、引用・添付パス・captured-window 情報の追記は `apps/server/src/provider/providerTurnText.ts` の `expandProviderTurnText` です。後者は `ProviderService.sendTurn` から動作を変えずに切り出しました。`inputTextExpanded` の項目は、送信経路に乗り換えを組み込む Phase 1 で足します。
+3. **発言の順番は作成時刻で決める（6.4 の変更）**: `projection_thread_messages` にはイベントの順序番号の列がないため、既存の一覧と同じく `created_at`、`message_id` の順で並べます。
+
+取得の上限（6.4、15 章 P10）は `HANDOFF_SOURCE_LIMITS` にまとめました。SQL で切った本文の残りの字数は、引き継ぎ文の「…（N字省略）」に正しく反映します。

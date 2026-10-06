@@ -10,10 +10,13 @@ import {
   MessageId,
   NonNegativeInt,
   OrchestrationThreadProviderSwitchState,
+  ProviderDriverKind,
+  ProviderInstanceId,
   ProviderSwitchId,
   ProviderSwitchPacketId,
   ThreadId,
   TrimmedNonEmptyString,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -60,6 +63,83 @@ export const SetProjectionMessageDeliveryStateInput = Schema.Struct({
 export type SetProjectionMessageDeliveryStateInput =
   typeof SetProjectionMessageDeliveryStateInput.Type;
 
+export const ProjectionTurnAssignment = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  messageId: MessageId,
+  instanceId: ProviderInstanceId,
+  driver: ProviderDriverKind,
+  model: TrimmedNonEmptyString,
+  generation: Schema.NullOr(NonNegativeInt),
+  /** A later record for the same turn named a different instance or model. */
+  changedMidTurn: Schema.Boolean,
+  recordedAt: IsoDateTime,
+});
+export type ProjectionTurnAssignment = typeof ProjectionTurnAssignment.Type;
+
+/** Read limits for the handoff source (design §6.4, §15 P10). */
+export const HANDOFF_SOURCE_LIMITS = {
+  userMessages: 200,
+  userChars: 200_000,
+  userMessageChars: 6_000,
+  logTurns: 50,
+  logEntries: 200,
+  logChars: 100_000,
+  logEntryChars: 2_000,
+  planChars: 6_000,
+  contextLabels: 20,
+} as const;
+
+export const ReadHandoffSourceInput = Schema.Struct({
+  threadId: ThreadId,
+  /** The message being sent now; it goes into [[AMU-NOW]], not the history. */
+  triggerMessageId: MessageId,
+});
+export type ReadHandoffSourceInput = typeof ReadHandoffSourceInput.Type;
+
+export interface HandoffSourceUserRow {
+  readonly messageId: MessageId;
+  readonly turn: number | null;
+  /** At most HANDOFF_SOURCE_LIMITS.userMessageChars characters. */
+  readonly text: string;
+  readonly fullChars: number;
+  readonly contextLabels: ReadonlyArray<string>;
+}
+
+export interface HandoffSourceLogRow {
+  readonly kind: "assistant" | "tool";
+  readonly turn: number | null;
+  readonly model: string | null;
+  /** At most HANDOFF_SOURCE_LIMITS.logEntryChars characters. */
+  readonly text: string;
+  readonly fullChars: number;
+}
+
+/** Bounded raw material for one handoff packet; never reads activity payloads. */
+export interface HandoffSourceRows {
+  readonly thread: {
+    readonly branch: string | null;
+    readonly worktreePath: string | null;
+    readonly runtimeMode: string;
+    readonly interactionMode: string;
+  } | null;
+  readonly firstUser: HandoffSourceUserRow | null;
+  /** Oldest first; the newest messages that fit the limits. */
+  readonly users: ReadonlyArray<HandoffSourceUserRow>;
+  readonly omittedUsers: number;
+  readonly plan: {
+    readonly markdown: string;
+    readonly fullChars: number;
+    readonly implemented: boolean;
+  } | null;
+  readonly lastTurnState: string | null;
+  readonly lastError: string | null;
+  /** Oldest first; the newest entries of the last turns that fit the limits. */
+  readonly log: ReadonlyArray<HandoffSourceLogRow>;
+  readonly omittedAssistantMessages: number;
+  readonly omittedToolEntries: number;
+}
+
 export interface ProjectionThreadProviderSwitchRepositoryShape {
   readonly getStateByThreadId: (
     input: ProjectionThreadIdInput,
@@ -85,10 +165,27 @@ export interface ProjectionThreadProviderSwitchRepositoryShape {
   readonly getPacket: (
     input: GetProjectionThreadHandoffPacketInput,
   ) => Effect.Effect<Option.Option<ProjectionThreadHandoffPacket>, ProjectionRepositoryError>;
-  /** Drops the thread's state and packets (a re-created thread id starts clean). */
+  /**
+   * The first record for a turn wins (steering reuses the turn id); a later
+   * record with a different instance or model only sets changedMidTurn.
+   */
+  readonly recordTurnAssignment: (
+    row: Omit<ProjectionTurnAssignment, "changedMidTurn">,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+  readonly listTurnAssignments: (
+    input: ProjectionThreadIdInput,
+  ) => Effect.Effect<ReadonlyArray<ProjectionTurnAssignment>, ProjectionRepositoryError>;
+  /** Drops the thread's state, packets and turn assignments (a re-created thread id starts clean). */
   readonly deleteByThreadId: (
     input: ProjectionThreadIdInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+  /**
+   * Bounded read for a handoff packet: only delivered user messages, never
+   * the trigger, text cut in SQL, omitted counts from COUNT (design §6.4).
+   */
+  readonly readHandoffSource: (
+    input: ReadHandoffSourceInput,
+  ) => Effect.Effect<HandoffSourceRows, ProjectionRepositoryError>;
   /** Writes projection_thread_messages.delivery_state; NULL there means delivered. */
   readonly setMessageDeliveryState: (
     input: SetProjectionMessageDeliveryStateInput,

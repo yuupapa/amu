@@ -982,3 +982,60 @@ resumeCount・resendAllowed・lastDeliveredの読み戻し、thread.createdの�
 新規11件と既存メッセージリポジトリ6件のテスト本体を、ファイル操作をスタブにしたメモリ上のSQLiteハーネスで実行し、全17件成功。実際の巻き戻しとカーソルを戻した後のbootstrapも別途確認しました。serverの型チェックはエラー0です。Vitestの783件とlintは再実行していません。
 
 **次の層に進んでよいか：はい。** 今回のSQL projectionと起動時の読み戻しの範囲では、進行を妨げる指摘はありません。
+
+---
+
+## コードレビュー: Phase 0 の残り（担当記録・展開の切り出し・設定・材料の取得、2026-10-06）
+
+経過: 第1巡 Yellow（Major3・Minor1）→ 第2巡 Green（Minor1: 担当記録の message_id 索引。056 に追加済み）
+
+### 第1巡（Codex 原文）
+
+判定：**Yellow**。Blocker 0件、Major 3件、Minor 1件。コードは変更していません。
+
+Blocker：なし。
+
+Major（3件）
+
+1. **上限を適用する前に、候補全件の本文・文脈を処理する**  
+   [ProjectionThreadProviderSwitches.ts:304](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/persistence/Layers/ProjectionThreadProviderSwitches.ts:304)、[同:387](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/persistence/Layers/ProjectionThreadProviderSwitches.ts:387)  
+   実際のSQLでは、ユーザー発言1,000件から33件を返す場合でも、1,000件すべての文脈JSONを解析します。LOGも、1ターン1,000件のツール記録から50件を返す際に、全1,000件のsummaryを処理します。返却量は制限されますが、本文処理と一時領域は履歴量に応じて増え、§6.4・P10の意図を満たしません。  
+   **直し方：** 本文を含まないID・時刻で最新200件の候補を先に確定し、その候補だけで本文の切り詰め・文脈抽出・累積字数を計算してください。LOGも同様です。COUNTは別に残し、1ターン1,000件のケースを追加してください。
+
+2. **SQLとJSの文字数の単位が異なり、省略字数が誤る**  
+   [handoffSource.ts:17](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/handoffSource.ts:17)、[CrossProviderHandoff.ts:127](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/CrossProviderHandoff.ts:127)  
+   SQLの`length/substr`はコードポイント数、JSの`length/slice`はUTF-16単位です。絵文字8,000個をSQLで6,000個に切ると、`fullChars=8000`、`text.length=12000`となり、SQLで省いた分が0になります。その後packet側で3,000個に切った結果は「6000字省略」で、実際に省いた5,000個ともUTF-16の10,000単位とも一致しません。PLAN・LOGも同じ問題があります。  
+   **直し方：** 省略表示はコードポイント数に統一し、SQLで省いた分と`clip`で追加して省いた分を同じ単位で加算してください。packetの予算・provider上限は既存のUTF-16計算を維持します。絵文字を含むUSER・PLAN・LOGのテストが必要です。
+
+3. **担当記録の対応を材料取得で使わず、ユーザー発言に別ターンの番号を付ける**  
+   [ProjectionThreadProviderSwitches.ts:254](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/persistence/Layers/ProjectionThreadProviderSwitches.ts:254)  
+   ターン番号を担当記録の`messageId→turnId`対応から取得せず、従来の`pending_message_id`に依存しています。A要求→B要求→A受付・担当記録→B受付・担当記録をエンジン経由で再現すると、担当表は正しくても、パケットではAが「ターン不明」、BがAの「ターン1」になります。別テーブル化だけでは、P7の対応修復が材料取得に反映されません。  
+   **直し方：** 担当記録の対応を優先してターン番号を取得し、既知の対応と矛盾するpendingは使わないでください。または担当イベントで既存の対応も修復します。A/Bの到着順テストで、担当値とパケットのターン番号まで確認してください。
+
+Minor（1件）
+
+- [cross-provider-handoff.md:552](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/docs/internals/cross-provider-handoff.md:552)  
+  §16に変更説明がありますが、§5.4の列追加、§6.4のイベント順序番号、§6.5の単一関数、§15 P7の行修復は旧仕様のままです。該当箇所を現在の設計へ書き換え、§16には変更理由を残してください。
+
+確認として、server/contractsの型チェックは成功しました。SQL統合テスト16件と新規の純粋関数・設定テスト9件の本体は、独自インメモリハーネスで通過しています。Vitestでの実行結果ではありません。送信テキストは、引用・添付・captured-window・上限付近を含む旧新224組合せで差分なしでした。
+
+**Phase 0を完了としてPhase 1に進んでよいか：まだ不可。Major 3件の修正と回帰テストを先に完了してください。**
+
+### 第2巡（Codex 原文）
+
+判定：**Green**。前回のMajor 3件・Minor 1件はすべて解消しています。コードは変更していません。
+
+Blocker：なし。  
+Major：なし。
+
+Minor（新規1件）
+
+- [ProjectionThreadProviderSwitches.ts:266](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/persistence/Layers/ProjectionThreadProviderSwitches.ts:266)  
+  担当記録を`(thread_id, message_id)`で検索しますが、056の索引は主キー`(thread_id, turn_id)`だけです。実際のクエリ計画でも`thread_id`だけで絞り、最大201発言について担当履歴を繰り返し検索します。  
+  **直し方：** 056に`projection_turn_assignments(thread_id, message_id, turn_id)`の索引を追加してください。長いスレッドでの検索量を減らす改善で、Phase 1への進行は妨げません。
+
+候補だけの本文・文脈処理、USER・PLAN・LOGの省略数、エンジン経由のA/B到着順、設計書の更新を確認しました。
+
+server/contractsの型チェックは成功。独自インメモリハーネスでSQL統合19件、純粋関数・設定9件のテスト本体が通過しました。Vitestでの実行結果ではありません。送信テキストも旧新224組合せで一致しました。
+
+**Phase 0を完了としてPhase 1に進んでよいか：進んでよいです。** 上記Minorは改善事項として残せます。

@@ -36,9 +36,9 @@ import {
   PreviewZoomFactor,
 } from "./preview.ts";
 import {
+  ProviderDriverKind,
   ProviderInstanceConfig,
   ProviderInstanceId,
-  type ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
 
@@ -1100,10 +1100,45 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+/**
+ * Switching a chat to another provider mid-conversation (cross-provider
+ * handoff, docs/internals/cross-provider-handoff.md §7.1). Off by default.
+ * Turning it off stops new switches only; one already in progress finishes.
+ */
+export const CROSS_PROVIDER_HANDOFF_MIN_BUDGET_CHARS = 10_000;
+export const CROSS_PROVIDER_HANDOFF_MAX_BUDGET_CHARS = 110_000;
+export const DEFAULT_CROSS_PROVIDER_HANDOFF_BUDGET_CHARS = 60_000;
+export const DEFAULT_CROSS_PROVIDER_HANDOFF_DRIVERS = [
+  ProviderDriverKind.make("claudeAgent"),
+  ProviderDriverKind.make("codex"),
+] as const;
+
+const CrossProviderHandoffBudgetChars = Schema.Int.check(
+  Schema.isBetween({
+    minimum: CROSS_PROVIDER_HANDOFF_MIN_BUDGET_CHARS,
+    maximum: CROSS_PROVIDER_HANDOFF_MAX_BUDGET_CHARS,
+  }),
+);
+
+export const CrossProviderHandoffSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  packetBudgetChars: CrossProviderHandoffBudgetChars.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_CROSS_PROVIDER_HANDOFF_BUDGET_CHARS)),
+  ),
+  /** Both the old and the new provider's driver must be listed. */
+  allowedDrivers: Schema.Array(ProviderDriverKind).pipe(
+    Schema.withDecodingDefault(Effect.succeed([...DEFAULT_CROSS_PROVIDER_HANDOFF_DRIVERS])),
+  ),
+});
+export type CrossProviderHandoffSettings = typeof CrossProviderHandoffSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   worktreeCleanup: WorktreeCleanup.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   storageCleanup: StorageCleanupSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(StorageCleanupSettings)({}))),
+  ),
+  crossProviderHandoff: CrossProviderHandoffSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(CrossProviderHandoffSettings)({}))),
   ),
   // How assistant text reaches clients during a turn. Deliberately a fresh
   // key (was `enableLegacyTokenStreaming`, before that
@@ -1477,6 +1512,13 @@ export const ServerSettingsPatch = Schema.Struct({
         }),
       ]),
     ),
+  ),
+  crossProviderHandoff: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      packetBudgetChars: Schema.optionalKey(CrossProviderHandoffBudgetChars),
+      allowedDrivers: Schema.optionalKey(Schema.Array(ProviderDriverKind)),
+    }),
   ),
   storageCleanup: Schema.optionalKey(
     Schema.Struct({
