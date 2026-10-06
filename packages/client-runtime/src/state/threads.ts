@@ -17,6 +17,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom } from "effect/unstable/reactivity";
+import { mergeTurnAssignmentPages } from "@t3tools/shared/providerSwitchFold";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
@@ -619,6 +620,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ...older.checkpoints.filter((row) => !seenCheckpoints.has(row.turnId)),
           ...loaded.checkpoints,
         ],
+        // Answerers of the older turns; the page's settled first records win.
+        ...(older.turnAssignments !== undefined || loaded.turnAssignments !== undefined
+          ? {
+              turnAssignments: mergeTurnAssignmentPages(
+                older.turnAssignments ?? [],
+                loaded.turnAssignments ?? [],
+              ),
+            }
+          : {}),
       };
       return {
         ...value,
@@ -762,6 +772,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 threadResumeCompletionMarker?: boolean;
                 threadSnapshotPagination?: boolean;
                 reasoningMessages?: boolean;
+                handoffEvents?: boolean;
               },
           ),
         );
@@ -771,6 +782,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         // such a server would silently hide history.
         const supportsPagination = config.threadSnapshotPagination === true;
         const supportsReasoningMessages = config.reasoningMessages === true;
+        // Older servers would not send the events anyway; asking only when the
+        // server advertises them keeps old servers' input decoding unchanged.
+        const supportsHandoffEvents = config.handoffEvents === true;
         yield* Ref.set(reasoningMessagesSupported, supportsReasoningMessages);
         yield* Ref.set(paginationSupported, supportsPagination);
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
@@ -791,6 +805,27 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 ...value,
                 data: Option.none(),
                 status: value.status === "deleted" ? value.status : ("empty" as const),
+                page: Option.none(),
+              }));
+              yield* SubscriptionRef.set(lastSequence, 0);
+              yield* remember;
+            }),
+          );
+          current = yield* SubscriptionRef.get(state);
+        }
+        // A cache built without the handoff state (by an older client, or
+        // from an older server) cannot catch up by replay: the switch,
+        // answerer and delivery events it missed are not replayed. Reload it.
+        if (supportsHandoffEvents) {
+          yield* applyLock.withPermits(1)(
+            Effect.gen(function* () {
+              const value = yield* SubscriptionRef.get(state);
+              if (Option.isNone(value.data) || value.data.value.handoffTracked === true) return;
+              yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+              yield* SubscriptionRef.update(state, (latest) => ({
+                ...latest,
+                data: Option.none(),
+                status: latest.status === "deleted" ? latest.status : ("empty" as const),
                 page: Option.none(),
               }));
               yield* SubscriptionRef.set(lastSequence, 0);
@@ -841,6 +876,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ...(canResume ? { afterSequence: sequence } : {}),
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           ...(supportsReasoningMessages ? { reasoningMessages: true as const } : {}),
+          ...(supportsHandoffEvents ? { handoffEvents: true as const } : {}),
           // The WS fallback snapshot (sent when afterSequence is missing or
           // the gap is too large) should be windowed the same as the HTTP
           // path; without this a resume failure re-downloads the full thread.

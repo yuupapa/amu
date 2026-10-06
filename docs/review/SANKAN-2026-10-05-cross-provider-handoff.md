@@ -1600,3 +1600,81 @@ Minor: なし。
 実際の関数を使ったメモリ上の検証で、担当選択の優先順位、完全な選択の保持、フラグoff時の扱いも確認しました。server型チェックと`git diff --check`は通過しています。Vitestは今回未実行です。コード・ファイルは変更していません。
 
 **次の部分（クライアントへの状態配信とweb UI）に進んでよいと判断します。**
+
+## コードレビュー: Phase 1 第5部分の前半（クライアントへの状態配信 P11、2026-10-06）
+
+経過: 第1巡 Red（Major2・Minor1）→ 第2巡 Red（Major2）→ 第3巡 Green
+
+### 第1巡（Codex 原文）
+
+判定: **Red（Major 2件、Minor 1件）**
+
+Blocker: なし。
+
+Major:
+
+1. **旧キャッシュからの再開で、乗り換えの状態が欠けたままになります。**  
+   [threads.ts:777](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/packages/client-runtime/src/state/threads.ts:777)
+
+   旧クライアントは新イベントを受け取らず、後続のactivityやsession-setでsequenceを進めます。そのキャッシュを新クライアントが読むと、`handoffEvents: true`を付けるだけで保存済みsequenceから再開します。以前の乗り換え・担当記録・送信状態は再送されないため、サーバーに未解決の操作があっても`providerSwitch`が欠けたままです。
+
+   実関数による検証でも、旧形式のキャッシュから`afterSequence: 80`で再開し、スナップショット取得は0回でした。
+
+   **直し方:** キャッシュとメモリ上の保持状態に、handoff対応で取得・適用した状態かを記録してください。不明・非対応から対応へ移る場合は、状態とcursorをリセットしてスナップショットを取得してください。旧キャッシュから更新するテストが必要です。
+
+2. **ウィンドウ付きスナップショットでも、担当記録を全履歴分返します。**  
+   [ProjectionSnapshotQuery.ts:1098](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts:1098)
+
+   担当記録のクエリにはウィンドウ条件がなく、古いページの取得でも全件を再送します。実際のSQLをメモリDBで実行すると、合成データ5,000件をすべて返し、担当記録だけで751,671バイトになりました。`turnLimit`を小さくしても、この読み取り・decode・転送量は減りません。
+
+   **直し方:** ウィンドウ付き読み取りでは、そのページの発言またはターンに対応する記録に限定してください。`mergeOlderPage`にも担当記録のマージを追加し、長い履歴で初回・古いページともに返却件数が限定されるテストを追加してください。
+
+Minor:
+
+1. **ライブの乗り換えイベントでupdatedAtが更新されません。**  
+   [threadReducer.ts:762](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/packages/client-runtime/src/state/threadReducer.ts:762)
+
+   サーバーのprojectorとSQLは乗り換えイベントで`thread.updatedAt`を更新しますが、クライアントは`providerSwitch`だけを変えます。同じrequestedイベントで、サーバーは02:00、クライアントは00:00のままになることを確認しました。
+
+   **直し方:** `event.occurredAt`を反映してください。畳み込みが無変化でも時刻が変わる場合を含め、サーバーとの比較テストを追加してください。
+
+本文の除去、RPCの`orchestration:read`認可、パケットのthreadId照合には追加指摘ありません。server・contracts・shared・client-runtimeの型チェックと`git diff --check`は通過しました。再現は個別のメモリ内検証で、Vitestは今回未実行です。コード・ファイルは変更していません。
+
+**後半（webの画面）には、Major 2件を直してから進んでください。**
+
+### 第2巡（Codex 原文）
+
+**判定: Red**
+
+Blocker: なし。Major: 2件。Minor: なし。
+
+前回の旧キャッシュの取り直しと、`updatedAt`の更新は解消しています。担当記録の取得範囲とページの合流に、以下の問題が残っています。
+
+1. **Major — [ProjectionSnapshotQuery.ts:3818](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts:3818)**  
+   ターンが0件の初回ページでは、`turnLimit`を指定しても内部の`bounds`が`undefined`になり、担当記録を全件取得します。通常送信の履歴をターン0まで巻き戻すと、発言とターンは消えても担当記録は残るため、空のページに過去の担当記録がすべて載ります。
+
+   **直し方:** ページ要求の有無と、本文取得用の`bounds`を分けてください。ページ要求では実際に返した発言のIDで担当記録を絞り、発言0件なら担当記録も0件にします。「担当記録のある履歴を0まで巻き戻した初回ページ」のテストが必要です。
+
+2. **Major — [threads.ts:625](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/packages/client-runtime/src/state/threads.ts:625)**  
+   ウィンドウ外のターンに後続の担当記録が届くと、reducerは最初の記録を知らないため、後続記録を最初の担当として保持します。古いページを読んでも、同じ`turnId`の読み込み済み記録が優先され、SQLの確定済み記録を捨ててしまいます。
+
+   例えば、SQL側が「最初のモデルA・`changedMidTurn: true`」、ライブで先に見た記録が「モデルB・`false`」の場合、ページ読み込み後もB・falseのままです。
+
+   **直し方:** ページのSQL記録を最初の担当として採用し、読み込み済みイベントの変更情報を統合してください。「未読ターンへの後続記録→古いページ取得」の順でも、担当Aと`changedMidTurn: true`になるテストを追加してください。
+
+現行関数を使うメモリ内のハーネスで、両経路を再現しました。server・contracts・shared・client-runtimeの型チェックは通過しています。Vitestは今回実行していません。コードは変更していません。
+
+**後半（webの画面）へは、上の2件を修正してから進んでください。**
+
+### 第3巡（Codex 原文）
+
+**判定: Green**
+
+Blocker・Major・Minorはいずれもありません。前回のMajor 2件は解消しています。
+
+- [ProjectionSnapshotQuery.ts:3824](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts:3824)：`paged`を`bounds`と独立して判定するため、ターン0件の初回ページでも全件取得しません。発言0件では担当記録のクエリを実行せず、ウィンドウなしの読み取りも維持しています。
+- [providerSwitchFold.ts:304](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/packages/shared/src/providerSwitchFold.ts:304)：ページの確定済み記録を採用し、双方の変更フラグとinstance・モデルの相違を統合しています。ライブでモデルBを先に受けても、ページ読み込み後は最初のモデルAと`changedMidTurn: true`が残ります。
+
+現行関数によるメモリ内の検証で、両修正と合流規則16通りを確認しました。キャッシュ再開・パケット本文の除去も確認済みです。対象4パッケージの型チェックはエラー0、`git diff --check`も通過しています。Vitestは今回再実行していません。
+
+**後半（webの画面）に進んでよいです。** コードは変更していません。

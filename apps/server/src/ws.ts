@@ -165,6 +165,9 @@ import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { ProjectionThreadProviderSwitchRepositoryLive } from "./persistence/Layers/ProjectionThreadProviderSwitches.ts";
+import { ProjectionThreadProviderSwitchRepository } from "./persistence/Services/ProjectionThreadProviderSwitches.ts";
+import { readHandoffPacket } from "./orchestration/handoffPacketRead.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -363,6 +366,30 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
     event.type === "thread.reverted" ||
     event.type === "thread.session-set"
   );
+}
+
+/** Cross-provider handoff events, sent only to clients that opt in (P11). */
+export function isHandoffDetailEvent(event: OrchestrationEvent): boolean {
+  return (
+    event.type === "thread.provider-switch-requested" ||
+    event.type === "thread.provider-switch-milestone-reached" ||
+    event.type === "thread.provider-switch-packet-built" ||
+    event.type === "thread.provider-switch-attempt-recorded" ||
+    event.type === "thread.provider-switch-awaiting-user" ||
+    event.type === "thread.provider-switch-retry-requested" ||
+    event.type === "thread.provider-switch-aborted" ||
+    event.type === "thread.provider-switch-resolved" ||
+    event.type === "thread.provider-switch-closed" ||
+    event.type === "thread.turn-assignment-recorded" ||
+    event.type === "thread.message-delivery-state-set"
+  );
+}
+
+/** The packet text stays on the server; clients fetch it with getHandoffPacket. */
+export function withoutHandoffPacketText(event: OrchestrationEvent): OrchestrationEvent {
+  return event.type === "thread.provider-switch-packet-built"
+    ? { ...event, payload: { ...event.payload, text: "" } }
+    : event;
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
@@ -1868,6 +1895,7 @@ const makeWsRpcLayer = (
             threadResumeCompletionMarker: true,
             threadSnapshotPagination: true,
             reasoningMessages: true,
+            handoffEvents: true,
           };
         });
 
@@ -1981,6 +2009,18 @@ const makeWsRpcLayer = (
                     cause,
                   }),
               ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.getHandoffPacket]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.getHandoffPacket,
+            Effect.gen(function* () {
+              const switches = yield* ProjectionThreadProviderSwitchRepository;
+              return yield* readHandoffPacket(switches, input);
+            }).pipe(
+              Effect.provide(ProjectionThreadProviderSwitchRepositoryLive),
+              Effect.provideService(SqlClient.SqlClient, sql),
             ),
             { "rpc.aggregate": "orchestration" },
           ),
@@ -2192,13 +2232,19 @@ const makeWsRpcLayer = (
               const isThisThreadDetailEvent = (event: OrchestrationEvent) =>
                 event.aggregateKind === "thread" &&
                 event.aggregateId === input.threadId &&
-                isThreadDetailEvent(event);
+                (isThreadDetailEvent(event) ||
+                  (input.handoffEvents === true && isHandoffDetailEvent(event)));
+              const toClientEvent = (event: OrchestrationEvent) =>
+                projectActivityEvent(
+                  withoutHandoffPacketText(event),
+                  input.reasoningMessages === true,
+                );
 
               const liveStream = orchestrationEngine.streamDomainEvents.pipe(
                 Stream.filter(isThisThreadDetailEvent),
                 Stream.map((event) => ({
                   kind: "event" as const,
-                  event: projectActivityEvent(event, input.reasoningMessages === true),
+                  event: toClientEvent(event),
                 })),
               );
 
@@ -2268,7 +2314,7 @@ const makeWsRpcLayer = (
                       Stream.filter(isThisThreadDetailEvent),
                       Stream.map((event) => ({
                         kind: "event" as const,
-                        event: projectActivityEvent(event, input.reasoningMessages === true),
+                        event: toClientEvent(event),
                       })),
                       Stream.mapError(
                         (cause) =>

@@ -16,6 +16,12 @@ import type {
 import { threadPullRequestKeysEqual } from "@t3tools/shared/threadPullRequests";
 import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
+import {
+  applyProviderSwitchEvent,
+  applyTurnAssignmentRecord,
+  isEmptyProviderSwitchState,
+  threadProviderSwitchState,
+} from "@t3tools/shared/providerSwitchFold";
 
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
@@ -733,6 +739,61 @@ export function applyThreadDetailEvent(
         kind: "updated",
         thread: { ...thread, activities, updatedAt: event.occurredAt },
       };
+    }
+
+    // ── Cross-provider handoff (P11) ───────────────────────────────
+    // The same fold as the server's projection, so every client shows the
+    // state the server holds.
+    case "thread.provider-switch-requested":
+    case "thread.provider-switch-milestone-reached":
+    case "thread.provider-switch-packet-built":
+    case "thread.provider-switch-attempt-recorded":
+    case "thread.provider-switch-awaiting-user":
+    case "thread.provider-switch-retry-requested":
+    case "thread.provider-switch-aborted":
+    case "thread.provider-switch-resolved":
+    case "thread.provider-switch-closed": {
+      const current = threadProviderSwitchState(thread);
+      const next = applyProviderSwitchEvent(current, event);
+      // Like the server's projectors: every switch event moves updatedAt.
+      if (next === current && thread.updatedAt === event.occurredAt) {
+        return { kind: "unchanged" };
+      }
+      const { providerSwitch: _previous, ...rest } = thread;
+      const kept =
+        next === current
+          ? thread.providerSwitch
+          : isEmptyProviderSwitchState(next)
+            ? undefined
+            : next;
+      return {
+        kind: "updated",
+        thread: {
+          ...rest,
+          ...(kept !== undefined ? { providerSwitch: kept } : {}),
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.turn-assignment-recorded": {
+      const { threadId: _threadId, createdAt: _createdAt, ...record } = event.payload;
+      const current = thread.turnAssignments ?? [];
+      const next = applyTurnAssignmentRecord(current, record);
+      return next === current
+        ? { kind: "unchanged" }
+        : { kind: "updated", thread: { ...thread, turnAssignments: next } };
+    }
+
+    case "thread.message-delivery-state-set": {
+      const index = thread.messages.findIndex((message) => message.id === event.payload.messageId);
+      const message = thread.messages[index];
+      if (message === undefined || message.deliveryState === event.payload.state) {
+        return { kind: "unchanged" };
+      }
+      const messages = thread.messages.slice();
+      messages[index] = { ...message, deliveryState: event.payload.state };
+      return { kind: "updated", thread: { ...thread, messages } };
     }
 
     // ── Events that don't mutate thread state directly ──────────────

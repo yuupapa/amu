@@ -6,6 +6,8 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  MessageId,
+  ProviderDriverKind,
   type OrchestrationMessage,
   type OrchestrationThread,
   type OrchestrationThreadDetailSnapshot,
@@ -134,6 +136,7 @@ type LoaderResponse = Option.Option<OrchestrationThreadDetailSnapshot>;
 const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (options?: {
   readonly paginationCapability?: boolean;
   readonly reasoningCapability?: boolean;
+  readonly handoffCapability?: boolean;
   readonly initialResponse?: LoaderResponse;
   /** Cached snapshot returned by the cache store (simulates a warm cache). */
   readonly cached?: OrchestrationThreadDetailSnapshot;
@@ -159,6 +162,7 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
     initialConfig: Effect.succeed({
       threadSnapshotPagination: options?.paginationCapability !== false,
       reasoningMessages: options?.reasoningCapability === true,
+      handoffEvents: options?.handoffCapability === true,
     } as never),
     subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
@@ -369,6 +373,113 @@ describe("thread pagination state", () => {
         hasMore: false,
         loadingOlder: false,
       });
+    }),
+  );
+
+  it.effect("merges the older page's turn answerers with the loaded ones", () =>
+    Effect.gen(function* () {
+      const assignment = (turnId: string, model: string) => ({
+        turnId: TurnId.make(turnId),
+        messageId: MessageId.make(`message-${turnId}`),
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+        model,
+        generation: 1,
+        changedMidTurn: false,
+      });
+      const harness = yield* makeHarness({
+        initialResponse: Option.some({
+          ...WINDOWED_SNAPSHOT,
+          thread: { ...BASE_THREAD, turnAssignments: [assignment("turn-2", "gpt-5.4")] },
+        }),
+      });
+      yield* harness.awaitState((value) => Option.isSome(value.page));
+      requestOlderThreadTurns(TARGET.environmentId, THREAD_ID);
+      yield* harness.awaitState((value) =>
+        Option.match(value.page, { onNone: () => false, onSome: (page) => page.loadingOlder }),
+      );
+      yield* harness.resolveNextPage(
+        Option.some({
+          ...OLDER_PAGE,
+          thread: { ...OLDER_PAGE.thread, turnAssignments: [assignment("turn-1", "gpt-5.3")] },
+        }),
+      );
+      const state = yield* harness.awaitState((value) => hasMessage(value, "message-old"));
+      expect(
+        Option.getOrThrow(state.data).turnAssignments?.map((entry) => [entry.turnId, entry.model]),
+      ).toEqual([
+        ["turn-1", "gpt-5.3"],
+        ["turn-2", "gpt-5.4"],
+      ]);
+    }),
+  );
+
+  it.effect("keeps the page's settled first answerer over a live record seen earlier", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ initialResponse: Option.some(WINDOWED_SNAPSHOT) });
+      yield* harness.awaitState((value) => Option.isSome(value.page));
+      // A later record for turn-1, outside the window, arrives live first.
+      yield* Queue.offer(harness.inputs, {
+        kind: "event",
+        event: {
+          eventId: EventId.make("event-assignment-live"),
+          sequence: 11,
+          occurredAt: "2026-04-01T02:00:00.000Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          aggregateKind: "thread",
+          aggregateId: THREAD_ID,
+          type: "thread.turn-assignment-recorded",
+          payload: {
+            threadId: THREAD_ID,
+            createdAt: "2026-04-01T02:00:00.000Z",
+            turnId: TurnId.make("turn-1"),
+            messageId: MessageId.make("message-turn-1"),
+            instanceId: ProviderInstanceId.make("codex"),
+            driver: ProviderDriverKind.make("codex"),
+            model: "model-b",
+            generation: 2,
+          },
+        },
+      });
+      yield* harness.awaitState((value) =>
+        Option.match(value.data, {
+          onNone: () => false,
+          onSome: (thread) => (thread.turnAssignments ?? []).length === 1,
+        }),
+      );
+      requestOlderThreadTurns(TARGET.environmentId, THREAD_ID);
+      yield* harness.awaitState((value) =>
+        Option.match(value.page, { onNone: () => false, onSome: (page) => page.loadingOlder }),
+      );
+      // The server table settled model A as turn-1's first answerer. The page
+      // is read at the live sequence, so it is not discarded as stale.
+      yield* harness.resolveNextPage(
+        Option.some({
+          ...OLDER_PAGE,
+          snapshotSequence: 11,
+          thread: {
+            ...OLDER_PAGE.thread,
+            turnAssignments: [
+              {
+                turnId: TurnId.make("turn-1"),
+                messageId: MessageId.make("message-turn-1"),
+                instanceId: ProviderInstanceId.make("codex"),
+                driver: ProviderDriverKind.make("codex"),
+                model: "model-a",
+                generation: 1,
+                changedMidTurn: false,
+              },
+            ],
+          },
+        }),
+      );
+      const state = yield* harness.awaitState((value) => hasMessage(value, "message-old"));
+      expect(Option.getOrThrow(state.data).turnAssignments).toMatchObject([
+        { turnId: "turn-1", model: "model-a", changedMidTurn: true },
+      ]);
     }),
   );
 
@@ -659,6 +770,50 @@ describe("thread pagination state", () => {
         Effect.repeat({ until: (input) => input !== undefined }),
       );
       expect(subscribeInput?.afterSequence).toBe(10);
+    }),
+  );
+
+  it.effect("reloads a cache built without the handoff state instead of resuming it", () =>
+    Effect.gen(function* () {
+      // An older client never received the switch, answerer and delivery
+      // events; replaying after its sequence would leave them missing.
+      const tracked: OrchestrationThreadDetailSnapshot = {
+        snapshotSequence: 20,
+        thread: { ...BASE_THREAD, title: "Tracked reload", handoffTracked: true },
+      };
+      const harness = yield* makeHarness({
+        handoffCapability: true,
+        cached: WINDOWED_SNAPSHOT,
+        initialResponse: Option.some(tracked),
+      });
+      yield* harness.awaitState((value) =>
+        Option.match(value.data, {
+          onNone: () => false,
+          onSome: (thread) => thread.title === "Tracked reload",
+        }),
+      );
+      const subscribeInput = yield* Ref.get(harness.lastSubscribeInput).pipe(
+        Effect.repeat({ until: (input) => input !== undefined }),
+      );
+      expect(subscribeInput?.afterSequence).toBe(20);
+      expect(subscribeInput?.handoffEvents).toBe(true);
+    }),
+  );
+
+  it.effect("resumes a cache that already carries the handoff state", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        handoffCapability: true,
+        cached: {
+          ...WINDOWED_SNAPSHOT,
+          thread: { ...BASE_THREAD, handoffTracked: true },
+        },
+      });
+      const subscribeInput = yield* Ref.get(harness.lastSubscribeInput).pipe(
+        Effect.repeat({ until: (input) => input !== undefined }),
+      );
+      expect(subscribeInput?.afterSequence).toBe(10);
+      expect((yield* Ref.get(harness.loaderWindows)).length).toBe(0);
     }),
   );
 });

@@ -366,6 +366,10 @@
     "./providerContinuation": {
       "types": "./src/providerContinuation.ts",
       "import": "./src/providerContinuation.ts"
+    },
+    "./providerSwitchFold": {
+      "types": "./src/providerSwitchFold.ts",
+      "import": "./src/providerSwitchFold.ts"
     }
   },
   "scripts": {

@@ -38,6 +38,8 @@ import {
   ThreadProviderSwitchResolvePayloadFields,
   ThreadProviderSwitchRetryPayloadFields,
   ThreadTurnAssignmentPayloadFields,
+  OrchestrationTurnAssignment,
+  ProviderSwitchPacketId,
 } from "./providerSwitch.ts";
 import {
   PullRequestActor,
@@ -56,6 +58,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  getHandoffPacket: "orchestration.getHandoffPacket",
 } as const;
 
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -872,6 +875,13 @@ export const OrchestrationThread = Schema.Struct({
   session: Schema.NullOr(OrchestrationSession),
   // Cross-provider handoff state. Absent means no switch has happened.
   providerSwitch: Schema.optional(OrchestrationThreadProviderSwitchState),
+  // Who answered each turn (§5.4). Only thread detail snapshots carry it; a
+  // windowed snapshot carries only the records of its own turns.
+  turnAssignments: Schema.optional(Schema.Array(OrchestrationTurnAssignment)),
+  // Set on snapshots from servers that send the handoff state above (P11). A
+  // client cache without it is reloaded, not resumed, so missed switch events
+  // cannot stay missing.
+  handoffTracked: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -1049,6 +1059,12 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    * behavior. Live events are unaffected either way.
    */
   turnLimit: Schema.optionalKey(PositiveInt),
+  /**
+   * Opt in to cross-provider handoff events (switch state, turn assignments,
+   * message delivery states; P11). Older clients cannot decode them, so they
+   * only see the existing error activities.
+   */
+  handoffEvents: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
 
@@ -2602,6 +2618,24 @@ export class OrchestrationGetWorkflowScriptError extends Schema.TaggedError<Orch
   }
 }
 
+/** The full text handed to the new model; live events carry it empty (P11). */
+export const OrchestrationGetHandoffPacketInput = Schema.Struct({
+  threadId: ThreadId,
+  packetId: ProviderSwitchPacketId,
+});
+export type OrchestrationGetHandoffPacketInput = typeof OrchestrationGetHandoffPacketInput.Type;
+
+export const OrchestrationGetHandoffPacketResult = Schema.Struct({
+  packetId: ProviderSwitchPacketId,
+  text: Schema.String,
+  chars: NonNegativeInt,
+  includedMessages: NonNegativeInt,
+  omittedMessages: NonNegativeInt,
+  truncated: Schema.Boolean,
+  createdAt: IsoDateTime,
+});
+export type OrchestrationGetHandoffPacketResult = typeof OrchestrationGetHandoffPacketResult.Type;
+
 export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
@@ -2635,6 +2669,10 @@ export const OrchestrationRpcSchemas = {
     input: OrchestrationSubscribeShellInput,
     output: OrchestrationShellStreamItem,
   },
+  getHandoffPacket: {
+    input: OrchestrationGetHandoffPacketInput,
+    output: OrchestrationGetHandoffPacketResult,
+  },
 } as const;
 
 export class OrchestrationGetSnapshotError extends Schema.TaggedError<OrchestrationGetSnapshotError>()(
@@ -2651,6 +2689,14 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedError<Orches
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
     bootstrapThreadDisposition: Schema.optional(Schema.Literals(["deleted", "not-created"])),
+  },
+) {}
+
+export class OrchestrationGetHandoffPacketError extends Schema.TaggedError<OrchestrationGetHandoffPacketError>()(
+  "OrchestrationGetHandoffPacketError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 

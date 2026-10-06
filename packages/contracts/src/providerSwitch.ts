@@ -268,6 +268,17 @@ export const ThreadTurnAssignmentPayloadFields = {
   generation: Schema.NullOr(NonNegativeInt),
 } as const;
 
+/**
+ * Who answered a turn (§5.4), as thread snapshots carry it. The first record
+ * for a turn wins; a later one naming another instance or model only sets
+ * changedMidTurn.
+ */
+export const OrchestrationTurnAssignment = Schema.Struct({
+  ...ThreadTurnAssignmentPayloadFields,
+  changedMidTurn: Schema.Boolean,
+});
+export type OrchestrationTurnAssignment = typeof OrchestrationTurnAssignment.Type;
+
 export const ThreadMessageDeliveryStatePayloadFields = {
   messageId: MessageId,
   state: MessageDeliveryState,

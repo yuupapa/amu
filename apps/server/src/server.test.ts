@@ -34,6 +34,7 @@ import {
   type ProviderAuthState,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSwitchPacketId,
   type ProviderInstallState,
   ProviderSetupError,
   ResolvedKeybindingRule,
@@ -10033,6 +10034,121 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const first = items[0];
       assertTrue(first?.kind === "event" && first.event.type === "thread.activity-appended");
       assert.equal(first.event.payload.activity.kind, "tool.completed");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("subscribeThread sends handoff events only to clients that opt in", () =>
+    Effect.gen(function* () {
+      const base = {
+        aggregateKind: "thread" as const,
+        aggregateId: defaultThreadId,
+        occurredAt: "2026-01-01T00:00:01.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+      };
+      const packetBuilt = {
+        ...base,
+        sequence: 7,
+        eventId: EventId.make("event-packet-built"),
+        type: "thread.provider-switch-packet-built",
+        payload: {
+          threadId: defaultThreadId,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          switchId: "switch-1",
+          packetId: "packet-1",
+          text: "[[AMU-HANDOFF v1]] the whole conversation",
+          sha256: "abc",
+          chars: 40,
+          includedMessages: 2,
+          omittedMessages: 0,
+          truncated: false,
+        },
+      } as unknown as OrchestrationEvent;
+      const delivery = {
+        ...base,
+        sequence: 8,
+        eventId: EventId.make("event-delivery"),
+        type: "thread.message-delivery-state-set",
+        payload: {
+          threadId: defaultThreadId,
+          createdAt: "2026-01-01T00:00:01.000Z",
+          messageId: "message-1",
+          state: "delivered",
+        },
+      } as unknown as OrchestrationEvent;
+      const activity = makeLiveToolActivityEvent(9, "tool.completed");
+      const events = [packetBuilt, delivery, activity];
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            latestSequence: Effect.succeed(9),
+            getThreadReplayStats: () =>
+              Effect.succeed({ eventCount: 3, payloadBytes: 1_000, hasCreateEvent: false }),
+            readThreadEvents: () => Stream.fromIterable(events),
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: () => Effect.die("A small replay must not load a snapshot"),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const replay = (handoffEvents: boolean) =>
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+              threadId: defaultThreadId,
+              afterSequence: 6,
+              requestCompletionMarker: true,
+              ...(handoffEvents ? { handoffEvents: true } : {}),
+            }).pipe(
+              Stream.takeUntil((item) => item.kind === "synchronized"),
+              Stream.runCollect,
+            ),
+          ),
+        );
+
+      const optedIn = yield* replay(true);
+      assert.deepEqual(
+        optedIn.map((item) => (item.kind === "event" ? item.event.type : item.kind)),
+        [
+          "thread.provider-switch-packet-built",
+          "thread.message-delivery-state-set",
+          "thread.activity-appended",
+          "synchronized",
+        ],
+      );
+      const packet = optedIn[0];
+      // The packet text never travels with events; getHandoffPacket returns it.
+      assertTrue(
+        packet?.kind === "event" && packet.event.type === "thread.provider-switch-packet-built",
+      );
+      assert.equal(packet.event.payload.text, "");
+      assert.equal(packet.event.payload.packetId, "packet-1");
+
+      const older = yield* replay(false);
+      assert.deepEqual(
+        older.map((item) => (item.kind === "event" ? item.event.type : item.kind)),
+        ["thread.activity-appended", "synchronized"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("getHandoffPacket reports a packet it does not hold as not found", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const error = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.getHandoffPacket]({
+            threadId: defaultThreadId,
+            packetId: ProviderSwitchPacketId.make("packet-missing"),
+          }),
+        ),
+      ).pipe(Effect.flip);
+      assertTrue(error._tag === "OrchestrationGetHandoffPacketError");
+      assert.equal(error.message, "The handoff packet was not found.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

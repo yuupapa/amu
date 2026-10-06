@@ -107,6 +107,7 @@ import {
   OrchestrationSearchThreadsInput,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
+  OrchestrationGetHandoffPacketError,
   OrchestrationRpcSchemas,
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
@@ -1326,6 +1327,12 @@ const WsOrchestrationGetTurnDiffRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getTurnD
   error: Schema.Union([OrchestrationGetTurnDiffError, EnvironmentAuthorizationError]),
 });
 
+const WsOrchestrationGetHandoffPacketRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getHandoffPacket, {
+  payload: OrchestrationRpcSchemas.getHandoffPacket.input,
+  success: OrchestrationRpcSchemas.getHandoffPacket.output,
+  error: Schema.Union([OrchestrationGetHandoffPacketError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationGetFullThreadDiffRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getFullThreadDiff, {
   payload: OrchestrationGetFullThreadDiffInput,
   success: OrchestrationRpcSchemas.getFullThreadDiff.output,
@@ -1571,6 +1578,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
+  WsOrchestrationGetHandoffPacketRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationSearchThreadsRpc,
   WsOrchestrationGetArchivedShellSnapshotRpc,

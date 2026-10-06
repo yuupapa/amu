@@ -2522,6 +2522,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
     yield* sql`DELETE FROM projection_thread_messages`;
     yield* sql`DELETE FROM projection_thread_activities`;
     yield* sql`DELETE FROM projection_state`;
+    yield* sql`DELETE FROM projection_turn_assignments`;
+    yield* sql`DELETE FROM projection_thread_provider_switch_state`;
 
     yield* sql`
       INSERT INTO projection_projects (
@@ -2673,6 +2675,60 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         assert.notEqual(snapshot.value.page?.beforeCursor, null);
         assert.equal(snapshot.value.page?.snapshotSequence, 42);
       }
+    }),
+  );
+
+  it.effect("carries only the window's turn answerers, page by page", () =>
+    Effect.gen(function* () {
+      yield* seedFanOutThread();
+      const sql = yield* SqlClient.SqlClient;
+      for (const turn of ["turn-1", "turn-2", "turn-3", "turn-4", "turn-5"]) {
+        yield* sql`
+          INSERT INTO projection_turn_assignments (
+            thread_id, turn_id, message_id, instance_id, driver, model, generation,
+            changed_mid_turn, recorded_at
+          )
+          VALUES ('thread-w', ${turn}, ${turn + "-reply"}, 'codex', 'codex', 'gpt-5.4', 1, 0,
+            '2026-03-01T00:05:00.000Z')
+        `;
+      }
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const turnsOf = (snapshot: {
+        readonly thread: {
+          readonly turnAssignments?: ReadonlyArray<{ readonly turnId: string }> | undefined;
+        };
+      }) => (snapshot.thread.turnAssignments ?? []).map((entry) => entry.turnId).toSorted();
+
+      const firstPage = yield* snapshotQuery.getThreadDetailSnapshot(threadW, { turnLimit: 2 });
+      assert.equal(firstPage._tag, "Some");
+      if (firstPage._tag !== "Some") return;
+      assert.deepEqual(turnsOf(firstPage.value), ["turn-4", "turn-5"]);
+      assert.equal(firstPage.value.thread.handoffTracked, true);
+
+      const cursor = firstPage.value.page?.beforeCursor;
+      assert.ok(cursor);
+      if (!cursor) return;
+      const olderPage = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {
+        turnLimit: 2,
+        beforeCursor: cursor,
+      });
+      assert.equal(olderPage._tag, "Some");
+      if (olderPage._tag !== "Some") return;
+      assert.deepEqual(turnsOf(olderPage.value), ["turn-1", "turn-2", "turn-3"]);
+
+      const full = yield* snapshotQuery.getThreadDetailSnapshot(threadW);
+      assert.equal(full._tag, "Some");
+      if (full._tag !== "Some") return;
+      assert.equal(turnsOf(full.value).length, 5);
+
+      // Reverted to turn 0: the turns and messages are gone, the answerer
+      // records stay. A requested page without turns carries none of them.
+      yield* sql`DELETE FROM projection_turns WHERE thread_id = 'thread-w'`;
+      yield* sql`DELETE FROM projection_thread_messages WHERE thread_id = 'thread-w'`;
+      const emptyPage = yield* snapshotQuery.getThreadDetailSnapshot(threadW, { turnLimit: 2 });
+      assert.equal(emptyPage._tag, "Some");
+      if (emptyPage._tag !== "Some") return;
+      assert.deepEqual(turnsOf(emptyPage.value), []);
     }),
   );
 
@@ -3116,7 +3172,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         const projectedFullSnapshot = projectThreadDetailSnapshot(fullSnapshot.value);
         const projectedRawBaseline = projectThreadDetailSnapshot({
           snapshotSequence: fullSnapshot.value.snapshotSequence,
-          thread: detailWithPinnedRequests.value,
+          // Client snapshots also mark that they carry the handoff state (P11).
+          thread: { ...detailWithPinnedRequests.value, handoffTracked: true },
         });
         assert.deepStrictEqual(projectedFullSnapshot, projectedRawBaseline);
 

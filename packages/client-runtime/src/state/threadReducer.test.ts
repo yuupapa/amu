@@ -1708,4 +1708,152 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("unchanged");
     });
   });
+
+  describe("cross-provider handoff events", () => {
+    const threadEvent = (type: string, payload: Record<string, unknown>, sequence = 10) =>
+      ({
+        ...baseEventFields,
+        sequence,
+        occurredAt: "2026-04-01T02:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type,
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          createdAt: "2026-04-01T02:00:00.000Z",
+          ...payload,
+        },
+      }) as any;
+    const claude = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      driver: "claudeAgent",
+      model: "claude-opus-5-5",
+    };
+    const codex = {
+      instanceId: ProviderInstanceId.make("codex"),
+      driver: "codex",
+      model: "gpt-5.4",
+    };
+
+    it("folds switch events into the same state the server holds", () => {
+      const requested = applyThreadDetailEvent(
+        baseThread,
+        threadEvent("thread.provider-switch-requested", {
+          switchId: "switch-1",
+          from: codex,
+          to: claude,
+          triggerMessageId: MessageId.make("message-1"),
+          boundaryTurnCount: 2,
+        }),
+      );
+      expect(requested.kind).toBe("updated");
+      if (requested.kind !== "updated") return;
+      expect(requested.thread.providerSwitch?.pending).toMatchObject({
+        switchId: "switch-1",
+        status: "in-progress",
+        milestone: "requested",
+        to: claude,
+      });
+      // Like the server's projectors, every switch event moves updatedAt.
+      expect(requested.thread.updatedAt).toBe("2026-04-01T02:00:00.000Z");
+      const later = applyThreadDetailEvent(requested.thread, {
+        ...threadEvent("thread.provider-switch-requested", {
+          switchId: "switch-1",
+          from: codex,
+          to: claude,
+          triggerMessageId: MessageId.make("message-1"),
+          boundaryTurnCount: 2,
+        }),
+        occurredAt: "2026-04-01T03:00:00.000Z",
+      });
+      expect(later.kind).toBe("updated");
+      if (later.kind === "updated") {
+        expect(later.thread.updatedAt).toBe("2026-04-01T03:00:00.000Z");
+        expect(later.thread.providerSwitch).toBe(requested.thread.providerSwitch);
+      }
+      // A record the state already holds changes nothing.
+      expect(
+        applyThreadDetailEvent(
+          requested.thread,
+          threadEvent("thread.provider-switch-requested", {
+            switchId: "switch-1",
+            from: codex,
+            to: claude,
+            triggerMessageId: MessageId.make("message-1"),
+            boundaryTurnCount: 2,
+          }),
+        ).kind,
+      ).toBe("unchanged");
+    });
+
+    it("records who answered a turn, first record wins", () => {
+      const record = (party: typeof claude) =>
+        threadEvent("thread.turn-assignment-recorded", {
+          messageId: MessageId.make("message-1"),
+          turnId: TurnId.make("turn-1"),
+          instanceId: party.instanceId,
+          driver: party.driver,
+          model: party.model,
+          generation: 2,
+        });
+      const first = applyThreadDetailEvent(baseThread, record(claude));
+      expect(first.kind).toBe("updated");
+      if (first.kind !== "updated") return;
+      expect(first.thread.turnAssignments).toEqual([
+        {
+          messageId: "message-1",
+          turnId: "turn-1",
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          model: "claude-opus-5-5",
+          generation: 2,
+          changedMidTurn: false,
+        },
+      ]);
+      expect(applyThreadDetailEvent(first.thread, record(claude)).kind).toBe("unchanged");
+      const changed = applyThreadDetailEvent(first.thread, record(codex));
+      expect(changed.kind).toBe("updated");
+      if (changed.kind !== "updated") return;
+      expect(changed.thread.turnAssignments).toMatchObject([
+        { model: "claude-opus-5-5", changedMidTurn: true },
+      ]);
+    });
+
+    it("updates a message's delivery state", () => {
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: MessageId.make("message-1"),
+            role: "user",
+            text: "hi",
+            turnId: null,
+            streaming: false,
+            deliveryState: "pending",
+            createdAt: "2026-04-01T00:00:00.000Z",
+            updatedAt: "2026-04-01T00:00:00.000Z",
+          },
+        ],
+      };
+      const result = applyThreadDetailEvent(
+        thread,
+        threadEvent("thread.message-delivery-state-set", {
+          messageId: MessageId.make("message-1"),
+          state: "unknown-discarded",
+        }),
+      );
+      expect(result.kind).toBe("updated");
+      if (result.kind !== "updated") return;
+      expect(result.thread.messages[0]?.deliveryState).toBe("unknown-discarded");
+      expect(
+        applyThreadDetailEvent(
+          thread,
+          threadEvent("thread.message-delivery-state-set", {
+            messageId: MessageId.make("message-missing"),
+            state: "delivered",
+          }),
+        ).kind,
+      ).toBe("unchanged");
+    });
+  });
 });

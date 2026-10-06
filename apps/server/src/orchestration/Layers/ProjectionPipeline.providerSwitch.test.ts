@@ -14,6 +14,7 @@ import {
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -270,6 +271,66 @@ engineLayer("provider switch persistence", (it) => {
       );
       assert.strictEqual(reloaded?.providerSwitch?.pending, null);
       assert.deepEqual(reloaded?.providerSwitch?.resolvedSwitchIds, [switchId]);
+    }),
+  );
+
+  it.effect("gives clients the switch state, delivery states and answerers in the snapshot", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-switch-client-snapshot");
+      const messageId = MessageId.make("message-switch-client-snapshot");
+      const switchId = ProviderSwitchId.make("switch-client-snapshot");
+      const turnId = TurnId.make("turn-client-snapshot");
+      const base = () => ({ commandId: commandId(), threadId, createdAt, switchId });
+      yield* dispatchAll([
+        ...threadSetup(threadId, messageId),
+        {
+          type: "thread.provider-switch.request",
+          ...base(),
+          from: claude,
+          to: codex,
+          triggerMessageId: messageId,
+          boundaryTurnCount: 0,
+        },
+        {
+          type: "thread.turn-assignment.record",
+          commandId: commandId(),
+          threadId,
+          createdAt,
+          messageId,
+          turnId,
+          instanceId: claude.instanceId,
+          driver: claude.driver,
+          model: claude.model,
+          generation: 2,
+        },
+        {
+          type: "thread.message.delivery-state.set",
+          commandId: commandId(),
+          threadId,
+          messageId,
+          state: "delivered",
+          createdAt,
+        },
+      ]);
+
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const snapshot = Option.getOrThrow(yield* snapshotQuery.getThreadDetailSnapshot(threadId));
+      assert.strictEqual(snapshot.thread.providerSwitch?.pending?.switchId, switchId);
+      assert.deepEqual(snapshot.thread.turnAssignments, [
+        {
+          turnId,
+          messageId,
+          instanceId: claude.instanceId,
+          driver: claude.driver,
+          model: claude.model,
+          generation: 2,
+          changedMidTurn: false,
+        },
+      ]);
+      assert.strictEqual(
+        snapshot.thread.messages.find((message) => message.id === messageId)?.deliveryState,
+        "delivered",
+      );
     }),
   );
 

@@ -15,6 +15,8 @@ import {
   type OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadProviderSwitchState,
+  OrchestrationTurnAssignment,
+  MessageDeliveryState,
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
   ProjectIconOverride,
@@ -112,6 +114,8 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
 );
 const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
+    // NULL means delivered (messages from before cross-provider handoff).
+    deliveryState: Schema.optional(Schema.NullOr(MessageDeliveryState)),
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
     context: Schema.NullOr(Schema.fromJsonString(OrchestrationMessageContext)),
@@ -1064,6 +1068,66 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getProviderSwitchStateRowByThread = SqlSchema.findOneOption({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({
+      state: Schema.fromJsonString(OrchestrationThreadProviderSwitchState),
+    }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT state_json AS "state"
+        FROM projection_thread_provider_switch_state
+        WHERE thread_id = ${threadId}
+      `,
+  });
+
+  const listTurnAssignmentRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: OrchestrationTurnAssignment.mapFields(Struct.assign({ changedMidTurn: Schema.Number })),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          turn_id AS "turnId",
+          message_id AS "messageId",
+          instance_id AS "instanceId",
+          driver,
+          model,
+          generation,
+          changed_mid_turn AS "changedMidTurn"
+        FROM projection_turn_assignments
+        WHERE thread_id = ${threadId}
+        ORDER BY recorded_at ASC, turn_id ASC
+      `,
+  });
+
+  // A windowed page carries only the records of its own turns and messages.
+  const listTurnAssignmentRowsByTurnsOrMessages = SqlSchema.findAll({
+    Request: Schema.Struct({
+      threadId: ThreadId,
+      turnIds: Schema.Array(Schema.String),
+      messageIds: Schema.Array(Schema.String),
+    }),
+    Result: OrchestrationTurnAssignment.mapFields(Struct.assign({ changedMidTurn: Schema.Number })),
+    execute: ({ threadId, turnIds, messageIds }) =>
+      sql`
+        SELECT
+          turn_id AS "turnId",
+          message_id AS "messageId",
+          instance_id AS "instanceId",
+          driver,
+          model,
+          generation,
+          changed_mid_turn AS "changedMidTurn"
+        FROM projection_turn_assignments
+        WHERE thread_id = ${threadId}
+          AND (
+            ${turnIds.length > 0 ? sql`turn_id IN ${sql.in(turnIds)}` : sql`0 = 1`}
+            OR ${messageIds.length > 0 ? sql`message_id IN ${sql.in(messageIds)}` : sql`0 = 1`}
+          )
+        ORDER BY recorded_at ASC, turn_id ASC
+      `,
+  });
+
   const listProviderSwitchStateRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: Schema.Struct({
@@ -1431,6 +1495,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           attachments_json AS "attachments",
           context_json AS "context",
           is_streaming AS "isStreaming",
+          delivery_state AS "deliveryState",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -1844,6 +1909,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           attachments_json AS "attachments",
           context_json AS "context",
           is_streaming AS "isStreaming",
+          delivery_state AS "deliveryState",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
@@ -3445,6 +3511,12 @@ pending_approval_requests AS (
       }
     | {
         readonly mode: "client";
+        /**
+         * A page was requested (turnLimit), even when it has no turns and so
+         * no bounds: the turn answerers are then limited to the returned
+         * messages, never the whole history (P11).
+         */
+        readonly paged?: boolean;
       };
 
   const listProjectedThreadActivities = Effect.fn(
@@ -3505,6 +3577,45 @@ pending_approval_requests AS (
         left.id.localeCompare(right.id),
     );
   });
+
+  const readClientHandoffState = (
+    threadId: ThreadId,
+    window:
+      | {
+          readonly turnIds: ReadonlyArray<string>;
+          readonly messageIds: ReadonlyArray<string>;
+        }
+      | undefined,
+  ) =>
+    Effect.all([
+      getProviderSwitchStateRowByThread({ threadId }),
+      window === undefined
+        ? listTurnAssignmentRowsByThread({ threadId })
+        : window.turnIds.length === 0 && window.messageIds.length === 0
+          ? Effect.succeed([])
+          : listTurnAssignmentRowsByTurnsOrMessages({ threadId, ...window }),
+    ]).pipe(
+      Effect.map(([switchRow, assignmentRows]) => ({
+        // Marks a snapshot that carries the handoff state, so a client cache
+        // built without it is reloaded instead of resumed (P11).
+        handoffTracked: true,
+        ...(Option.isSome(switchRow) ? { providerSwitch: switchRow.value.state } : {}),
+        ...(assignmentRows.length > 0
+          ? {
+              turnAssignments: assignmentRows.map((row) => ({
+                ...row,
+                changedMidTurn: row.changedMidTurn === 1,
+              })),
+            }
+          : {}),
+      })),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadDetailById:readHandoffState:query",
+          "ProjectionSnapshotQuery.getThreadDetailById:readHandoffState:decodeRows",
+        ),
+      ),
+    );
 
   const getThreadDetailByIdBounded = (
     threadId: ThreadId,
@@ -3689,6 +3800,9 @@ pending_approval_requests AS (
           if (row.context !== null) {
             Object.assign(message, { context: row.context });
           }
+          if (row.deliveryState !== undefined && row.deliveryState !== null) {
+            Object.assign(message, { deliveryState: row.deliveryState });
+          }
           return message;
         }),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
@@ -3703,6 +3817,20 @@ pending_approval_requests AS (
           completedAt: row.completedAt,
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
+        // Clients show the switch state and who answered each turn (P11).
+        ...(activityRead.mode === "client"
+          ? yield* readClientHandoffState(
+              threadId,
+              bounds === undefined && activityRead.paged !== true
+                ? undefined
+                : {
+                    turnIds: messageRows.flatMap((row) =>
+                      row.turnId === null ? [] : [row.turnId],
+                    ),
+                    messageIds: messageRows.map((row) => row.messageId),
+                  },
+            )
+          : {}),
       };
 
       return Option.some(
@@ -3820,6 +3948,7 @@ pending_approval_requests AS (
 
           const thread = yield* getThreadDetailByIdBounded(threadId, emptyBounds ?? bounds, {
             mode: "client",
+            paged: true,
           });
           if (Option.isNone(thread)) {
             return Option.none<OrchestrationThreadDetailSnapshot>();
