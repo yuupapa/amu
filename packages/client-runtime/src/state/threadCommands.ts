@@ -1,6 +1,7 @@
 import * as Crypto from "effect/Crypto";
 import { Atom } from "effect/unstable/reactivity";
 import {
+  ORCHESTRATION_WS_METHODS,
   WS_METHODS,
   type EnvironmentId,
   type OrchestrationShellSnapshot,
@@ -34,6 +35,12 @@ import {
   type SnoozeThreadInput,
   type StartThreadTurnInput,
   type StopThreadSessionInput,
+  type RetryProviderSwitchInput,
+  type AbortProviderSwitchInput,
+  type ResolveProviderSwitchInput,
+  retryProviderSwitch,
+  abortProviderSwitch,
+  resolveProviderSwitch,
   type UnarchiveThreadInput,
   type UnlinkThreadPullRequestInput,
   type UnpinThreadInput,
@@ -254,6 +261,31 @@ export function createThreadEnvironmentAtoms<R, E>(
     stopSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:stop-session",
       execute: (input: StopThreadSessionInput) => stopThreadSession(input),
+      scheduler,
+      concurrency,
+    }),
+    retryProviderSwitch: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:retry-provider-switch",
+      execute: (input: RetryProviderSwitchInput) => retryProviderSwitch(input),
+      scheduler,
+      concurrency,
+    }),
+    abortProviderSwitch: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:abort-provider-switch",
+      execute: (input: AbortProviderSwitchInput) => abortProviderSwitch(input),
+      scheduler,
+      concurrency,
+    }),
+    resolveProviderSwitch: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:resolve-provider-switch",
+      execute: (input: ResolveProviderSwitchInput) => resolveProviderSwitch(input),
+      scheduler,
+      concurrency,
+    }),
+    // The packet text the new model read; events carry it empty (P11).
+    getHandoffPacket: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:commands:thread:get-handoff-packet",
+      tag: ORCHESTRATION_WS_METHODS.getHandoffPacket,
       scheduler,
       concurrency,
     }),

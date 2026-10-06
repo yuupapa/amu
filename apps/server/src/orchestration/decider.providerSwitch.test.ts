@@ -280,9 +280,22 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
           attemptResult("submit", 2, "succeeded", turnId),
           delivered(),
         ]);
+        // The delivery also names the trigger, both parties and the packet
+        // for the timeline divider (§8.3), and is kept in the history.
+        const delivery = expect.objectContaining({
+          switchId,
+          attemptId: 2,
+          turnId,
+          boundaryTurnCount: 3,
+          triggerMessageId: expect.any(String),
+          from: expect.objectContaining({ instanceId: expect.any(String) }),
+          to: expect.objectContaining({ instanceId: expect.any(String) }),
+          packetId: expect.any(String),
+        });
         expect(switchState(model)).toEqual({
           pending: null,
-          lastDelivered: { switchId, attemptId: 2, turnId, boundaryTurnCount: 3 },
+          lastDelivered: delivery,
+          deliveries: [delivery],
           resolvedSwitchIds: [switchId],
           hasHistory: true,
           handoffUnconfirmedInstanceId: null,

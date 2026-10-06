@@ -4106,4 +4106,28 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Open below": "下に分割して開く",
   "Drop on the chat area to open it": "会話エリアに落とすと開きます",
   "Split right with {0}, down with {1}": "{0} で右に、{1} で下に分割できます",
+  "Handing the conversation over to {0}": "{0} に引き継いでいます",
+  "Cancelling the switch and returning to the previous model":
+    "乗り換えを取り消して、元のモデルに戻しています",
+  "Cancelling the model switch": "乗り換えを取り消しています",
+  "Could not switch to {0}": "{0} に切り替えられませんでした",
+  "Stop the switch": "やめる",
+  "Return to {0}": "元のモデル（{0}）に戻る",
+  "Could not confirm that the message reached {0}": "{0} に送信が届いたか確認できません",
+  "Send again": "もう一度送る",
+  "Close without sending": "送らずに閉じる",
+  "The next message hands over from {0} to {1}": "次の送信で {0} → {1} に引き継ぎます",
+  "The next message hands the conversation to {0} again":
+    "次の送信で、会話を {0} に引き継ぎ直します",
+  "Cancel the switch": "乗り換えを取り消す",
+  "Switching models": "モデルの乗り換え中です",
+  "This model cannot take over the conversation yet":
+    "このモデルへの乗り換えはまだ対応していません",
+  "From here: {0} ({1})": "ここから {0}（{1}）",
+  "See what was handed over": "引き継ぎ内容を見る",
+  Handoff: "引き継ぎ内容",
+  "What {0} received": "{0} に渡した引き継ぎ内容",
+  "{0} characters · {1} messages included · {2} left out":
+    "{0} 文字・含めた発言 {1} 件・省いた発言 {2} 件",
+  "Could not load what was handed over": "引き継ぎ内容を読み込めませんでした",
 };

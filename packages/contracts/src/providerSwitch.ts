@@ -93,6 +93,8 @@ export const OrchestrationPendingProviderSwitch = Schema.Struct({
    */
   status: Schema.Literals(["in-progress", "awaiting-user", "closing"]),
   awaitingReason: Schema.NullOr(ProviderSwitchAwaitReason),
+  /** What failed, for the choice the user is shown (§8.2). Optional for stored states. */
+  awaitingDetail: Schema.optional(Schema.NullOr(Schema.String)),
   /** Set while closing. Optional for stored states. */
   closing: Schema.optional(Schema.NullOr(Schema.Struct({ returnToPrevious: Schema.Boolean }))),
   milestone: ProviderSwitchOpenMilestone,
@@ -119,12 +121,23 @@ export const ProviderSwitchDelivery = Schema.Struct({
   turnId: TurnId,
   /** S in §7.4: reverts to a turn count at or below it are refused. */
   boundaryTurnCount: NonNegativeInt,
+  /**
+   * For the timeline divider (§8.3): the message the new model answered
+   * first, who handed over to whom, and the packet it read. Optional: states
+   * stored before them decode without them.
+   */
+  triggerMessageId: Schema.optional(MessageId),
+  from: Schema.optional(ProviderSwitchParty),
+  to: Schema.optional(ProviderSwitchParty),
+  packetId: Schema.optional(Schema.NullOr(ProviderSwitchPacketId)),
 });
 export type ProviderSwitchDelivery = typeof ProviderSwitchDelivery.Type;
 
 export const OrchestrationThreadProviderSwitchState = Schema.Struct({
   pending: Schema.NullOr(OrchestrationPendingProviderSwitch),
   lastDelivered: Schema.NullOr(ProviderSwitchDelivery),
+  /** Every delivered switch, oldest first (§8.3: one divider each). */
+  deliveries: Schema.optional(Schema.Array(ProviderSwitchDelivery)),
   /**
    * Every resolved switch, most recent last, so a stray record can never
    * reopen one. Each entry needed a user action or a delivery, so this stays small.

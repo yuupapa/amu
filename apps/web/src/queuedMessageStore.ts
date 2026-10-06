@@ -88,6 +88,11 @@ interface QueuedMessageStoreState {
   ) => QueuedComposerMessage | null;
   /** The turn start is going out. False when Stop took the message back first. */
   markDispatching: (threadKey: string, id: string, thread: LocalDispatchSnapshot) => boolean;
+  /**
+   * Puts a message that was still preparing back in its place, not held: a
+   * later boundary sends it as usual. False when it is gone or already going out.
+   */
+  releaseSend: (threadKey: string, id: string) => boolean;
   /** Drops a message whose send went out, or that had nothing left to send. */
   finishSend: (threadKey: string, id: string) => void;
   /**
@@ -166,6 +171,17 @@ export const useQueuedMessageStore = create<QueuedMessageStoreState>()((set, get
           thread,
           previous: get().lastDispatchByThreadKey[threadKey]?.thread ?? null,
         },
+      );
+      return true;
+    },
+    releaseSend: (threadKey, id) => {
+      const queue = queueOf(threadKey);
+      const entry = queue.find((message) => message.id === id);
+      if (!entry || entry.sending !== "preparing") return false;
+      const { sending: _sending, ...rest } = entry;
+      update(
+        threadKey,
+        queue.map((message) => (message.id === id ? rest : message)),
       );
       return true;
     },

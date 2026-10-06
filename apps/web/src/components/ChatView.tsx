@@ -62,6 +62,8 @@ import {
   type ProviderApprovalDecision,
   type PreviewAnnotationPayload,
   ProviderInstanceId,
+  ProviderSwitchId,
+  ProviderSwitchPacketId,
   type ServerProvider,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
@@ -255,6 +257,39 @@ import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
 import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
+import { HandoffPacketDialog, type HandoffPacketDialogState } from "./chat/HandoffPacketDialog";
+import { handoffNoticeBannerItem, switchStatusBannerItem } from "./chat/ProviderSwitchBanners";
+import type { TimelineHandoffView } from "./chat/MessagesTimeline";
+import {
+  answeringModelLabel,
+  canOfferHandoffTo,
+  conversationOwner,
+  handoffDividers,
+  predictsHandoff,
+  switchBannerModel,
+  makeLatestRequestGate,
+  switchContinuationHints,
+  switchPartyLabel,
+  switchRevertBlock,
+} from "./chat/providerSwitchView";
+
+const EMPTY_DRIVER_SET: ReadonlySet<string> = new Set();
+const HANDOFF_EXPLAINED_KEY = "amu.crossProviderHandoff.explained";
+/** Whether the "not handed over" note was shown once already (§8.5). */
+function readHandoffExplained(): boolean {
+  try {
+    return window.localStorage.getItem(HANDOFF_EXPLAINED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function writeHandoffExplained(): void {
+  try {
+    window.localStorage.setItem(HANDOFF_EXPLAINED_KEY, "1");
+  } catch {
+    // Private mode: the note shows again next time, which is harmless.
+  }
+}
 import { WizardPopup } from "./ui/wizard";
 import {
   deriveAgentPanelModel,
@@ -1625,6 +1660,19 @@ export default function ChatView(props: ChatViewProps) {
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
+  // The user's choices for a switch that waits on them (§8.2).
+  const retryProviderSwitch = useAtomCommand(threadEnvironment.retryProviderSwitch, {
+    reportFailure: false,
+  });
+  const abortProviderSwitch = useAtomCommand(threadEnvironment.abortProviderSwitch, {
+    reportFailure: false,
+  });
+  const resolveProviderSwitch = useAtomCommand(threadEnvironment.resolveProviderSwitch, {
+    reportFailure: false,
+  });
+  const getHandoffPacket = useAtomCommand(threadEnvironment.getHandoffPacket, {
+    reportFailure: false,
+  });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -1717,6 +1765,13 @@ export default function ChatView(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
+  // The model the user picked for the next send, to tell whether it hands over (§8.2).
+  const composerPickedSelection = useComposerDraftStore((store) => {
+    const draft = store.getComposerDraft(composerDraftTarget);
+    return draft?.activeProvider && draft.modelSelectionExplicit === true
+      ? (draft.modelSelectionByProvider[draft.activeProvider] ?? null)
+      : null;
+  });
   const composerHasUnsentContent = useComposerDraftStore((store) =>
     composerDraftHasUserContent(store.getComposerDraft(composerDraftTarget)),
   );
@@ -2725,6 +2780,58 @@ export default function ChatView(props: ChatViewProps) {
     threadProvider,
     providers: providerStatuses,
   });
+  // §8.1: with cross-provider handoff on, an idle started thread may pick a
+  // model of another allowed driver; the next send hands the conversation over.
+  const switchPendingForThread = (activeThread?.providerSwitch?.pending ?? null) !== null;
+  const activeSessionStatus = activeThread?.session?.status ?? null;
+  // Approvals and questions can outlive the turn; a switch must wait for them (§7.3).
+  const handoffWaitsOnUser = useMemo(() => {
+    const requests = derivePendingRequests(activeThread?.activities ?? EMPTY_ACTIVITIES);
+    return requests.approvals.length > 0 || requests.userInputs.length > 0;
+  }, [activeThread?.activities]);
+  const handoffTargetDrivers = useMemo<ReadonlySet<string>>(() => {
+    if (lockedProvider === null) return EMPTY_DRIVER_SET;
+    const busy =
+      activeSessionStatus === "running" || activeSessionStatus === "starting" || handoffWaitsOnUser;
+    const drivers = new Set<string>();
+    for (const provider of providerStatuses) {
+      if (
+        canOfferHandoffTo({
+          settings: settings.crossProviderHandoff,
+          ownerDriver: lockedProvider,
+          targetDriver: provider.driver,
+          threadBusy: busy,
+          switchPending: switchPendingForThread,
+        })
+      ) {
+        drivers.add(provider.driver);
+      }
+    }
+    return drivers;
+  }, [
+    activeSessionStatus,
+    handoffWaitsOnUser,
+    lockedProvider,
+    providerStatuses,
+    settings.crossProviderHandoff,
+    switchPendingForThread,
+  ]);
+  const selectionLockedProvider = handoffTargetDrivers.size > 0 ? null : lockedProvider;
+  // Set once onProviderModelSelect exists; the switch notice's cancel uses it.
+  const onProviderModelSelectRef = useRef<
+    | ((
+        instanceId: ProviderInstanceId,
+        model: string,
+        options?: { focusComposer?: boolean },
+      ) => void)
+    | null
+  >(null);
+  const [switchActionInFlight, setSwitchActionInFlight] = useState(false);
+  const [handoffExplained, setHandoffExplained] = useState(readHandoffExplained);
+  const [handoffPacketDialog, setHandoffPacketDialog] = useState<HandoffPacketDialogState>({
+    status: "closed",
+  });
+  const handoffPacketRequests = useRef(makeLatestRequestGate()).current;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
@@ -2986,7 +3093,7 @@ export default function ChatView(props: ChatViewProps) {
           activeThread?.modelSelection.instanceId,
           activeProjectDefaultModelSelection?.instanceId,
         ],
-        lockedProvider,
+        lockedProvider: selectionLockedProvider,
         lockedInstanceId:
           activeThread?.session?.providerInstanceId ?? activeThread?.modelSelection.instanceId,
       }),
@@ -2994,7 +3101,7 @@ export default function ChatView(props: ChatViewProps) {
       activeProjectDefaultModelSelection?.instanceId,
       activeThread?.modelSelection.instanceId,
       activeThread?.session?.providerInstanceId,
-      lockedProvider,
+      selectionLockedProvider,
       providerInstanceEntries,
       selectedProviderByThreadId,
     ],
@@ -6574,6 +6681,7 @@ export default function ChatView(props: ChatViewProps) {
     feedbackUploading ||
     pendingApprovals.length > 0 ||
     pendingUserInputs.length > 0 ||
+    switchPendingForThread ||
     showPlanFollowUpPrompt;
   const compactDisabled = compactThreadUnavailable;
   const compactDisabledReason = compactDisabled
@@ -6675,6 +6783,141 @@ export default function ChatView(props: ChatViewProps) {
       }),
     [feedbackSubmissions, routeThreadKey],
   );
+  const providerSwitchBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!activeThread) return null;
+    const run = (
+      command: () => Promise<AtomCommandResult<unknown, unknown>>,
+      onSuccess?: () => void,
+    ) => {
+      setSwitchActionInFlight(true);
+      void command()
+        .then((result) => {
+          if (result._tag === "Success") onSuccess?.();
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            setThreadError(
+              activeThread.id,
+              error instanceof Error ? error.message : "乗り換えの操作を送れませんでした。",
+            );
+          }
+        })
+        .finally(() => setSwitchActionInFlight(false));
+    };
+    const target = { environmentId: activeThread.environmentId };
+    return switchStatusBannerItem(
+      switchBannerModel(activeThread, providerStatuses),
+      {
+        retry: (switchId) =>
+          run(() =>
+            retryProviderSwitch({
+              ...target,
+              input: { threadId: activeThread.id, switchId: ProviderSwitchId.make(switchId) },
+            }),
+          ),
+        abort: (switchId, returnToPrevious) => {
+          const from = activeThread.providerSwitch?.pending?.from;
+          run(
+            () =>
+              abortProviderSwitch({
+                ...target,
+                input: {
+                  threadId: activeThread.id,
+                  switchId: ProviderSwitchId.make(switchId),
+                  returnToPrevious,
+                },
+              }),
+            // The composer's own pick would otherwise send to the new model.
+            returnToPrevious && from !== undefined
+              ? () => {
+                  const selection: ModelSelection = {
+                    instanceId: from.instanceId,
+                    model: from.model,
+                  };
+                  setComposerDraftModelSelection(
+                    scopeThreadRef(activeThread.environmentId, activeThread.id),
+                    selection,
+                    { explicit: true },
+                  );
+                  setStickyComposerModelSelection(selection);
+                }
+              : undefined,
+          );
+        },
+        resolve: (switchId, decision) =>
+          run(() =>
+            resolveProviderSwitch({
+              ...target,
+              input: {
+                threadId: activeThread.id,
+                switchId: ProviderSwitchId.make(switchId),
+                decision,
+              },
+            }),
+          ),
+      },
+      switchActionInFlight,
+    );
+  }, [
+    abortProviderSwitch,
+    activeThread,
+    providerStatuses,
+    resolveProviderSwitch,
+    retryProviderSwitch,
+    setComposerDraftModelSelection,
+    setStickyComposerModelSelection,
+    setThreadError,
+    switchActionInFlight,
+  ]);
+  const handoffNoticeItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (
+      !activeThread ||
+      switchPendingForThread ||
+      composerPickedSelection === null ||
+      !settings.crossProviderHandoff.enabled
+    ) {
+      return null;
+    }
+    const owner = conversationOwner(activeThread);
+    const hints = switchContinuationHints(activeThread);
+    if (
+      owner === null ||
+      !predictsHandoff(owner, composerPickedSelection, providerStatuses, hints)
+    ) {
+      return null;
+    }
+    // Picking the holder again cancels only when it would continue natively.
+    const ownerContinues = !predictsHandoff(owner, owner, providerStatuses, hints);
+    return handoffNoticeBannerItem({
+      fromLabel: switchPartyLabel(owner, providerStatuses),
+      toLabel: switchPartyLabel(composerPickedSelection, providerStatuses),
+      explain: !handoffExplained,
+      onCancel: ownerContinues
+        ? () =>
+            onProviderModelSelectRef.current?.(owner.instanceId, owner.model, {
+              focusComposer: false,
+            })
+        : null,
+    });
+  }, [
+    activeThread,
+    composerPickedSelection,
+    handoffExplained,
+    providerStatuses,
+    settings.crossProviderHandoff.enabled,
+    switchPendingForThread,
+  ]);
+  const handoffNoticeShown = handoffNoticeItem !== null;
+  const handoffNoticeWasShownRef = useRef(false);
+  useEffect(() => {
+    // Explained once (§8.5): the notice that shows it keeps its text until it
+    // goes away; later notices, in this view too, come without it.
+    if (handoffNoticeShown) {
+      handoffNoticeWasShownRef.current = true;
+      writeHandoffExplained();
+    } else if (handoffNoticeWasShownRef.current) {
+      setHandoffExplained(true);
+    }
+  }, [handoffNoticeShown]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
@@ -6685,8 +6928,12 @@ export default function ChatView(props: ChatViewProps) {
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
+    const providerSwitchItems = [providerSwitchBannerItem, handoffNoticeItem].filter(
+      (item): item is ComposerBannerStackItem => item !== null,
+    );
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
+        ...providerSwitchItems,
         ...feedbackBannerItems,
         ...usageLimitsItems,
         ...projectCloneItems,
@@ -6698,6 +6945,7 @@ export default function ChatView(props: ChatViewProps) {
       ];
     }
     return [
+      ...providerSwitchItems,
       ...feedbackBannerItems,
       ...usageLimitsItems,
       ...projectCloneItems,
@@ -6753,6 +7001,8 @@ export default function ChatView(props: ChatViewProps) {
     activeBranchMismatchKey,
     backgroundLivenessBannerItem,
     feedbackBannerItems,
+    handoffNoticeItem,
+    providerSwitchBannerItem,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
@@ -7200,6 +7450,12 @@ export default function ChatView(props: ChatViewProps) {
       if (!localApi || !activeThread || isRevertingCheckpoint) return;
       const message = activeThread.messages.find((message) => message.id === messageId);
       if (!message || message.role !== "user") return;
+      // The server refuses these too; say why before asking anything (§7.4).
+      const switchBlock = switchRevertBlock(activeThread, turnCount);
+      if (switchBlock !== null) {
+        setThreadError(activeThread.id, switchBlock);
+        return;
+      }
 
       if (!supportsConversationRollback) {
         setThreadError(
@@ -7506,6 +7762,14 @@ export default function ChatView(props: ChatViewProps) {
   ) => {
     e?.preventDefault();
     if (lunaPendingRef.current && !lunaPrepared) return;
+    // An unresolved model switch refuses every send (§9.3); say so here.
+    if (switchPendingForThread && activeThread) {
+      setThreadError(
+        activeThread.id,
+        "乗り換えの途中です。完了を待つか、表示中の選択肢から選んでください。",
+      );
+      return;
+    }
     if (!lunaPrepared && lunaManualRecoveryKey !== routeThreadKey) {
       try {
         const record = readAutoRecord(routeThreadKey);
@@ -9038,7 +9302,7 @@ export default function ChatView(props: ChatViewProps) {
   // wait for a boundary. Approvals and questions still hold it: a steer on
   // top of them would answer nothing and confuse the turn.
   const queueBlockedByPendingRequest =
-    activePendingApproval !== null || pendingUserInputs.length > 0;
+    activePendingApproval !== null || pendingUserInputs.length > 0 || switchPendingForThread;
 
   // The row handlers are read from refs at call-time so their identity stays
   // stable and does not bust TimelineRowCtx on every ChatView render.
@@ -9660,6 +9924,9 @@ export default function ChatView(props: ChatViewProps) {
       if (!activeThread) {
         return null;
       }
+      // An allowed switch target hands the conversation over instead (§8.1).
+      const driver = providerStatuses.find((entry) => entry.instanceId === instanceId)?.driver;
+      if (driver !== undefined && handoffTargetDrivers.has(driver)) return null;
       const reason = getStartedThreadModelChangeBlockReason({
         providers: providerStatuses,
         hasStartedSession: activeThread.session !== null,
@@ -9669,7 +9936,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       return reason ? `${reason.description} Start a new thread to use this model.` : null;
     },
-    [activeThread, providerStatuses],
+    [activeThread, handoffTargetDrivers, providerStatuses],
   );
 
   const onProviderModelSelect = useCallback(
@@ -9684,15 +9951,25 @@ export default function ChatView(props: ChatViewProps) {
       // are rejected by returning early; the server remains authoritative too.
       const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
       const resolvedDriverKind = entry?.driver ?? null;
+      // An allowed switch target: the server hands the conversation over (§8.1).
+      const handoffCovers =
+        resolvedDriverKind !== null && handoffTargetDrivers.has(resolvedDriverKind);
       if (
         lockedProvider !== null &&
         resolvedDriverKind !== null &&
-        resolvedDriverKind !== lockedProvider
+        resolvedDriverKind !== lockedProvider &&
+        !handoffCovers
       ) {
+        if (handoffTargetDrivers.size > 0) {
+          toastManager.add({
+            type: "warning",
+            title: uiText("This model cannot take over the conversation yet"),
+          });
+        }
         if (options?.focusComposer !== false) scheduleComposerFocus();
         return;
       }
-      if (lockedProvider !== null && activeThread.session?.providerInstanceId) {
+      if (lockedProvider !== null && activeThread.session?.providerInstanceId && !handoffCovers) {
         const currentEntry = providerStatuses.find(
           (snapshot) => snapshot.instanceId === activeThread.session?.providerInstanceId,
         );
@@ -9722,13 +9999,15 @@ export default function ChatView(props: ChatViewProps) {
           ? { options: [{ id: options.optionId ?? "effort", value: options.effort }] }
           : {}),
       };
-      const modelChangeBlockReason = getStartedThreadModelChangeBlockReason({
-        providers: providerStatuses,
-        hasStartedSession: activeThread.session !== null,
-        currentModelSelection: activeThread.modelSelection,
-        currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
-        nextModelSelection,
-      });
+      const modelChangeBlockReason = handoffCovers
+        ? null
+        : getStartedThreadModelChangeBlockReason({
+            providers: providerStatuses,
+            hasStartedSession: activeThread.session !== null,
+            currentModelSelection: activeThread.modelSelection,
+            currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
+            nextModelSelection,
+          });
       if (modelChangeBlockReason) {
         toastManager.add({
           type: "warning",
@@ -9748,6 +10027,7 @@ export default function ChatView(props: ChatViewProps) {
     },
     [
       activeThread,
+      handoffTargetDrivers,
       lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
@@ -9756,6 +10036,7 @@ export default function ChatView(props: ChatViewProps) {
       settings,
     ],
   );
+  onProviderModelSelectRef.current = onProviderModelSelect;
   // A validated decision selects one worker; the user's work executes once through the normal turn path.
   const startJevHandoff = (entry: JevHandoff, model: string, effort: string) => {
     if (!JEV_INTEGRATION_ENABLED || !activeThread) return;
@@ -10097,6 +10378,58 @@ export default function ChatView(props: ChatViewProps) {
   const onRevertTimelineTurn = useCallback((targetTurnCount: number, messageId: MessageId) => {
     void onRevertToTurnCountRef.current(targetTurnCount, messageId);
   }, []);
+  // Dividers and answering models of cross-provider switches (§8.3, §8.4).
+  const activeProviderSwitch = activeThread?.providerSwitch;
+  const activeTurnAssignments = activeThread?.turnAssignments;
+  const activeThreadIdForHandoff = activeThread?.id ?? null;
+  const activeEnvironmentIdForHandoff = activeThread?.environmentId ?? null;
+  const timelineHandoffView = useMemo<TimelineHandoffView | null>(() => {
+    if (
+      activeProviderSwitch?.hasHistory !== true ||
+      activeThreadIdForHandoff === null ||
+      activeEnvironmentIdForHandoff === null
+    ) {
+      return null;
+    }
+    const thread = { providerSwitch: activeProviderSwitch, turnAssignments: activeTurnAssignments };
+    const dividers = handoffDividers(thread, providerStatuses);
+    return {
+      answeringModel: (turnId) => answeringModelLabel(thread, turnId, providerStatuses),
+      dividerBefore: (messageId) => dividers.get(messageId) ?? null,
+      onOpenPacket: (divider) => {
+        if (divider.packetId === null) return;
+        // Only the latest request may fill the dialog; closing it voids it too.
+        const requestId = handoffPacketRequests.begin();
+        setHandoffPacketDialog({ status: "loading", label: divider.label });
+        void getHandoffPacket({
+          environmentId: activeEnvironmentIdForHandoff,
+          input: {
+            threadId: activeThreadIdForHandoff,
+            packetId: ProviderSwitchPacketId.make(divider.packetId),
+          },
+        }).then((result) =>
+          setHandoffPacketDialog((current) =>
+            !handoffPacketRequests.isCurrent(requestId) || current.status !== "loading"
+              ? current
+              : result._tag === "Success"
+                ? { status: "loaded", label: divider.label, packet: result.value }
+                : {
+                    status: "error",
+                    label: divider.label,
+                    message: uiText("Could not load what was handed over"),
+                  },
+          ),
+        );
+      },
+    };
+  }, [
+    activeEnvironmentIdForHandoff,
+    activeProviderSwitch,
+    activeThreadIdForHandoff,
+    activeTurnAssignments,
+    getHandoffPacket,
+    providerStatuses,
+  ]);
 
   // Files dropped on a sidebar row land here once the dropped-on thread is
   // actually open, then take the exact same path as a workspace drop:
@@ -10395,6 +10728,13 @@ export default function ChatView(props: ChatViewProps) {
           ) : null}
         </WizardPopup>
       </Dialog>
+      <HandoffPacketDialog
+        state={handoffPacketDialog}
+        onClose={() => {
+          handoffPacketRequests.cancel();
+          setHandoffPacketDialog({ status: "closed" });
+        }}
+      />
       {rightPanelControlsAtRoot ? panelLayoutControls : null}
       <div
         className={cn(
@@ -10538,6 +10878,7 @@ export default function ChatView(props: ChatViewProps) {
                 onRevertToTurnCount={
                   paintOnlyDisplayedTimeline ? noopHeldRevert : onRevertTimelineTurn
                 }
+                handoffView={paintOnlyDisplayedTimeline ? null : timelineHandoffView}
                 isRevertingCheckpoint={!paintOnlyDisplayedTimeline && isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
                 onFileOpen={paintOnlyDisplayedTimeline ? noopHeldAttachment : openFileAttachment}
@@ -10809,13 +11150,15 @@ export default function ChatView(props: ChatViewProps) {
                             sendDisabledReason={
                               isRevertingCheckpoint
                                 ? "Rewinding conversation"
-                                : feedbackUploading
-                                  ? "Sending feedback"
-                                  : threadDetailLoading
-                                    ? "Messages loading"
-                                    : worktreeSetupBlocksSend
-                                      ? "Preparing worktree"
-                                      : projectCloneSendBlockReason
+                                : switchPendingForThread
+                                  ? "Switching models"
+                                  : feedbackUploading
+                                    ? "Sending feedback"
+                                    : threadDetailLoading
+                                      ? "Messages loading"
+                                      : worktreeSetupBlocksSend
+                                        ? "Preparing worktree"
+                                        : projectCloneSendBlockReason
                             }
                             isPreparingWorktree={isPreparingWorktree}
                             bannerItems={composerBannerItems}
@@ -10845,7 +11188,7 @@ export default function ChatView(props: ChatViewProps) {
                             threadSyncPhase={activeEnvironmentUnavailable ? null : threadSyncPhase}
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
-                            lockedProvider={lockedProvider}
+                            lockedProvider={selectionLockedProvider}
                             providerStatuses={providerStatuses as ServerProvider[]}
                             providerCatalogKnown={serverConfig !== null}
                             activeProjectDefaultModelSelection={activeProjectDefaultModelSelection}

@@ -86,7 +86,9 @@ function ThreadQueueSender({ threadKey }: { threadKey: string }) {
     sending ||
     waitingForServer ||
     pendingRequests.approvals.length > 0 ||
-    pendingRequests.userInputs.length > 0;
+    pendingRequests.userInputs.length > 0 ||
+    // An unresolved model switch refuses every send (§9.3); wait it out.
+    (thread?.providerSwitch?.pending ?? null) !== null;
   const due =
     next !== undefined &&
     !blocked &&

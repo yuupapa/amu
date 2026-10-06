@@ -130,14 +130,20 @@ export function applyProviderSwitchEvent(
       ) {
         return state;
       }
+      const delivery = {
+        switchId: pending.switchId,
+        attemptId: payload.attemptId,
+        turnId: payload.turnId,
+        boundaryTurnCount: pending.boundaryTurnCount,
+        triggerMessageId: pending.triggerMessageId,
+        from: pending.from,
+        to: pending.to,
+        packetId: pending.packet?.packetId ?? null,
+      };
       return resolvePending(state, payload.switchId, {
         handoffUnconfirmedInstanceId: null,
-        lastDelivered: {
-          switchId: pending.switchId,
-          attemptId: payload.attemptId,
-          turnId: payload.turnId,
-          boundaryTurnCount: pending.boundaryTurnCount,
-        },
+        lastDelivered: delivery,
+        deliveries: [...(state.deliveries ?? []), delivery],
       });
     }
     case "thread.provider-switch-packet-built": {
@@ -208,6 +214,7 @@ export function applyProviderSwitchEvent(
               ...pending,
               status: "awaiting-user",
               awaitingReason: event.payload.reason,
+              awaitingDetail: event.payload.detail ?? null,
               attempts: abandonPlanned(pending.attempts),
             },
       );
@@ -218,6 +225,7 @@ export function applyProviderSwitchEvent(
               ...pending,
               status: "in-progress",
               awaitingReason: null,
+              awaitingDetail: null,
               resumeCount: pending.resumeCount + 1,
             }
           : pending,
@@ -229,6 +237,7 @@ export function applyProviderSwitchEvent(
               ...pending,
               status: "closing",
               awaitingReason: null,
+              awaitingDetail: null,
               closing: { returnToPrevious: event.payload.returnToPrevious },
             }
           : pending,
@@ -264,6 +273,7 @@ export function applyProviderSwitchEvent(
               ...pending,
               status: "in-progress",
               awaitingReason: null,
+              awaitingDetail: null,
               resendAllowed: true,
               resumeCount: pending.resumeCount + 1,
             }

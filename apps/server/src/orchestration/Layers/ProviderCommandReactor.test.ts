@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
+import { PENDING_SWITCH_REJECTION } from "./providerSwitchFlow.ts";
 import {
   CheckpointRef,
   ApprovalRequestId,
@@ -4953,11 +4954,7 @@ describe("ProviderCommandReactor", () => {
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
 
       await startTurn(harness, "blocked", "これは送れない");
-      await waitFor(async () =>
-        (await failureDetails(harness)).includes(
-          "乗り換えの途中です。完了を待つか、表示中の選択肢から選んでください。",
-        ),
-      );
+      await waitFor(async () => (await failureDetails(harness)).includes(PENDING_SWITCH_REJECTION));
       expect(await deliveryState(harness, "message-blocked")).toBe("rejected");
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
     });

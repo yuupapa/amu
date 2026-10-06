@@ -1678,3 +1678,134 @@ Blocker・Major・Minorはいずれもありません。前回のMajor 2件は�
 現行関数によるメモリ内の検証で、両修正と合流規則16通りを確認しました。キャッシュ再開・パケット本文の除去も確認済みです。対象4パッケージの型チェックはエラー0、`git diff --check`も通過しています。Vitestは今回再実行していません。
 
 **後半（webの画面）に進んでよいです。** コードは変更していません。
+
+## コードレビュー: Phase 1 第5部分の後半（web の画面、2026-10-06）
+
+経過: 第1巡 Red（Major7・Minor1）→ 第2巡 Red（Major2・Minor1）→ 第3巡 Red（Major1）→ 第4巡 Green
+
+### 第1巡（Codex 原文）
+
+**判定: Red**
+
+Blocker: なし。Major: 7件。Minor: 1件。
+
+**Major**
+
+1. **ピッカーの旧ガードが乗り換えを止める — [ChatView.tsx:9864](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/ChatView.tsx:9864)**  
+   選択ハンドラーではガードを解除していますが、`getModelDisabledReason`は従来のままです。`requiresNewThreadForModelChange`のproviderを含む切り替えでは、許可された乗り換えでも行が無効になり、クリック・キーボード選択が止まります。  
+   **直し方:** 行の無効化と選択ハンドラーで同じ判定を使ってください。別ドライバーへの乗り換えと、同じinstanceのモデル変更をピッカー経由で確認するテストが必要です。
+
+2. **質問待ちでもロックが外れる — [ChatView.tsx:2787](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/ChatView.tsx:2787)**  
+   `busy`はセッションの`running`・`starting`だけを見ます。messageモードの質問はターン終了後も残るため、`ready`でも質問待ちになれます。この状態では画面が乗り換えを許可し、サーバーが拒否することを確認しました。  
+   **直し方:** `pendingApprovals`・`pendingUserInputs`も解除条件に含め、`ready`＋未解決要求をテストしてください。
+
+3. **乗り換え中でもキューから送信できる — [ChatView.tsx:11087](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/ChatView.tsx:11087)**  
+   送信禁止はコンポーザーだけに効き、キューの自動送信と「今すぐ送る」は未解決のswitchを確認しません。コマンドの受付成功で発言をキューから消した後、reactorが`rejected`にする経路を再現しました。  
+   **直し方:** 自動送信・手動送信と`sendQueuedMessage`本体に禁止条件を入れ、未解決の間はキューに残してください。`onSend`や圧縮ボタンなど、ほかの送信入口も同じ条件で止める必要があります。
+
+4. **「元のモデルに戻る」が次の送信先に反映されない — [ChatView.tsx:6802](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/ChatView.tsx:6802)**  
+   abortはサーバーへ送るだけで、コンポーザーの明示選択を戻しません。サーバーが選択を旧担当Aへ戻しても、コンポーザーの`activeProvider`とモデルBが優先され、次の送信がBへ向かいます。  
+   **直し方:** `returnToPrevious`の成功に合わせて、対象スレッドのコンポーザー選択も`from`へ戻してください。操作完了後の実際の送信先まで確認するテストが必要です。
+
+5. **discard後の引き継ぎを予告しない — [providerSwitchView.ts:92](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/chat/providerSwitchView.ts:92)**  
+   予測はinstance・モデル・継続グループだけを見て、`handoffUnconfirmedInstanceId`を無視します。discard後に同じ新モデルへ送るケースでは、画面が`false`、サーバーが`handoff`になることを再現しました。旧cursorを消したabort後も、同じモデルというだけではnative継続と判断できません。  
+   **直し方:** 未確認instanceや解放済みの状態を予測に反映し、必要なら現在担当とnative継続可否を配信してください。discard後・元のモデルへ戻った後の案内をテストに追加してください。
+
+6. **取消・配達不明の発言を区別できない — [MessagesTimeline.tsx:2250](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/chat/MessagesTimeline.tsx:2250)**  
+   webに`deliveryState`を表示する処理がありません。abort・discard後はバナーが消え、`cancelled`・`unknown-discarded`の発言も通常どおり残ります。§8.2の「未送信・取消」「届いたか不明・再送なし」を満たしていません。  
+   **直し方:** ユーザー発言のメタ情報に送信状態を表示し、abort・discard後と再接続後を確認してください。
+
+7. **古いパケット応答が別の要求を上書きする — [ChatView.tsx:10349](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/ChatView.tsx:10349)**  
+   Aを読み込み中に閉じ、Bを開くと、Aの応答も「現在loading」を満たします。Aの本文が表示され、その後のBの応答は無視されます。  
+   **直し方:** 要求IDとenvironment・thread・packetの識別子を保持し、現在の要求と一致する応答だけ反映してください。閉じる操作でも要求を失効させるテストが必要です。
+
+**Minor**
+
+1. **初回説明が同じ画面で繰り返される — [ChatView.tsx:2821](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/ChatView.tsx:2821)**  
+   `handoffExplained`は初期値のままで、localStorageへ書いても更新されません。最初の案内が消えた後、次の乗り換えでも説明を添えます。  
+   **直し方:** 表示中の案内では説明を保持し、その案内が終わったら説明済みの状態へ更新してください。
+
+現行関数を使い、外部依存をスタブ化したメモリ内ハーネスで主要な経路を再現しました。型チェックはserver・contracts・shared・client-runtimeで通過し、webは報告済みの既存1件のみでした。Vitestと画面操作は今回実行していません。コードは変更していません。
+
+**この範囲を完了としてコミットし、三観レビューと実機の受け入れテストへ進むのは、Majorの修正後です。**
+
+### 第2巡（Codex 原文）
+
+判定：**Red**。Major 2件・Minor 1件です。前回の対策は確認できましたが、キューの競合と、引き継ぎ予測の別経路に問題が残っています。
+
+**Blocker：なし**
+
+**Major**
+
+1. **準備中に乗り換えが始まると、キューの発言が消える**  
+   [sendQueuedMessage.ts:56](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/chat/sendQueuedMessage.ts:56)、同ファイル:168  
+   pendingの確認は入口だけです。添付アップロードや設定保存を待つ間に、別端末などから乗り換えが始まっても、処理はそのままstartTurnへ進みます。コマンド受付後にfinishSendでキューから消え、reactorではrejectedになります。設定保存を待つ間にpendingを追加する再現で確認しました。  
+   **直し方：** markDispatching直前にも最新状態を確認し、pendingならpreparingを解除してキューに残してください。dispatch後に判明する乗り換え中の拒否についても、発言を保持する扱いが必要です。途中でpendingになる回帰テストを追加してください。
+
+2. **同じinstanceで別モデルを選んで `/compact` すると、次の引き継ぎ案内が消える**  
+   [providerSwitchView.ts:65](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/chat/providerSwitchView.ts:65)  
+   conversationOwnerはsessionとthread.modelSelectionのinstanceが同じなら、担当記録よりthread.modelSelectionを優先します。しかし `/compact` は選択先をメタ情報に保存しつつ、実際には旧担当で圧縮します。  
+   例えば、同じClaude instanceでOpusからSonnetを選んで圧縮すると、画面は担当をSonnetと判断して予告を出しません。一方、サーバーはOpusを担当として次の送信でhandoffします。実装関数を使った比較で確認しました。  
+   **直し方：** 現在の担当モデルは、最新ターンの担当記録やサーバーが返す担当情報を優先し、次の送信用のmodelSelectionと分けてください。「同じinstanceでモデル変更→圧縮→次の送信」のテストが必要です。
+
+**Minor**
+
+1. **引き継ぎ直しの案内で、×が取り消しにならない**  
+   [ChatView.tsx:6896](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/ChatView.tsx:6896)、[ProviderSwitchBanners.tsx:120](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/chat/ProviderSwitchBanners.tsx:120)  
+   releasedがtrueのときは、×で元の担当を選んでもpredictsHandoffがtrueのままです。「乗り換えを取り消す」を押しても案内が残り、次の送信も引き継ぎになります。  
+   **直し方：** 元の担当を選んでも引き継ぎが必要な場合は、取消ボタンを出さないか、操作の実際の意味に合う文言にしてください。
+
+純粋関数と現在のキューテストだけでは、ChatViewの配線確認として不足しています。実機確認をコミット後に行う段取りは問題ありませんが、少なくとも次の経路を含めてください。
+
+- ピッカーの行から別ドライバーを選択し、質問待ち・承認待ちでは選べないこと。
+- 「元のモデルに戻る」後、次の送信が元のinstance・モデルを使うこと。
+- 同じinstanceの別モデルを選んで圧縮し、旧担当で圧縮された後も引き継ぎ予告が残ること。
+- パケットAを閉じてBを開き、応答が逆順でもBだけを表示すること。
+
+今回、実装関数と依存の偽物を使った再現を行いました。Vitestとブラウザーは実行していません。型チェックはclient-runtime・shared・contractsが通過し、webは申告済みの箇所1件のみでした。コードは変更していません。
+
+**現状をGreenとして確定するのは見送りです。Major 2件の修正と回帰確認後、三観レビュー・実機受け入れテストへ進んでください。**
+
+### 第3巡（Codex 原文）
+
+判定：**Red**。Blocker 0件・Major 1件・Minor 0件です。
+
+前回のキュー保持と×の問題は解消しています。`/compact` の直接の再現ケースも直っていますが、担当記録を最優先にしたことで、次の順序問題が残ります。
+
+**Major 1：遅れて届いた古い担当記録で、現在の担当が後退する**
+
+[providerSwitchView.ts:66](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/chat/providerSwitchView.ts:66)
+
+`turnAssignments.at(-1)` は、最新のターンではなく、配列に最後に追加された記録です。通常送信はforkされ、担当記録の保存も再試行するため、次の順序が成立します。
+
+1. Codexの通常送信Aを受け付けるが、担当記録の保存が失敗して再試行待ちになる。
+2. Claudeへの乗り換えBがdeliveredになり、Claudeの担当記録が追加される。
+3. Aの保存が成功し、古いCodexの記録が配列末尾に追加される。
+
+この状態では、実際のセッションと最新ターンはClaudeなのに、画面はCodexを担当と判断します。Claudeへの次の送信に不要な引き継ぎ予告が出て、×を押すと古いCodexを選び直してしまいます。
+
+実際の`recordNativeTurnAssignment`の再試行処理、共有の畳み込み、予測関数を使った検証で、**画面の予測はhandoff、サーバーの判断はnative**になることを確認しました。
+
+**直し方：** 配列末尾ではなく、最新turnIdに対応する担当記録を優先してください。該当記録がない場合も、世代や乗り換えの配達記録を照合し、遅れた旧ターンの記録が現在の担当を上書きしない規則が必要です。「新しい担当記録→遅れた旧世代の記録」の順で適用する回帰テストを追加してください。
+
+キューについては、準備中のpending発生で元の位置に残り、解除後に1回だけ送られることを確認しました。dispatch後の拒否を「未送信」としてタイムラインに残す方針も妥当です。
+
+検証は実装関数と依存の偽物によるメモリ内の確認です。Vitest・ブラウザーは実行していません。webの型チェックは申告済みの既存1件のみ、`git diff --check`は通過しました。コードは変更していません。
+
+**Greenとしての確定は見送りです。上記Majorを修正・回帰確認した後、コミットして三観レビューと実機受け入れテストへ進んでください。**
+
+### 第4巡（Codex 原文）
+
+判定：**Green**。
+
+- **Blocker：なし**
+- **Major：なし**
+- **Minor：なし**
+
+前回のMajorは解消しています。[providerSwitchView.ts:64](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/chat/providerSwitchView.ts:64)で、最新ターンの記録を優先し、見つからなければ最大世代を選ぶ処理になっています。
+
+実装関数を使った再検証でも、遅れたCodexの記録によって担当が後退せず、最新ターンの記録がない場合もClaudeが選ばれました。`/compact` 後の引き継ぎ予測もサーバーと一致しています。
+
+webの型チェックは申告済みの既存1件のみ、`git diff --check`は通過しました。Vitest・実画面は今回実行していません。コードは変更していません。
+
+**この範囲でコミットし、三観レビューと実機の受け入れテストへ進んでよいです。** 予定している4経路を実画面で確認してください。

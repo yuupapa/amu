@@ -368,12 +368,17 @@ engineLayer("provider switch persistence", (it) => {
       const reloaded = (yield* snapshotQuery.getCommandReadModel()).threads.find(
         (thread) => thread.id === threadId,
       );
-      assert.deepEqual(reloaded?.providerSwitch?.lastDelivered, {
+      assert.deepInclude(reloaded?.providerSwitch?.lastDelivered, {
         switchId,
         attemptId: 3,
         turnId,
         boundaryTurnCount: 2,
       });
+      // The divider history survives the restart too (§8.3).
+      assert.deepEqual(
+        reloaded?.providerSwitch?.deliveries?.map((delivery) => delivery.switchId),
+        [switchId],
+      );
     }),
   );
 

@@ -1,4 +1,5 @@
 import { uiText, uiFormat } from "~/uiText";
+import { userMessageDeliveryLabel, type HandoffDivider } from "./providerSwitchView";
 import { ArrowUpIcon, ClockIcon } from "lucide-react";
 import { ReadOnlySourcePreview } from "../files/AttachmentFilePreview";
 import { useRightPanelStore } from "~/rightPanelStore";
@@ -304,6 +305,14 @@ interface TimelineRowSharedState {
   onSteerQueuedMessage: (id: string) => void;
   steerQueuedMessageShortcutLabel: string | null;
   onRemoveQueuedMessage: (id: string) => void;
+  handoff: TimelineHandoffView | null;
+}
+
+/** Cross-provider switches in the timeline (§8.3, §8.4); null when the thread never switched. */
+export interface TimelineHandoffView {
+  readonly answeringModel: (turnId: TurnId | null) => string | null;
+  readonly dividerBefore: (messageId: MessageId) => HandoffDivider | null;
+  readonly onOpenPacket: (divider: HandoffDivider) => void;
 }
 
 interface TimelineRowActivityState {
@@ -470,6 +479,8 @@ interface MessagesTimelineProps {
   onSteerQueuedMessage?: (id: string) => void;
   steerQueuedMessageShortcutLabel?: string | null;
   onRemoveQueuedMessage?: (id: string) => void;
+  /** Dividers and answering models of cross-provider switches (§8.3, §8.4). */
+  handoffView?: TimelineHandoffView | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +539,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onSteerQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
   steerQueuedMessageShortcutLabel = null,
   onRemoveQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
+  handoffView = null,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const rememberedPosition = useMemo(
@@ -1178,8 +1190,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSteerQueuedMessage,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
+      handoff: handoffView ?? null,
     }),
     [
+      handoffView,
       readyCitationRequest,
       listRef,
       timestampFormat,
@@ -2114,7 +2128,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     ],
   );
 
-  return (
+  const handoffDivider = ctx.handoff?.dividerBefore(row.message.id) ?? null;
+  const deliveryLabel = userMessageDeliveryLabel(row.message.deliveryState);
+  const userRow = (
     <div className="group flex flex-col items-end gap-1">
       <div className="relative max-w-[80%] rounded-2xl bg-message p-3 text-message-foreground">
         <MessageAuthorHeading>{uiText("You")}</MessageAuthorHeading>
@@ -2232,6 +2248,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           />
         </div>
       </div>
+      {deliveryLabel !== null ? (
+        // Always visible: the message did not go out as sent (§4.5, §8.2).
+        <p
+          className="pe-1 text-muted-foreground text-xs"
+          data-delivery-state={row.message.deliveryState}
+        >
+          {deliveryLabel}
+        </p>
+      ) : null}
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
@@ -2268,6 +2293,47 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           </div>
         </div>
       </div>
+    </div>
+  );
+  if (handoffDivider === null || ctx.handoff === null) return userRow;
+  return (
+    <div className="flex flex-col gap-3">
+      <HandoffTimelineDivider divider={handoffDivider} onOpen={ctx.handoff.onOpenPacket} />
+      {userRow}
+    </div>
+  );
+}
+
+/** One line above the message the new model answered first (§8.3). */
+function HandoffTimelineDivider({
+  divider,
+  onOpen,
+}: {
+  divider: HandoffDivider;
+  onOpen: (divider: HandoffDivider) => void;
+}) {
+  return (
+    <div
+      className="flex w-full items-center gap-2 py-1 text-muted-foreground text-xs"
+      data-handoff-divider=""
+    >
+      <span className="h-px flex-1 bg-border" />
+      <span className="shrink-0">
+        {uiFormat("From here: {0} ({1})", divider.label, divider.providerLabel)}
+      </span>
+      {divider.packetId !== null ? (
+        <>
+          <span aria-hidden="true">・</span>
+          <button
+            type="button"
+            className="shrink-0 text-foreground underline-offset-2 hover:underline"
+            onClick={() => onOpen(divider)}
+          >
+            {uiText("See what was handed over")}
+          </button>
+        </>
+      ) : null}
+      <span className="h-px flex-1 bg-border" />
     </div>
   );
 }
@@ -2466,6 +2532,8 @@ function AssistantMessageMeta({
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  // Which model answered, on threads that switched providers (§8.4).
+  const answeringModel = ctx.handoff?.answeringModel(message.turnId) ?? null;
 
   return (
     <div
@@ -2482,6 +2550,11 @@ function AssistantMessageMeta({
         showCopyButton={showCopyButton}
         streaming={copyStreaming}
       />
+      {answeringModel !== null ? (
+        <p className="text-muted-foreground text-xs" data-answering-model="">
+          {answeringModel}
+        </p>
+      ) : null}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>

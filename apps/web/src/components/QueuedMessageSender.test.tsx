@@ -144,6 +144,25 @@ describe("QueuedMessageSender", () => {
     expect(queue()).toBeUndefined();
   });
 
+  it("holds queued messages while a model switch is unresolved, then sends them", async () => {
+    enqueue();
+    // The switch refuses every send (§9.3); the message must stay queued.
+    io.thread = { ...thread("ready"), providerSwitch: { pending: { switchId: "switch-1" } } };
+    await render();
+    expect(commandsRun()).toEqual([]);
+    expect(queue()).toHaveLength(1);
+    // "Send now" goes through the same function and keeps it too.
+    const id = queue()![0]!.id;
+    await act(() => sendQueuedMessage(threadRef, id));
+    expect(commandsRun()).toEqual([]);
+    expect(queue()).toHaveLength(1);
+
+    io.thread = { ...thread("ready"), providerSwitch: { pending: null } };
+    await render();
+    expect(commandsRun()).toEqual(["start"]);
+    expect(queue()).toBeUndefined();
+  });
+
   it("holds the next message until the server picks up the one before it", async () => {
     enqueue({ prompt: "first" });
     enqueue({ prompt: "second" });
@@ -229,6 +248,36 @@ describe("sendQueuedMessage", () => {
     expect(commandsRun()).toEqual([]);
     expect(io.toast).not.toHaveBeenCalled();
     expect(queue()).toBeUndefined();
+  });
+
+  it("puts a message back, unheld, when a model switch begins while it prepares", async () => {
+    // A different model than the thread's, so the metadata is saved first.
+    enqueue({
+      sendSettings: {
+        modelSelection: { instanceId: ProviderInstanceId.make("claudeAgent"), model: "opus" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        promptEffort: null,
+      },
+    });
+    io.thread = { providerSwitch: { pending: null }, activities: [], messages: [] };
+    io.run.mockImplementation(async (_registry: unknown, command: unknown) => {
+      // Another device starts a switch while the metadata is being saved.
+      if (command === "metadata") {
+        io.thread = {
+          providerSwitch: { pending: { switchId: "switch-1" } },
+          activities: [],
+          messages: [],
+        };
+      }
+      return { _tag: "Success", value: undefined };
+    });
+    const id = queue()![0]!.id;
+    await sendQueuedMessage(threadRef, id);
+    expect(commandsRun()).toEqual(["metadata"]);
+    expect(queue()).toHaveLength(1);
+    expect(queue()![0]!.sending).toBeUndefined();
+    expect(queue()![0]!.holdUntilUserAction).toBeUndefined();
   });
 
   it("holds a message at the head when the turn start fails", async () => {

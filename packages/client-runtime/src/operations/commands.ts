@@ -58,6 +58,10 @@ export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert
   readonly restoreFiles?: boolean;
 };
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+// The user's choices for a switch that waits on them (§8.2).
+export type RetryProviderSwitchInput = CommandInput<"thread.provider-switch.retry">;
+export type AbortProviderSwitchInput = CommandInput<"thread.provider-switch.abort">;
+export type ResolveProviderSwitchInput = CommandInput<"thread.provider-switch.resolve">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
@@ -331,6 +335,41 @@ export const interruptThreadTurn: (input: InterruptThreadTurnInput) => CommandEf
     createdAt: metadata.createdAt,
   });
 });
+
+export const retryProviderSwitch: (input: RetryProviderSwitchInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.retryProviderSwitch",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.provider-switch.retry",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const abortProviderSwitch: (input: AbortProviderSwitchInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.abortProviderSwitch",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.provider-switch.abort",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const resolveProviderSwitch: (input: ResolveProviderSwitchInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.resolveProviderSwitch")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.provider-switch.resolve",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const respondToThreadApproval: (input: RespondToThreadApprovalInput) => CommandEffect =
   Effect.fn("EnvironmentCommands.respondToThreadApproval")(function* (input) {

@@ -47,7 +47,9 @@ import { expandTurnInputText } from "../turnInputText.ts";
 // the user can resolve (§8.2) and a restart can pick it up (§9.1).
 
 export const PENDING_SWITCH_REJECTION =
-  "乗り換えの途中です。完了を待つか、表示中の選択肢から選んでください。";
+  "乗り換えの途中です。完了を待つか、表示中の選択肢から選んでください（選択肢が出ないときは、Amu の最新版で開いてください）。";
+// Older clients show only the session error and cannot offer the choices (§8.6).
+const OLD_CLIENT_HINT = "（選択肢は Amu の最新版で表示されます）";
 const NOT_ALLOWED_DETAIL = "このモデルへの乗り換えはまだ対応していません。";
 // Only these adapters stamp session generations yet (§7.5, §10). After a
 // switch, events without one are dropped, so no other driver can take over.
@@ -402,7 +404,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
         "await-user",
       );
       yield* deps
-        .markSessionFailed({ threadId, detail })
+        .markSessionFailed({ threadId, detail: `${detail}${OLD_CLIENT_HINT}` })
         .pipe(Effect.catchCause(() => Effect.void));
     });
 

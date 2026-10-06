@@ -52,6 +52,8 @@ export async function sendQueuedMessage(
 ): Promise<void> {
   const { environmentId, threadId } = threadRef;
   const threadKey = scopedThreadKey(threadRef);
+  // An unresolved model switch refuses every send (§9.3): keep it queued.
+  if ((readThread(threadRef)?.providerSwitch?.pending ?? null) !== null) return;
   const queue = useQueuedMessageStore.getState();
   const message = queue.beginSend(
     threadKey,
@@ -161,6 +163,12 @@ export async function sendQueuedMessage(
       });
     }
 
+    // A model switch that began while this was preparing refuses the send
+    // (§9.3): put it back to go out once the switch is resolved.
+    if ((readThread(threadRef)?.providerSwitch?.pending ?? null) !== null) {
+      queue.releaseSend(threadKey, message.id);
+      return;
+    }
     // Stop hands a preparing message back to the composer. Past this point
     // the send can no longer be taken back.
     const thread = readThread(threadRef) ?? undefined;
