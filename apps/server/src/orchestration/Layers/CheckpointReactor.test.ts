@@ -11,7 +11,13 @@ import {
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderInstanceId,
+  ProviderSwitchId,
+  EMPTY_THREAD_PROVIDER_SWITCH_STATE,
+  type OrchestrationThreadProviderSwitchState,
 } from "@t3tools/contracts";
+import { ProjectionThreadProviderSwitchRepository } from "../../persistence/Services/ProjectionThreadProviderSwitches.ts";
+import { ProjectionThreadProviderSwitchRepositoryLive } from "../../persistence/Layers/ProjectionThreadProviderSwitches.ts";
+import { REVERT_BEFORE_SWITCH_DETAIL } from "../providerSwitchState.ts";
 import {
   CommandId,
   CheckpointRef,
@@ -276,7 +282,8 @@ describe("CheckpointReactor", () => {
     | CheckpointReactor
     | CheckpointStore.CheckpointStore
     | ProjectionSnapshotQuery
-    | RuntimeReceiptBus.RuntimeReceiptBus,
+    | RuntimeReceiptBus.RuntimeReceiptBus
+    | ProjectionThreadProviderSwitchRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -405,6 +412,9 @@ describe("CheckpointReactor", () => {
         ).pipe(Layer.provide(WorkspacePaths.layer), Layer.provideMerge(VcsDriverRegistry.layer)),
       ),
       Layer.provideMerge(WorkspacePaths.layer),
+      Layer.provideMerge(ProjectionThreadProviderSwitchRepositoryLive),
+      // The same in-memory database the engine projects into (layers are memoized).
+      Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(VcsProcess.layer),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(NodeServices.layer),
@@ -519,6 +529,18 @@ describe("CheckpointReactor", () => {
     return {
       engine,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      // Stores a switch state the command read model does not know about.
+      seedSwitchState: (state: OrchestrationThreadProviderSwitchState) =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const repository = yield* ProjectionThreadProviderSwitchRepository;
+            yield* repository.upsertState({
+              threadId: ThreadId.make("thread-1"),
+              state,
+              updatedAt: createdAt,
+            });
+          }),
+        ),
       provider,
       cwd,
       drain,
@@ -2173,6 +2195,67 @@ describe("CheckpointReactor", () => {
       numTurns: 1,
     });
   });
+
+  effectIt.effect("refuses a revert to the switch boundary from the stored switch state", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ providerName: ProviderDriverKind.make("claudeAgent") }),
+      );
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-1");
+      for (const turnCount of [1, 2]) {
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make(`cmd-diff-boundary-${turnCount}`),
+          threadId,
+          turnId: asTurnId(`turn-boundary-${turnCount}`),
+          completedAt: createdAt,
+          checkpointRef: checkpointRefForThreadTurn(threadId, turnCount),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: turnCount,
+          createdAt,
+        });
+      }
+      // The thread switched providers after turn 1; the command read model
+      // does not know it, so only the reactor's check can refuse the revert.
+      yield* Effect.promise(() =>
+        harness.seedSwitchState({
+          ...EMPTY_THREAD_PROVIDER_SWITCH_STATE,
+          hasHistory: true,
+          lastDelivered: {
+            switchId: ProviderSwitchId.make("switch-boundary"),
+            attemptId: 2,
+            turnId: asTurnId("turn-boundary-2"),
+            boundaryTurnCount: 1,
+          },
+        }),
+      );
+
+      yield* harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.make("cmd-revert-boundary"),
+        threadId,
+        turnCount: 1,
+        createdAt,
+      });
+      yield* Effect.promise(() => harness.drain());
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(thread?.activities).toContainEqual(
+        expect.objectContaining({
+          kind: "checkpoint.revert.failed",
+          payload: expect.objectContaining({ detail: REVERT_BEFORE_SWITCH_DETAIL }),
+        }),
+      );
+      expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
+      expect(thread?.checkpoints.map((checkpoint) => checkpoint.checkpointTurnCount)).toEqual([
+        1, 2,
+      ]);
+    }),
+  );
 
   it("processes consecutive revert requests with deterministic rollback sequencing", async () => {
     const harness = await createHarness();

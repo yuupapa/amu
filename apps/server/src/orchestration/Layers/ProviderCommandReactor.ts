@@ -33,7 +33,9 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { readHandoffChanges } from "../handoffChanges.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import {
   ProviderAdapterProcessError,
@@ -233,6 +235,9 @@ const make = Effect.gen(function* () {
   const serverSettingsService = yield* ServerSettingsService;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const switchRepository = yield* ProjectionThreadProviderSwitchRepository;
+  // Optional so layers without checkpoints still build; the packet then says
+  // the changes could not be read (§6.3).
+  const checkpointStore = yield* Effect.serviceOption(CheckpointStore.CheckpointStore);
   const serverConfig = yield* ServerConfig;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -448,6 +453,40 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * §9.3 (decision 9): /compact runs on the model that holds the conversation
+   * (the binding's), whatever is selected. A newly selected model, on this
+   * instance or another, takes over only with the next normal message.
+   */
+  const resolveCompactionSelection = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    requested: ModelSelection | undefined,
+  ) {
+    const handoff = yield* serverSettingsService.getSettings.pipe(
+      Effect.map((settings) => settings.crossProviderHandoff.enabled),
+    );
+    const asRequested = { selection: requested, owner: undefined } as const;
+    if (!handoff) return asRequested;
+    const binding = yield* providerService.getThreadBinding(threadId);
+    if (Option.isNone(binding)) return asRequested;
+    const owner = binding.value;
+    const cached = threadModelSelections.get(threadId);
+    const cachedForOwner = cached?.instanceId === owner.instanceId ? cached : undefined;
+    const thread = yield* resolveThreadShell(threadId);
+    const ownerModel =
+      owner.model ??
+      cachedForOwner?.model ??
+      (thread?.modelSelection.instanceId === owner.instanceId ? thread.modelSelection.model : null);
+    if (ownerModel === null) return asRequested;
+    const selection: ModelSelection =
+      requested?.instanceId === owner.instanceId && requested.model === ownerModel
+        ? requested
+        : cachedForOwner?.model === ownerModel
+          ? cachedForOwner
+          : { instanceId: owner.instanceId, model: ownerModel };
+    return { selection, owner: selection } as const;
+  });
+
   const restoreCompaction = Effect.fnUntraced(function* (threadId: ThreadId, fromRunning = false) {
     if (stoppingThreadIds.has(threadId)) {
       compactingThreadIds.delete(threadId);
@@ -598,6 +637,9 @@ const make = Effect.gen(function* () {
       readonly handoff?: boolean;
       // The generation the switch's start attempt reserved (§7.5).
       readonly sessionGeneration?: number;
+      // The conversation's holder when no session is active (/compact, §9.3):
+      // thread.modelSelection may already name a newly selected model.
+      readonly ownerSelection?: ModelSelection;
     },
   ) {
     const thread = yield* resolveThreadShell(threadId);
@@ -648,7 +690,7 @@ const make = Effect.gen(function* () {
       activeSession !== undefined &&
       activeSession.providerInstanceId !== undefined
         ? activeSession.providerInstanceId
-        : thread.modelSelection.instanceId;
+        : (options?.ownerSelection?.instanceId ?? thread.modelSelection.instanceId);
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const desiredInstanceId = desiredModelSelection.instanceId;
     const isHandoff = options?.handoff === true;
@@ -715,7 +757,7 @@ const make = Effect.gen(function* () {
                 instanceId: currentInstanceId,
                 model: activeSession.model,
               }
-            : thread.modelSelection,
+            : (options?.ownerSelection ?? thread.modelSelection),
         requestedModelSelection,
       });
     }
@@ -1377,6 +1419,16 @@ const make = Effect.gen(function* () {
         ? cached
         : undefined;
     },
+    readChanges: (threadId) =>
+      Option.isNone(checkpointStore)
+        ? Effect.succeed(null)
+        : readHandoffChanges(
+            {
+              getCheckpointContext: (id) => projectionSnapshotQuery.getThreadCheckpointContext(id),
+              checkpointStore: checkpointStore.value,
+            },
+            threadId,
+          ),
     resolveCwd: (thread) =>
       resolveProject(thread.projectId).pipe(
         Effect.map(
@@ -1637,20 +1689,24 @@ const make = Effect.gen(function* () {
         () => void compactingThreadIds.delete(event.payload.threadId),
       );
       yield* Effect.gen(function* () {
-        yield* ensureSessionForThread(
+        // Inside the failure recovery, so a failed lookup still clears the mark.
+        const resolved = yield* resolveCompactionSelection(
           event.payload.threadId,
-          event.payload.createdAt,
-          event.payload.modelSelection !== undefined
-            ? { modelSelection: event.payload.modelSelection, pendingTurnStart: true }
-            : { pendingTurnStart: true },
+          event.payload.modelSelection,
         );
+        const compactionSelection = resolved.selection;
+        yield* ensureSessionForThread(event.payload.threadId, event.payload.createdAt, {
+          pendingTurnStart: true,
+          ...(compactionSelection !== undefined ? { modelSelection: compactionSelection } : {}),
+          ...(resolved.owner !== undefined ? { ownerSelection: resolved.owner } : {}),
+        });
         compactionSessionEnsured = true;
-        if (event.payload.modelSelection !== undefined) {
-          threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+        if (compactionSelection !== undefined) {
+          threadModelSelections.set(event.payload.threadId, compactionSelection);
         }
         yield* providerService.compactThread(
           event.payload.threadId,
-          event.payload.modelSelection,
+          compactionSelection,
           event.payload.messageId,
         );
       }).pipe(

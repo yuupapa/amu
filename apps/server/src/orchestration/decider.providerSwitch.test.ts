@@ -658,9 +658,9 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
     it.effect("refuses both reverts while a switch is unresolved", () =>
       Effect.gen(function* () {
         const model = yield* started;
-        expect(yield* refusal(model, revert(5))).toContain("provider switch is unresolved");
+        expect(yield* refusal(model, revert(5))).toContain("モデルの乗り換え中は戻せません");
         expect(yield* refusal(model, revert(5, "thread.conversation.revert"))).toContain(
-          "provider switch is unresolved",
+          "モデルの乗り換え中は戻せません",
         );
       }),
     );
@@ -668,9 +668,11 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
     it.effect("refuses reverting to or before the switch boundary", () =>
       Effect.gen(function* () {
         const model = yield* deliveredModel;
-        expect(yield* refusal(model, revert(3))).toContain("switched providers after turn 3");
+        expect(yield* refusal(model, revert(3))).toContain(
+          "モデルを乗り換えた所より前には戻せません",
+        );
         expect(yield* refusal(model, revert(0, "thread.conversation.revert"))).toContain(
-          "switched providers after turn 3",
+          "モデルを乗り換えた所より前には戻せません",
         );
         const { types } = yield* run(model, [revert(4)]);
         expect(types).toEqual(["thread.checkpoint-revert-requested"]);

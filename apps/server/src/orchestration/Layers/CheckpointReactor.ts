@@ -30,6 +30,9 @@ import {
 } from "../../checkpointing/Utils.ts";
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ProjectionThreadProviderSwitchRepositoryLive } from "../../persistence/Layers/ProjectionThreadProviderSwitches.ts";
+import { ProjectionThreadProviderSwitchRepository } from "../../persistence/Services/ProjectionThreadProviderSwitches.ts";
+import { checkRevertAgainstProviderSwitch } from "../providerSwitchState.ts";
 import { CheckpointReactor, type CheckpointReactorShape } from "../Services/CheckpointReactor.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -87,6 +90,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore.CheckpointStore;
+  const switchRepository = yield* ProjectionThreadProviderSwitchRepository;
   const receiptBus = yield* RuntimeReceiptBus;
   const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -812,6 +816,31 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Checked again before anything is rolled back or restored: the decider
+    // read the command read model, this reads the stored switch state (§7.4).
+    const switchRefusal = yield* switchRepository
+      .getStateByThreadId({ threadId: event.payload.threadId })
+      .pipe(
+        Effect.map((row) =>
+          Option.isSome(row)
+            ? checkRevertAgainstProviderSwitch(row.value.state, event.payload.turnCount)
+            : null,
+        ),
+        Effect.orElseSucceed(
+          () => "モデルの乗り換えの状態を確認できなかったため、戻しませんでした。",
+        ),
+      );
+    if (switchRefusal !== null) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        revertRequestEventId: event.eventId,
+        detail: switchRefusal,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
     yield* providerService.assertConversationRollbackSupported(event.payload.threadId);
 
     if (event.payload.restoreFiles !== false) {
@@ -1081,4 +1110,6 @@ const make = Effect.gen(function* () {
   } satisfies CheckpointReactorShape;
 });
 
-export const CheckpointReactorLive = Layer.effect(CheckpointReactor, make);
+export const CheckpointReactorLive = Layer.effect(CheckpointReactor, make).pipe(
+  Layer.provide(ProjectionThreadProviderSwitchRepositoryLive),
+);

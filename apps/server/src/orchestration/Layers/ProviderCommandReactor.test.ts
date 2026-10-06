@@ -12,7 +12,9 @@ import {
   ProviderSetupError,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import {
+  CheckpointRef,
   ApprovalRequestId,
   CommandId,
   ComposerContextId,
@@ -192,6 +194,8 @@ describe("ProviderCommandReactor", () => {
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
     readonly crossProviderHandoff?: boolean;
     readonly handoffAllowedDrivers?: ReadonlyArray<string>;
+    /** Checkpoint git calls for the packet's [[AMU-CHANGES]]; absent means none. */
+    readonly checkpointStore?: Partial<CheckpointStore.CheckpointStore["Service"]>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -400,18 +404,20 @@ describe("ProviderCommandReactor", () => {
         boundSessions.delete(threadId);
       }),
     );
-    const service: ProviderServiceShape = {
-      getThreadBinding: (threadId) =>
-        Effect.succeed(
-          Option.fromNullishOr(boundSessions.get(threadId)).pipe(
-            Option.map((session) => ({
-              instanceId: session.providerInstanceId!,
-              driver: session.provider,
-              hasResumeCursor: true,
-              model: session.model ?? null,
-            })),
-          ),
+    const getThreadBinding = vi.fn<ProviderServiceShape["getThreadBinding"]>((threadId) =>
+      Effect.succeed(
+        Option.fromNullishOr(boundSessions.get(threadId)).pipe(
+          Option.map((session) => ({
+            instanceId: session.providerInstanceId!,
+            driver: session.provider,
+            hasResumeCursor: true,
+            model: session.model ?? null,
+          })),
         ),
+      ),
+    );
+    const service: ProviderServiceShape = {
+      getThreadBinding,
       releaseThreadForHandoff:
         releaseThreadForHandoff as ProviderServiceShape["releaseThreadForHandoff"],
       listThreadSessions: (threadId) =>
@@ -554,6 +560,11 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(Layer.mock(TerminalManager)({ closeIdle: closeIdleTerminals })),
+      Layer.provideMerge(
+        input?.checkpointStore !== undefined
+          ? Layer.mock(CheckpointStore.CheckpointStore)(input.checkpointStore)
+          : Layer.empty,
+      ),
       Layer.provideMerge(
         ServerSettingsService.layerTest(
           input?.crossProviderHandoff === true
@@ -766,6 +777,7 @@ describe("ProviderCommandReactor", () => {
       generateThreadTitle,
       runtimeSessions,
       releaseThreadForHandoff,
+      getThreadBinding,
       stateDir,
       drain,
       startReactor,
@@ -4743,6 +4755,174 @@ describe("ProviderCommandReactor", () => {
       expect(state?.pending).toBeNull();
       expect(state?.lastDelivered).toMatchObject({ attemptId: 2, boundaryTurnCount: 0 });
       await waitFor(async () => (await deliveryState(harness, "message-switch")) === "delivered");
+    });
+
+    it("puts the thread's final diff in the packet", async () => {
+      const diffs: Array<{ from: string; to: string }> = [];
+      const harness = await createHarness({
+        crossProviderHandoff: true,
+        checkpointStore: {
+          isGitRepository: () => Effect.succeed(true),
+          hasCheckpointRef: () => Effect.succeed(true),
+          diffCheckpoints: (diff) => {
+            diffs.push({ from: diff.fromCheckpointRef, to: diff.toCheckpointRef });
+            return Effect.succeed("4\t2\tsrc/app.ts\u0000");
+          },
+        },
+      });
+      await firstCodexTurn(harness);
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make("cmd-handoff-diff-1"),
+          threadId: ThreadId.make("thread-1"),
+          turnId: asTurnId("turn-1"),
+          completedAt: "2026-01-01T00:00:00.000Z",
+          checkpointRef: CheckpointRef.make("refs/test/turn-1"),
+          status: "ready",
+          files: [{ path: "src/app.ts", kind: "modified", additions: 4, deletions: 2 }],
+          checkpointTurnCount: 1,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+
+      expect(diffs.map((diff) => diff.to)).toEqual(["refs/test/turn-1"]);
+      const sent = harness.sendTurn.mock.calls[1]?.[0] as { input: string };
+      expect(sent.input).toContain("[[AMU-CHANGES]]");
+      expect(sent.input).toContain("- src/app.ts (+4 −2)  最後に変更したターン: 1");
+      expect(sent.input).not.toContain("変更内容を取得できませんでした");
+    });
+
+    it("says the changes could not be read without checkpoints", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      const sent = harness.sendTurn.mock.calls[1]?.[0] as { input: string };
+      expect(sent.input).toContain("[[AMU-CHANGES]]\n変更内容を取得できませんでした。");
+    });
+
+    it("compacts on the current provider and switches with the next message", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "compact", "/compact", claudeSelection);
+
+      // Decision 9: the conversation's holder (Codex) compacts it.
+      await waitFor(() => harness.compactThread.mock.calls.length === 1);
+      const compacted = harness.compactThread.mock.calls[0] as unknown as [
+        ThreadId,
+        ModelSelection | undefined,
+      ];
+      expect(compacted[1]?.instanceId).toBe(ProviderInstanceId.make("codex"));
+      expect(harness.releaseThreadForHandoff).not.toHaveBeenCalled();
+      expect(await switchState(harness)).toBeUndefined();
+      expect(
+        harness.startSession.mock.calls.some(
+          (call) =>
+            (call[1] as { providerInstanceId?: string }).providerInstanceId === "claudeAgent",
+        ),
+      ).toBe(false);
+      expect(await failureDetails(harness)).toEqual([]);
+
+      // The selected provider takes over with the next normal message.
+      await waitFor(async () => {
+        const thread = (await harness.readModel()).threads.find(
+          (entry) => entry.id === ThreadId.make("thread-1"),
+        );
+        return thread?.session?.status === "ready";
+      });
+      await startTurn(harness, "after-compact", "Claude で続けて", claudeSelection);
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      expect(harness.releaseThreadForHandoff).toHaveBeenCalledTimes(1);
+    });
+
+    it("compacts on the current model when another model of its instance is selected", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "compact", "/compact", {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-6.1-sol",
+      });
+
+      await waitFor(() => harness.compactThread.mock.calls.length === 1);
+      const compacted = harness.compactThread.mock.calls[0] as unknown as [
+        ThreadId,
+        ModelSelection | undefined,
+      ];
+      expect(compacted[1]).toMatchObject({ instanceId: "codex", model: "gpt-5-codex" });
+      // No restart on the newly selected model.
+      expect(harness.startSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("compacts on the conversation's holder after its session stopped", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      // The client already points the thread at Claude, and Codex's session is gone.
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-compact-select-claude"),
+          threadId: ThreadId.make("thread-1"),
+          modelSelection: claudeSelection,
+        }),
+      );
+      harness.runtimeSessions.splice(0, harness.runtimeSessions.length);
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-compact-session-stopped"),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "stopped",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      await startTurn(harness, "compact", "/compact");
+
+      await waitFor(() => harness.compactThread.mock.calls.length === 1);
+      const compacted = harness.compactThread.mock.calls[0] as unknown as [
+        ThreadId,
+        ModelSelection | undefined,
+      ];
+      expect(compacted[1]?.instanceId).toBe(ProviderInstanceId.make("codex"));
+      expect(harness.startSession.mock.calls.at(-1)?.[1]).toMatchObject({
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+      expect(harness.releaseThreadForHandoff).not.toHaveBeenCalled();
+    });
+
+    it("clears the compaction mark when the current model cannot be looked up", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      harness.getThreadBinding.mockImplementationOnce(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "codex",
+              method: "binding.read",
+              detail: "binding read failed",
+            }),
+          ) as never,
+      );
+      await startTurn(harness, "compact", "/compact", claudeSelection);
+      await waitFor(async () =>
+        (await failureDetails(harness)).some((detail) => detail.includes("binding read failed")),
+      );
+      expect(harness.compactThread).not.toHaveBeenCalled();
+
+      // A normal message right after is not held behind the failed compaction.
+      await startTurn(harness, "after-compact", "続けて");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     });
 
     it("waits for the user when the new session fails to start, refusing new sends meanwhile", async () => {

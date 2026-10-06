@@ -1522,3 +1522,81 @@ server・contractsの型チェックはエラー0でした。再現には実装�
 server・contractsの型チェックはエラー0でした。再現確認には実装を使うメモリ上のハーネスを使用し、Vitestは再実行していません。コードとファイルは変更していません。
 
 **次の部分（CHANGESの差分、巻き戻し境界、/compact）に進んでよいと判断します。**
+
+## コードレビュー: Phase 1 第4部分（変更内容の差分・巻き戻しの境界・/compact、2026-10-06）
+
+経過: 第1巡 Red（Major1）→ 第2巡 Red（Major2）→ 第3巡 Green
+
+### 第1巡（Codex 原文）
+
+判定：**Red**。Blocker 0件、Major 1件、Minor 0件です。
+
+Blocker：なし。
+
+Major：
+
+1. **/compactが現在の担当で圧縮せず、選択中の別ドライバーを理由に失敗する**  
+   [ProviderCommandReactor.ts:1655](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1655)、[ProviderCommandReactor.test.ts:4809](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts:4809)
+
+   Codexで会話したあとClaudeを選んで`/compact`を送ると、選択先の`modelSelection`を`ensureSessionForThread`へ渡すため、既存の別ドライバー拒否で終了します。`compactThread`には到達しません。実装を使った再現でも、この拒否を確認しました。
+
+   追加テストは`provider.turn.start.failed`を待っており、圧縮の失敗を期待しています。これは既存コードに残っている設計未達です。§9.3の決定9では、現在の担当で圧縮し、選択先への乗り換えは次の通常発言まで保留します。
+
+   **直し方：** 圧縮用の`modelSelection`をbinding・稼働中セッションの現在の担当から求め、`ensureSessionForThread`と`compactThread`へ渡してください。選択中の移行先は予約として保持し、圧縮用のキャッシュを移行先の値で更新しないようにします。テストでは「現在のCodexで圧縮が成功し、switchもreleaseもなく、次の通常発言でClaudeへ乗り換える」を確認してください。
+
+Minor：なし。
+
+CHANGESは最新readyを選び、空白差分を含めて取得しています。renameの移行先パスと取得失敗時の`null`も確認しました。git出力には既存の10MB上限があります。巻き戻し境界・状態読取失敗は、rollbackとファイル復元の前に失敗activityを出します。本番のLayer構成ではCheckpointStoreが供給されるため、`serviceOption`が常に`None`になる問題は見つかりませんでした。
+
+serverの型チェックはエラー0でした。再現確認にはメモリ上のハーネスを使用し、Vitestは再実行していません。コードとファイルは変更していません。
+
+**次の部分（クライアントへの状態配信とweb UI）には、このMajorを解消してから進んでください。**
+
+### 第2巡（Codex 原文）
+
+判定: **Red（Major 2件）**
+
+前回の「別ドライバーを選ぶと /compact が失敗する」経路は解消しています。CHANGES と巻き戻し境界に追加指摘はありません。
+
+Blocker: なし。
+
+Major:
+
+1. **同じinstanceの別モデルでは、現担当で圧縮する規則が守られません。**  
+   [ProviderCommandReactor.ts:474](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:474)
+
+   instanceが一致すると要求値をそのまま返します。そのため、Claudeの旧モデルから別モデルを選んで /compact を送ると、`ensureSessionForThread` が選択先モデルでセッションを再開始し、そのモデルで圧縮します。決定9の「今の担当モデルでだけ実行」に反します。
+
+   また、465行の早期returnにも穴があります。`modelSelection`を省略し、現セッションが停止済みで`thread.modelSelection`が移行先になっている場合は、移行先で開始します。
+
+   **直し方:** フラグonでbindingの担当モデルを特定できる場合は、要求値の有無やinstanceの一致にかかわらず現担当の選択を返してください。同じinstanceのモデル変更と、選択省略・停止済みのテストを追加してください。
+
+2. **選択の解決が失敗すると、圧縮中の印が残り、以後の送信が進みません。**  
+   [ProviderCommandReactor.ts:1685](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1685)
+
+   `compactingThreadIds`へ追加した後、失敗回復処理の外で`resolveCompactionSelection`を呼んでいます。キャッシュがない状態で内部の`getThreadShellById`が失敗すると、外側はログだけを出し、`clearCompacting`を実行しません。以後の通常発言はキューに入り続け、/compactの再試行も拒否されます。
+
+   **直し方:** 選択の解決も既存の失敗回復処理の内側へ移し、失敗時に必ず印を消してください。読み取りを1回失敗させ、その後の通常送信が進むテストを追加してください。
+
+Minor: なし。
+
+server型チェックと`git diff --check`は通過しました。上記は実際の関数を読み込んだメモリ上の検証で再現しています。Vitestは今回未実行です。コード・ファイルは変更していません。
+
+**次の部分（クライアントへの状態配信とweb UI）には、Major 2件を直してから進んでください。**
+
+### 第3巡（Codex 原文）
+
+判定: **Green**
+
+Blocker: なし。  
+Major: なし。  
+Minor: なし。
+
+前回の2件は解消しています。
+
+- **Major 1 — 解消:** 同じinstanceの別モデル、選択省略、停止済みのいずれも現担当で圧縮します。`ownerSelection`は /compact だけが渡し、通常送信の判定には影響しません。
+- **Major 2 — 解消:** 設定・binding・スレッドの読み取り失敗が失敗回復処理に入り、圧縮中の印が消えて取消処理まで進むことを確認しました。
+
+実際の関数を使ったメモリ上の検証で、担当選択の優先順位、完全な選択の保持、フラグoff時の扱いも確認しました。server型チェックと`git diff --check`は通過しています。Vitestは今回未実行です。コード・ファイルは変更していません。
+
+**次の部分（クライアントへの状態配信とweb UI）に進んでよいと判断します。**

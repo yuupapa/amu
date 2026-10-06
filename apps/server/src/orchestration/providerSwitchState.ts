@@ -362,16 +362,20 @@ function checkAwaitUser(
 }
 
 /** Null when the revert may proceed; otherwise why it is refused (§4.4, §7.4). */
+export const REVERT_DURING_SWITCH_DETAIL = "モデルの乗り換え中は戻せません。";
+export const REVERT_BEFORE_SWITCH_DETAIL = "この操作は、モデルを乗り換えた所より前には戻せません。";
+
 export function checkRevertAgainstProviderSwitch(
   state: OrchestrationThreadProviderSwitchState,
   turnCount: number,
 ): string | null {
+  // Shown to the user as is (§7.4).
   if (state.pending !== null) {
-    return "Cannot revert while a provider switch is unresolved.";
+    return REVERT_DURING_SWITCH_DETAIL;
   }
   const boundary = state.lastDelivered?.boundaryTurnCount;
   if (boundary !== undefined && turnCount <= boundary) {
-    return `Cannot revert to turn ${turnCount}: the thread switched providers after turn ${boundary}.`;
+    return REVERT_BEFORE_SWITCH_DETAIL;
   }
   return null;
 }

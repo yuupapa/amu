@@ -33,7 +33,11 @@ import type { OrchestrationDispatchError } from "../Errors.ts";
 import type { ProjectionThreadProviderSwitchRepositoryShape } from "../../persistence/Services/ProjectionThreadProviderSwitches.ts";
 import type { ProviderServiceShape } from "../../provider/Services/ProviderService.ts";
 import { expandProviderTurnText } from "../../provider/providerTurnText.ts";
-import { buildHandoffPacket, computeHandoffBudget } from "../CrossProviderHandoff.ts";
+import {
+  buildHandoffPacket,
+  computeHandoffBudget,
+  type HandoffChangedFile,
+} from "../CrossProviderHandoff.ts";
 import { assembleHandoffSource } from "../handoffSource.ts";
 import { sha256Hex } from "../providerSwitchState.ts";
 import { expandTurnInputText } from "../turnInputText.ts";
@@ -86,6 +90,10 @@ export interface ProviderSwitchFlowDeps {
     readonly createdAt: string;
   }) => Effect.Effect<unknown, ProviderSwitchStepError>;
   readonly resolveCwd: (thread: OrchestrationThreadShell) => Effect.Effect<string | null>;
+  /** The thread's final diff for [[AMU-CHANGES]]; null when it cannot be read (§6.3). */
+  readonly readChanges: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<HandoffChangedFile> | null>;
   /** The thread and the switch's trigger message, to resume a stored switch. */
   readonly loadThread: (threadId: ThreadId) => Effect.Effect<OrchestrationThreadShell | null>;
   readonly loadMessage: (input: {
@@ -638,8 +646,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
         fromDriver: pending.from.driver,
         fromModel: pending.from.model,
         fromTurnCount: pending.boundaryTurnCount,
-        // §6.3 changes come with the checkpoint diff in a later step.
-        changes: null,
+        changes: yield* deps.readChanges(threadId),
       });
       const built = buildHandoffPacket({
         source,
