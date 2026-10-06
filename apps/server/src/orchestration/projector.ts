@@ -1,4 +1,5 @@
 import type {
+  EventId,
   OrchestrationEvent,
   OrchestrationProject,
   OrchestrationReadModel,
@@ -9,6 +10,17 @@ import type {
 } from "@t3tools/contracts";
 import {
   isImportedAgentSessionMessageId,
+  ThreadCheckpointRevertRequestedPayload,
+  ThreadMessageDeliveryStateSetPayload,
+  ThreadProviderSwitchAbortedPayload,
+  ThreadProviderSwitchAttemptRecordedPayload,
+  ThreadProviderSwitchAwaitingUserPayload,
+  ThreadProviderSwitchMilestoneReachedPayload,
+  ThreadProviderSwitchPacketBuiltPayload,
+  ThreadProviderSwitchRequestedPayload,
+  ThreadProviderSwitchResolvedPayload,
+  ThreadProviderSwitchRetryRequestedPayload,
+  type OrchestrationThreadProviderSwitchState,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
@@ -26,6 +38,11 @@ import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
+import {
+  applyProviderSwitchEvent,
+  threadProviderSwitchState,
+  type ProviderSwitchEvent,
+} from "./providerSwitchState.ts";
 import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
@@ -208,6 +225,59 @@ function legacyLinkToPullRequests(
     snapshot: null,
     stack: null,
   });
+}
+
+const PROVIDER_SWITCH_PAYLOAD_SCHEMAS = {
+  "thread.provider-switch-requested": ThreadProviderSwitchRequestedPayload,
+  "thread.provider-switch-milestone-reached": ThreadProviderSwitchMilestoneReachedPayload,
+  "thread.provider-switch-packet-built": ThreadProviderSwitchPacketBuiltPayload,
+  "thread.provider-switch-attempt-recorded": ThreadProviderSwitchAttemptRecordedPayload,
+  "thread.provider-switch-awaiting-user": ThreadProviderSwitchAwaitingUserPayload,
+  "thread.provider-switch-retry-requested": ThreadProviderSwitchRetryRequestedPayload,
+  "thread.provider-switch-aborted": ThreadProviderSwitchAbortedPayload,
+  "thread.provider-switch-resolved": ThreadProviderSwitchResolvedPayload,
+} as const satisfies Record<ProviderSwitchEvent["type"], unknown>;
+
+/** Patch for a thread's switch state; leaves threads that never had one untouched. */
+function providerSwitchPatch(
+  thread: OrchestrationThread,
+  next: OrchestrationThreadProviderSwitchState,
+): ThreadPatch {
+  if (next === thread.providerSwitch) return {};
+  const isEmpty = next.pending === null && !next.hasHistory && next.revertsInFlight.length === 0;
+  if (isEmpty) {
+    return thread.providerSwitch === undefined ? {} : { providerSwitch: undefined };
+  }
+  return { providerSwitch: next };
+}
+
+function revertStartedPatch(thread: OrchestrationThread, requestEventId: EventId): ThreadPatch {
+  const state = threadProviderSwitchState(thread);
+  if (state.revertsInFlight.includes(requestEventId)) return {};
+  return providerSwitchPatch(thread, {
+    ...state,
+    revertsInFlight: [...state.revertsInFlight, requestEventId],
+  });
+}
+
+/** `undefined` comes from events written before request ids: release the oldest. */
+function revertEndedPatch(
+  thread: OrchestrationThread,
+  requestEventId: EventId | undefined,
+): ThreadPatch {
+  const state = threadProviderSwitchState(thread);
+  const revertsInFlight =
+    requestEventId === undefined
+      ? state.revertsInFlight.slice(1)
+      : state.revertsInFlight.filter((id) => id !== requestEventId);
+  if (revertsInFlight.length === state.revertsInFlight.length) return {};
+  return providerSwitchPatch(thread, { ...state, revertsInFlight });
+}
+
+function revertRequestEventIdOf(activityPayload: unknown): EventId | undefined {
+  if (typeof activityPayload !== "object" || activityPayload === null) return undefined;
+  const id = (activityPayload as { revertRequestEventId?: unknown }).revertRequestEventId;
+  return typeof id === "string" && id.length > 0 ? (id as EventId) : undefined;
 }
 
 function decodeForEvent<A>(
@@ -1056,6 +1126,7 @@ export function projectEvent(
               proposedPlans,
               activities,
               latestTurn,
+              ...revertEndedPatch(thread, payload.revertRequestEventId),
               updatedAt: event.occurredAt,
             }),
           };
@@ -1087,7 +1158,96 @@ export function projectEvent(
             ...nextBase,
             threads: patchThreadAt(nextBase.threads, threadIndex, {
               activities,
+              // Every revert ends in thread.reverted or this failure activity.
+              // A repeated activity id is the same failure: release once.
+              ...(payload.activity.kind === "checkpoint.revert.failed" &&
+              !thread.activities.some((entry) => entry.id === payload.activity.id)
+                ? revertEndedPatch(thread, revertRequestEventIdOf(payload.activity.payload))
+                : {}),
               updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.checkpoint-revert-requested":
+      return decodeForEvent(
+        ThreadCheckpointRevertRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const threadIndex = nextBase.threads.findIndex((entry) => entry.id === payload.threadId);
+          const thread = nextBase.threads[threadIndex];
+          if (!thread) return nextBase;
+          return {
+            ...nextBase,
+            threads: patchThreadAt(
+              nextBase.threads,
+              threadIndex,
+              revertStartedPatch(thread, event.eventId),
+            ),
+          };
+        }),
+      );
+
+    case "thread.provider-switch-requested":
+    case "thread.provider-switch-milestone-reached":
+    case "thread.provider-switch-packet-built":
+    case "thread.provider-switch-attempt-recorded":
+    case "thread.provider-switch-awaiting-user":
+    case "thread.provider-switch-retry-requested":
+    case "thread.provider-switch-aborted":
+    case "thread.provider-switch-resolved":
+      return decodeForEvent(
+        PROVIDER_SWITCH_PAYLOAD_SCHEMAS[event.type] as Schema.Decoder<
+          ProviderSwitchEvent["payload"],
+          never
+        >,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const threadIndex = nextBase.threads.findIndex((entry) => entry.id === payload.threadId);
+          const thread = nextBase.threads[threadIndex];
+          if (!thread) return nextBase;
+          const next = applyProviderSwitchEvent(threadProviderSwitchState(thread), {
+            ...event,
+            payload,
+          } as ProviderSwitchEvent);
+          return {
+            ...nextBase,
+            threads: patchThreadAt(nextBase.threads, threadIndex, {
+              ...providerSwitchPatch(thread, next),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.message-delivery-state-set":
+      return decodeForEvent(
+        ThreadMessageDeliveryStateSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const threadIndex = nextBase.threads.findIndex((entry) => entry.id === payload.threadId);
+          const thread = nextBase.threads[threadIndex];
+          if (!thread || !thread.messages.some((message) => message.id === payload.messageId)) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: patchThreadAt(nextBase.threads, threadIndex, {
+              messages: thread.messages.map((message) =>
+                message.id === payload.messageId
+                  ? { ...message, deliveryState: payload.state }
+                  : message,
+              ),
             }),
           };
         }),

@@ -25,6 +25,20 @@ import {
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  MessageDeliveryState,
+  OrchestrationThreadProviderSwitchState,
+  ThreadMessageDeliveryStatePayloadFields,
+  ThreadProviderSwitchAbortPayloadFields,
+  ThreadProviderSwitchAttemptPayloadFields,
+  ThreadProviderSwitchAwaitUserPayloadFields,
+  ThreadProviderSwitchMilestonePayloadFields,
+  ThreadProviderSwitchPacketPayloadFields,
+  ThreadProviderSwitchRequestedPayloadFields,
+  ThreadProviderSwitchResolvePayloadFields,
+  ThreadProviderSwitchRetryPayloadFields,
+  ThreadTurnAssignmentPayloadFields,
+} from "./providerSwitch.ts";
+import {
   PullRequestActor,
   PullRequestChecksState,
   PullRequestMergeability,
@@ -579,6 +593,8 @@ export const OrchestrationMessage = Schema.Struct({
   context: Schema.optional(OrchestrationMessageContext),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
+  // Absent means delivered: messages from before cross-provider handoff.
+  deliveryState: Schema.optional(MessageDeliveryState),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -853,6 +869,8 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  // Cross-provider handoff state. Absent means no switch has happened.
+  providerSwitch: Schema.optional(OrchestrationThreadProviderSwitchState),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -1424,6 +1442,30 @@ const ThreadSessionStopCommand = Schema.Struct({
   onlyIfSettled: Schema.optional(Schema.Boolean),
 });
 
+const providerSwitchCommandBase = {
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+} as const;
+
+const ThreadProviderSwitchRetryCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-switch.retry"),
+  ...providerSwitchCommandBase,
+  ...ThreadProviderSwitchRetryPayloadFields,
+});
+
+const ThreadProviderSwitchAbortCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-switch.abort"),
+  ...providerSwitchCommandBase,
+  ...ThreadProviderSwitchAbortPayloadFields,
+});
+
+const ThreadProviderSwitchResolveCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-switch.resolve"),
+  ...providerSwitchCommandBase,
+  ...ThreadProviderSwitchResolvePayloadFields,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -1454,6 +1496,9 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadConversationRevertCommand,
   ThreadSessionStopCommand,
+  ThreadProviderSwitchRetryCommand,
+  ThreadProviderSwitchAbortCommand,
+  ThreadProviderSwitchResolveCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -1488,6 +1533,9 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadConversationRevertCommand,
   ThreadSessionStopCommand,
+  ThreadProviderSwitchRetryCommand,
+  ThreadProviderSwitchAbortCommand,
+  ThreadProviderSwitchResolveCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -1604,6 +1652,8 @@ const ThreadRevertCompleteCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   turnCount: NonNegativeInt,
+  // The thread.checkpoint-revert-requested event this completes.
+  revertRequestEventId: Schema.optional(EventId),
   createdAt: IsoDateTime,
 });
 
@@ -1658,6 +1708,48 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
   stack: Schema.NullOr(ThreadPullRequestStack),
 });
 
+const ThreadProviderSwitchRequestCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-switch.request"),
+  ...providerSwitchCommandBase,
+  ...ThreadProviderSwitchRequestedPayloadFields,
+});
+
+const ThreadProviderSwitchMilestoneCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-switch.milestone"),
+  ...providerSwitchCommandBase,
+  ...ThreadProviderSwitchMilestonePayloadFields,
+});
+
+const ThreadProviderSwitchPacketCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-switch.packet"),
+  ...providerSwitchCommandBase,
+  ...ThreadProviderSwitchPacketPayloadFields,
+});
+
+const ThreadProviderSwitchAttemptCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-switch.attempt"),
+  ...providerSwitchCommandBase,
+  ...ThreadProviderSwitchAttemptPayloadFields,
+});
+
+const ThreadProviderSwitchAwaitUserCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-switch.await-user"),
+  ...providerSwitchCommandBase,
+  ...ThreadProviderSwitchAwaitUserPayloadFields,
+});
+
+const ThreadTurnAssignmentRecordCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn-assignment.record"),
+  ...providerSwitchCommandBase,
+  ...ThreadTurnAssignmentPayloadFields,
+});
+
+const ThreadMessageDeliveryStateSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.message.delivery-state.set"),
+  ...providerSwitchCommandBase,
+  ...ThreadMessageDeliveryStatePayloadFields,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
   ThreadPullRequestSyncCommand,
@@ -1678,6 +1770,13 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTitleRefineCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,
+  ThreadProviderSwitchRequestCommand,
+  ThreadProviderSwitchMilestoneCommand,
+  ThreadProviderSwitchPacketCommand,
+  ThreadProviderSwitchAttemptCommand,
+  ThreadProviderSwitchAwaitUserCommand,
+  ThreadTurnAssignmentRecordCommand,
+  ThreadMessageDeliveryStateSetCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1721,6 +1820,16 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "thread.provider-switch-requested",
+  "thread.provider-switch-milestone-reached",
+  "thread.provider-switch-packet-built",
+  "thread.provider-switch-attempt-recorded",
+  "thread.provider-switch-awaiting-user",
+  "thread.provider-switch-retry-requested",
+  "thread.provider-switch-aborted",
+  "thread.provider-switch-resolved",
+  "thread.turn-assignment-recorded",
+  "thread.message-delivery-state-set",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1967,6 +2076,8 @@ export const ThreadCheckpointRevertRequestedPayload = Schema.Struct({
 export const ThreadRevertedPayload = Schema.Struct({
   threadId: ThreadId,
   turnCount: NonNegativeInt,
+  // Optional so events from before cross-provider handoff still decode.
+  revertRequestEventId: Schema.optional(EventId),
 });
 
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
@@ -1998,6 +2109,52 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
 export const ThreadActivityAppendedPayload = Schema.Struct({
   threadId: ThreadId,
   activity: OrchestrationThreadActivity,
+});
+
+const providerSwitchPayloadBase = {
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+} as const;
+
+export const ThreadProviderSwitchRequestedPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadProviderSwitchRequestedPayloadFields,
+});
+export const ThreadProviderSwitchMilestoneReachedPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadProviderSwitchMilestonePayloadFields,
+});
+export const ThreadProviderSwitchPacketBuiltPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadProviderSwitchPacketPayloadFields,
+});
+export const ThreadProviderSwitchAttemptRecordedPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadProviderSwitchAttemptPayloadFields,
+});
+export const ThreadProviderSwitchAwaitingUserPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadProviderSwitchAwaitUserPayloadFields,
+});
+export const ThreadProviderSwitchRetryRequestedPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadProviderSwitchRetryPayloadFields,
+});
+export const ThreadProviderSwitchAbortedPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadProviderSwitchAbortPayloadFields,
+});
+export const ThreadProviderSwitchResolvedPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadProviderSwitchResolvePayloadFields,
+});
+export const ThreadTurnAssignmentRecordedPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadTurnAssignmentPayloadFields,
+});
+export const ThreadMessageDeliveryStateSetPayload = Schema.Struct({
+  ...providerSwitchPayloadBase,
+  ...ThreadMessageDeliveryStatePayloadFields,
 });
 
 /**
@@ -2206,6 +2363,56 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-switch-requested"),
+    payload: ThreadProviderSwitchRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-switch-milestone-reached"),
+    payload: ThreadProviderSwitchMilestoneReachedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-switch-packet-built"),
+    payload: ThreadProviderSwitchPacketBuiltPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-switch-attempt-recorded"),
+    payload: ThreadProviderSwitchAttemptRecordedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-switch-awaiting-user"),
+    payload: ThreadProviderSwitchAwaitingUserPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-switch-retry-requested"),
+    payload: ThreadProviderSwitchRetryRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-switch-aborted"),
+    payload: ThreadProviderSwitchAbortedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-switch-resolved"),
+    payload: ThreadProviderSwitchResolvedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.turn-assignment-recorded"),
+    payload: ThreadTurnAssignmentRecordedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.message-delivery-state-set"),
+    payload: ThreadMessageDeliveryStateSetPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

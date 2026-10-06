@@ -120,6 +120,8 @@ const make = Effect.gen(function* () {
     readonly turnCount: number;
     readonly detail: string;
     readonly createdAt: string;
+    // Releases this revert from the provider switch's in-flight set.
+    readonly revertRequestEventId?: EventId;
   }) =>
     Effect.all({
       commandId: serverCommandId("checkpoint-revert-failure"),
@@ -138,6 +140,9 @@ const make = Effect.gen(function* () {
             payload: {
               turnCount: input.turnCount,
               detail: input.detail,
+              ...(input.revertRequestEventId !== undefined
+                ? { revertRequestEventId: input.revertRequestEventId }
+                : {}),
             },
             turnId: null,
             createdAt: input.createdAt,
@@ -773,6 +778,7 @@ const make = Effect.gen(function* () {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
+        revertRequestEventId: event.eventId,
         detail: "Thread was not found in read model.",
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
@@ -799,6 +805,7 @@ const make = Effect.gen(function* () {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
+        revertRequestEventId: event.eventId,
         detail: `Checkpoint turn count ${event.payload.turnCount} exceeds current turn count ${currentTurnCount}.`,
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
@@ -812,6 +819,7 @@ const make = Effect.gen(function* () {
         yield* appendRevertFailureActivity({
           threadId: event.payload.threadId,
           turnCount: event.payload.turnCount,
+          revertRequestEventId: event.eventId,
           detail: "Checkpoint workspace is unavailable or is not a git repository.",
           createdAt: now,
         }).pipe(Effect.catch(() => Effect.void));
@@ -822,6 +830,7 @@ const make = Effect.gen(function* () {
         yield* appendRevertFailureActivity({
           threadId: thread.id,
           turnCount: event.payload.turnCount,
+          revertRequestEventId: event.eventId,
           detail:
             "File restore requires an isolated worktree. This workspace may contain changes from another thread. Rewind the conversation without restoring files instead.",
           createdAt: now,
@@ -840,6 +849,7 @@ const make = Effect.gen(function* () {
         yield* appendRevertFailureActivity({
           threadId: event.payload.threadId,
           turnCount: event.payload.turnCount,
+          revertRequestEventId: event.eventId,
           detail: `Checkpoint ref for turn ${event.payload.turnCount} is unavailable in read model.`,
           createdAt: now,
         }).pipe(Effect.catch(() => Effect.void));
@@ -855,6 +865,7 @@ const make = Effect.gen(function* () {
         yield* appendRevertFailureActivity({
           threadId: event.payload.threadId,
           turnCount: event.payload.turnCount,
+          revertRequestEventId: event.eventId,
           detail: `Filesystem checkpoint is unavailable for turn ${event.payload.turnCount}.`,
           createdAt: now,
         }).pipe(Effect.catch(() => Effect.void));
@@ -894,6 +905,7 @@ const make = Effect.gen(function* () {
         commandId: yield* serverCommandId("checkpoint-revert-complete"),
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
+        revertRequestEventId: event.eventId,
         createdAt: now,
       })
       .pipe(
@@ -901,6 +913,7 @@ const make = Effect.gen(function* () {
           appendRevertFailureActivity({
             threadId: event.payload.threadId,
             turnCount: event.payload.turnCount,
+            revertRequestEventId: event.eventId,
             detail: error.message,
             createdAt: now,
           }),
@@ -923,6 +936,7 @@ const make = Effect.gen(function* () {
             appendRevertFailureActivity({
               threadId: event.payload.threadId,
               turnCount: event.payload.turnCount,
+              revertRequestEventId: event.eventId,
               detail: error.message,
               createdAt,
             }),

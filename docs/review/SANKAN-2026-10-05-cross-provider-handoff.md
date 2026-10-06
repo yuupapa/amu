@@ -772,3 +772,150 @@ Phase 1をClaude↔Codexに限定する裁定と、実装する判定条件が�
 2. `/compact`は現在の担当でのみ実行し、モデルの乗り換えは次の通常発言で開始する扱いでよいですか。
 
 **実装に入ってよい水準には達していません。Blockerが5件残っています。**
+
+---
+
+## コードレビュー: イベントと decider の層（2026-10-06）
+
+対象: packages/contracts/src/providerSwitch.ts、orchestration.ts、apps/server/src/orchestration/providerSwitchState.ts、decider.ts、projector.ts、Layers/CheckpointReactor.ts、decider.providerSwitch.test.ts
+
+経過: 第1巡 Red（Major6・Minor2）→ 第2巡 Red（Major5・Minor1）→ 第3巡 Red（Major1）→ 第4巡 Green
+
+### 第1巡（Codex 原文）
+
+判定は **Red** です。再送許可、冪等性、巻き戻しとの排他に修正が必要です。コードは変更していません。
+
+Blockerはありません。Majorは6件、Minorは2件です。
+
+1. **Major — failed後に、許可なしで再送できる**  
+   [providerSwitchState.ts:221](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:221)  
+   `submit(2): failed → submit(3): planned`が、`resolve(resend)`なしで通ります。§4.3の「2回目以降はresolve(resend)が必要」に反します。  
+   **修正案:** 既存のsubmitがあれば`resendAllowed`を必須にする。同時に、failedからも`unknown-delivery → resolve`へ進めるようにする。[現テスト:444](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.providerSwitch.test.ts:444)も、無許可の再送を拒否するテストへ変更してください。
+
+2. **Major — 解決済みのswitchIdを再び開ける**  
+   [providerSwitchState.ts:58](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:58)、[同:290](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:290)  
+   delivered後に同じrequestを再記録すると、`pending`が`requested`に戻ります。abort/discard後も同じです。同じcommandIdはエンジンが重複排除しますが、別commandIdによる同一操作の再記録では再開してしまいます。  
+   **修正案:** 終了済みswitchIdを保持・照合し、重複requestで操作を開き直さないようにする。delivered・abort・discard後の再記録をテストしてください。
+
+3. **Major — 古いplannedの再適用で最新試行が後退する**  
+   [providerSwitchState.ts:340](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:340)  
+   `start(3): succeeded`へ以前の`start(1): planned`を再適用すると、`latestStart`が1のplannedへ戻りました。`lastGeneration`だけは新しい値のままです。また、[同:179](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:179)では、最新試行を更新した後の過去の同一succeeded記録を拒否します。§4.4の冪等性を満たしません。  
+   **修正案:** 古いplannedで最新試行を上書きしない。過去の試行についても、同一記録の重複を照合できる情報を保持してください。
+
+4. **Major — 同じIDの異なる内容を重複として受け付ける**  
+   [providerSwitchState.ts:182](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:182)、[同:153](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:153)  
+   同じsubmitのsucceeded記録で`turnId`を変えても成功します。packetも、packetIdが同じなら異なる本文・統計を拒否しません。純粋projectorでは元の値が残る一方、イベントストアには矛盾する記録が入ります。  
+   **修正案:** requestの固定項目、試行のgeneration・turnId、packetの本文ハッシュ・統計を照合し、内容が一致する記録だけを冪等として扱ってください。
+
+5. **Major — 受付不明だった発言をcancelledに変更できる**  
+   [providerSwitchState.ts:237](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:237)、[decider.ts:2279](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.ts:2279)  
+   `submit.planned → unknown-delivery → resolve(resend) → 新start.failed → failed-retryable → abort`で、発言がcancelledになります。最初の送信が届いていた可能性は残っています。  
+   **修正案:** `abandoned`を未送信と扱わず、送信結果が不明という履歴を保持する。その履歴がある操作を閉じるときは、`unknown-discarded`となる判断経路を残してください。
+
+6. **Major — 重複した失敗記録で巻き戻しの排他が解除される**  
+   [projector.ts:1143](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/projector.ts:1143)  
+   巻き戻しを2件受け付けた後、同じIDの失敗activityを2回反映すると、activityは1件なのに`revertsInFlight`が0になります。その結果、別の巻き戻しが未完了でもrequestを受け付けました。  
+   **修正案:** 失敗・完了を巻き戻し要求のIDと対応づけ、同じ要求を一度だけ減算する。[requestedの加算:1165](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/projector.ts:1165)と[revertedの減算:1110](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/projector.ts:1110)も、重複適用をテストしてください。
+
+7. **Minor — plannedのstartからの自動復旧手順が未検証**  
+   [providerSwitchState.ts:202](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:202)、[テスト:468](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.providerSwitch.test.ts:468)  
+   plannedのstartを残して再起動した場合、§9.1どおり新startを直接記録すると拒否されます。旧startをfailedとして確定してから新startへ進む経路は使えるため、復旧不能ではありません。  
+   **修正案:** この前処理を復旧手順として明記し、old-stopped・packet-built・resend後の再起動をテストしてください。現在のテストは、awaiting-userを経由する復旧だけです。
+
+8. **Minor — asキャストでtypeとpayloadの対応を検査できない**  
+   [decider.ts:2273](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.ts:2273)、[同:2327](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.ts:2327)  
+   現在の対応に不一致は見つかりませんでした。ただし、対応表のイベント名を誤って変更しても、キャストで型検査を通せます。  
+   **修正案:** 型を絞った分岐か型付きイベント生成関数を使う。10種類すべての出力を`OrchestrationEvent`でdecodeするテストも追加してください。
+
+互換性について、新スキーマによる旧スナップショットのdecodeと、旧スキーマによる新任意項目付きスナップショットのdecodeは確認できました。旧イベントスキーマでは新イベントをdecodeできません。現在は未dispatchですが、配信開始前に旧クライアントへの対応が必要です。
+
+contractsとserverの型チェックは成功しました。新規34件と既存projectorテストは、一時ディレクトリ作成のEPERMで収集前に停止しました。lintも一時ファイルを作れず停止しています。上記の不具合は、純粋関数・decider・projectorをメモリ上で直接実行して再現しました。SQL projectionと起動時の読み戻しの未実装は、今回の指摘に含めていません。
+
+**次の層（SQL projectionと読み戻し）には、現状では進めません。** Major6件を修正し、再現経路の回帰テストを追加してから進むのが妥当です。
+
+### 第2巡（Codex 原文）
+
+判定は **Red** です。Blockerなし、Major5件、Minor1件。
+
+前回のMajor1・3・5とMinor1は解消しました。Major2・4・6とMinor2は一部解消です。
+
+1. **Major — 古い待機イベントが、新しい送信試行をabandonedにする**  
+   [providerSwitchState.ts:485](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:485)  
+   `submit(2) → awaiting-user → resolve(resend) → submit(3).planned`の後、最初のawaiting-userイベントを再適用すると、操作がawaiting-userへ戻り、試行3もabandonedになります。その後の試行3の結果は拒否されました。  
+   **直し方:** 待機イベントに対象attemptIdまたはwaitIdを持たせ、処理済みの待機記録が新しい試行に作用しないようにする。[現在のテスト:824](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.providerSwitch.test.ts:824)はイベント列全体を再適用するため、最後のresolveで状態が戻り、この途中の不整合を検出できません。古い待機イベントだけの再適用を追加してください。
+
+2. **Major — 50件の履歴から外れた解決済み操作を再開できる**  
+   [providerSwitchState.ts:369](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:369)、[同:95](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:95)  
+   switch-1をdeliveredにした後、別IDのrequest・abortを50回行うと、switch-1のrequestを再び受け付けます。lastDeliveredにswitch-1が残っていても防げません。  
+   **直し方:** 50件はキャッシュに限定し、履歴から外れたIDも終了済みと照合できる仕組みを設ける。純粋状態での保持、または永続記録による受付前の検証が必要です。履歴が入れ替わる境界をテストしてください。
+
+3. **Major — 本文だけ異なるpacketを、同じ記録として受け付ける**  
+   [providerSwitchState.ts:217](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:217)  
+   本文を同じ長さの別文字列にし、sha256と他の項目を据え置くと通ります。本文とsha256の対応を検証していないためです。異なる本文のイベントを保存でき、projectorには最初の指紋が残ります。  
+   **直し方:** 本文から実際のSHA-256を計算し、payloadの値と照合する。テストの固定値`"sha"`も実際のハッシュへ変更し、「同じ長さの別本文・同じ申告ハッシュ」を拒否する例を追加してください。
+
+4. **Major — 巻き戻し完了後の重複と、旧形式の重複が残る**  
+   [projector.ts:254](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/projector.ts:254)、[同:270](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/projector.ts:270)  
+   次の2経路を再現しました。
+
+   - 要求Aの完了後に要求Aのイベントを再適用すると、Aが再び進行中になり、乗り換えを拒否する。
+   - 巻き戻し2件の進行中に、要求IDのない同一activity IDの失敗記録を2回適用すると、2件とも解除する。
+
+   **直し方:** 完了済み要求の再追加を防ぎ、旧形式の終了記録も一度だけ処理する。[現在のテスト:942](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.providerSwitch.test.ts:942)には「完了後の要求再適用」と「旧失敗記録の重複」を追加してください。
+
+5. **Major — 受け付けたfailed-retryableから、retryで再送に進めない**  
+   [providerSwitchState.ts:326](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:326)、[同:305](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:305)  
+   `submit.failed → await-user(failed-retryable) → retry`はすべて通ります。しかし次のsubmitは、resendAllowedがfalseのため拒否されます。無許可再送の拒否は正しくなりましたが、受け付ける復旧状態と操作が一致していません。  
+   **直し方:** 再送許可を消費した後の送信失敗はunknown-deliveryへ分類し、failed-retryableを拒否する。resolve(resend)の許可が残っている間の開始失敗は、retryで進める区別を維持してください。
+
+6. **Minor — キャストを外しても、typeとpayloadの型の対応が失われている**  
+   [decider.ts:178](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.ts:178)  
+   `Omit<OrchestrationEvent, "sequence">`はunionを分配しません。メモリ上の型検査では、requestのpayloadをresolvedのtypeに組み合わせても、この型では通りました。  
+   **直し方:** unionの各variantへOmitを分配する型を使う。全10種のdecodeテスト追加は有効ですが、コンパイル時にも対応を検査できるようにしてください。
+
+contractsとserverの型チェックは成功しました。新規51件のテスト本体も、メモリ上のassertハーネスで通過しています。これはVitestの実行結果とは別の確認です。正式ランナーの141件、lint、環境依存8件の変更前との比較は、この巡では再実行していません。ファイルは変更していません。
+
+**次の層（SQL projectionと読み戻し）には、現状では進めません。** Major5件の修正と、上記の境界を確認する回帰テストが必要です。
+
+### 第3巡（Codex 原文）
+
+判定：**Red**。Blocker 0件／Major 1件／Minor 0件。コード・ファイルは変更していません。
+
+**Major：再開直後には、古い待機コマンドがまだ通ります。**  
+[providerSwitchState.ts:321](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:321)、[同ファイル:495](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:495)
+
+retry／resolve(resend)ではattemptIdが変わらないため、次の試行を記録するまで古いawait-userを受け付けます。別commandIdで送る以下の経路を再現しました。
+
+```text
+submit(2) → await-user(unknown-delivery, 2) → resolve(resend)
+→ 古いawait-user(unknown-delivery, 2)
+→ awaiting-userに戻り、submit(3)が拒否される
+```
+
+試行がない場合も、`await-user(failed-retryable, 0) → retry → 古いawait-user(0)`で同じ後退が発生。ユーザーは再開を選び直す必要があります。
+
+**直し方：** retry／resolve(resend)ごとに増える番号を状態に保持し、await-userにも処理開始時の番号を持たせて照合してください。deciderは不一致を拒否し、projectorは無視します。[現在のテスト:1073](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.providerSwitch.test.ts:1073)はsubmit(3)の記録後を確認しています。その手前の区間とattemptId=0の経路を追加する必要があります。
+
+前巡への対応は、1が一部解消、2・3・5・6が解消。4の旧形式失敗の重複対策も確認しました。「完了後に古いrequestedを再適用する」経路は確認できず、その指摘は取り下げます。
+
+ただし、**projectEventが必ず一度だけ呼ばれるという前提には例外があります。** [OrchestrationEngine.ts:322](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/OrchestrationEngine.ts:322)でコミット済みモデルへ更新した後に異常終了すると、[失敗時の復旧処理:119](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/OrchestrationEngine.ts:119)が同じ保存済みイベントを現在のモデルへ再適用します。SQLの適用済みsequence管理では防げません。ただし単一workerで処理するため、この経路から「巻き戻し完了後に古いrequestedが戻る」とは判断できません。
+
+検証では、新規56件のテスト本体をメモリ上の検証用ハーネスで実行し、全件成功。contracts／serverの型チェックもエラー0でした。Vitest・lintは読み取り専用環境の制限で再実行できていません。
+
+**次の層（SQL projectionと読み戻し）に進んでよいか：現時点では不可です。** 上記Majorを修正し、再開直後の2経路を確認してから進めてください。
+
+### 第4巡（Codex 原文）
+
+判定：**Green**。コード・ファイルは変更していません。
+
+- **Blocker：なし**
+- **Major：なし**。前巡の1件は解消しています。
+- **Minor：なし**
+
+[providerSwitchState.ts:325](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:325)の照合により、retry／resolve(resend)直後の古い待機も拒否できています。[projector側の反映処理:498](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/providerSwitchState.ts:498)でも無視され、その後のsubmit(3)とresumeCount=1の新しい待機は受け付けられました。
+
+resumeCountはawaiting-userから再開するときだけ増加します。連続二重適用でも追加で増えず、再開回数を含む17イベントの各途中状態が一致することを確認しました。
+
+検証：新規59件のテスト本体をメモリ上のハーネスで実行し、全件成功。contracts／serverの型チェックもエラー0でした。Vitestによる関連149件とlintは、読み取り専用環境では再実行していません。
+
+**次の層（SQL projectionと読み戻し）に進んでよいか：はい。** Phase 0の対象範囲では進行を妨げる指摘はありません。次の層ではresumeCountも永続化・読み戻しの対象に含めてください。

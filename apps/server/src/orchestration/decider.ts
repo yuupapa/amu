@@ -45,6 +45,13 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+import {
+  type ProviderSwitchCommand,
+  checkProviderSwitchCommand,
+  closedMessageDeliveryState,
+  checkRevertAgainstProviderSwitch,
+  threadProviderSwitchState,
+} from "./providerSwitchState.ts";
 import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 
 const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -169,6 +176,53 @@ function withEventBase(
 }
 
 type PlannedOrchestrationEvent = Omit<OrchestrationEvent, "sequence">;
+
+type PlannedEventBase = Omit<PlannedOrchestrationEvent, "type" | "payload">;
+
+/** Omit applied per union member, so each event type keeps its own payload type. */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+type TypedPlannedEvent = DistributiveOmit<OrchestrationEvent, "sequence">;
+
+/** One switch command's event; payload is the command minus its envelope. */
+function providerSwitchEventFor(
+  command: ProviderSwitchCommand,
+  base: PlannedEventBase,
+): TypedPlannedEvent {
+  switch (command.type) {
+    case "thread.provider-switch.request": {
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return { ...base, type: "thread.provider-switch-requested", payload };
+    }
+    case "thread.provider-switch.milestone": {
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return { ...base, type: "thread.provider-switch-milestone-reached", payload };
+    }
+    case "thread.provider-switch.packet": {
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return { ...base, type: "thread.provider-switch-packet-built", payload };
+    }
+    case "thread.provider-switch.attempt": {
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return { ...base, type: "thread.provider-switch-attempt-recorded", payload };
+    }
+    case "thread.provider-switch.await-user": {
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return { ...base, type: "thread.provider-switch-awaiting-user", payload };
+    }
+    case "thread.provider-switch.retry": {
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return { ...base, type: "thread.provider-switch-retry-requested", payload };
+    }
+    case "thread.provider-switch.abort": {
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return { ...base, type: "thread.provider-switch-aborted", payload };
+    }
+    case "thread.provider-switch.resolve": {
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return { ...base, type: "thread.provider-switch-resolved", payload };
+    }
+  }
+}
 
 type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
@@ -1819,11 +1873,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.conversation.revert":
     case "thread.checkpoint.revert": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      // Refused here, before any file is restored (design §4.4, §7.4).
+      const switchRefusal = checkRevertAgainstProviderSwitch(
+        threadProviderSwitchState(thread),
+        command.turnCount,
+      );
+      if (switchRefusal !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: switchRefusal,
+        });
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -2156,6 +2221,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+          ...(command.revertRequestEventId !== undefined
+            ? { revertRequestEventId: command.revertRequestEventId }
+            : {}),
         },
       };
     }
@@ -2212,6 +2280,97 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [unsettledEvent, activityAppendedEvent];
+    }
+
+    case "thread.provider-switch.request":
+    case "thread.provider-switch.milestone":
+    case "thread.provider-switch.packet":
+    case "thread.provider-switch.attempt":
+    case "thread.provider-switch.await-user":
+    case "thread.provider-switch.retry":
+    case "thread.provider-switch.abort":
+    case "thread.provider-switch.resolve": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const state = threadProviderSwitchState(thread);
+      const refusal = checkProviderSwitchCommand(state, command);
+      if (refusal !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: refusal,
+        });
+      }
+      const eventBase = yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      });
+      const switchEvent = providerSwitchEventFor(command, eventBase);
+      // Closing a switch settles its message in the same commit (§4.5).
+      const closedMessageState =
+        state.pending === null ? null : closedMessageDeliveryState(state.pending, command);
+      if (closedMessageState === null || state.pending === null) {
+        return switchEvent;
+      }
+      const deliveryStateEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: eventBase.eventId,
+        type: "thread.message-delivery-state-set",
+        payload: {
+          threadId: command.threadId,
+          messageId: state.pending.triggerMessageId,
+          state: closedMessageState,
+          createdAt: command.createdAt,
+        },
+      };
+      return [switchEvent, deliveryStateEvent];
+    }
+
+    case "thread.turn-assignment.record": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-assignment-recorded",
+        payload,
+      };
+    }
+
+    case "thread.message.delivery-state.set": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const { type: _type, commandId: _commandId, ...payload } = command;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-delivery-state-set",
+        payload,
+      };
     }
 
     default: {
