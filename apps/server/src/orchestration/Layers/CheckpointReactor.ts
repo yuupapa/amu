@@ -1019,7 +1019,14 @@ const make = Effect.gen(function* () {
     CheckpointStoreError | OrchestrationDispatchError | PlatformError.PlatformError,
     never
   > =>
-    input.source === "domain" ? processDomainEvent(input.event) : processRuntimeEvent(input.event);
+    input.source === "domain"
+      ? processDomainEvent(input.event)
+      : // Checked when processed, not when queued: a switch may land in between (§7.5).
+        providerService
+          .isStaleRuntimeEvent(input.event)
+          .pipe(
+            Effect.flatMap((stale) => (stale ? Effect.void : processRuntimeEvent(input.event))),
+          );
 
   const processInputSafely = (input: ReactorInput) =>
     processInput(input).pipe(

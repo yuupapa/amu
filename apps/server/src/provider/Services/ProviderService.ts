@@ -127,6 +127,20 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<ReadonlyArray<ProviderSession>, ProviderServiceError>;
 
   /**
+   * The highest session generation given out for the thread (0 when none),
+   * so a cross-provider switch can reserve the next one (§7.5).
+   */
+  readonly currentSessionGeneration: (threadId: ThreadId) => Effect.Effect<number>;
+
+  /**
+   * True when the event comes from a session a cross-provider switch stopped
+   * (its generation is below the last release). Only threads that went
+   * through a switch are checked; there, an event without a generation is
+   * stale too (§7.5, §17).
+   */
+  readonly isStaleRuntimeEvent: (event: ProviderRuntimeEvent) => Effect.Effect<boolean>;
+
+  /**
    * Stop a provider session.
    */
   readonly stopSession: (

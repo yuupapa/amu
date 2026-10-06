@@ -2374,10 +2374,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.turnId !== undefined
       ) {
         const pending = state.pending;
+        // The session that accepted the turn; a native resume after the start
+        // may have moved past the start's generation (§5.4, P7).
         const generation =
+          command.generation ??
           pending.attempts.findLast(
             (attempt) => attempt.kind === "start" && attempt.status === "succeeded",
-          )?.generation ?? null;
+          )?.generation ??
+          null;
         const followUp = (): Effect.Effect<PlannedEventBase, never, Crypto.Crypto> =>
           withEventBase({
             aggregateKind: "thread",

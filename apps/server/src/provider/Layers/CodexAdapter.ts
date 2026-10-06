@@ -2514,7 +2514,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               });
               return;
             }
-            yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+            // Stamped here, as each event is created, so an event of a
+            // replaced session keeps its old generation in the queue (§7.5).
+            const generation = input.sessionGeneration;
+            yield* Queue.offerAll(
+              runtimeEventQueue,
+              generation === undefined
+                ? runtimeEvents
+                : runtimeEvents.map((runtimeEvent) => ({ ...runtimeEvent, generation })),
+            );
           }),
         ).pipe(Effect.forkIn(sessionScope));
 
@@ -2638,9 +2646,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })
       .pipe(Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)));
+    const generation = session.startInput.sessionGeneration;
     return {
       ...accepted,
       ...(turnModel !== undefined && turnModel.length > 0 ? { model: turnModel } : {}),
+      // The session that accepted the turn, fixed now (§5.4, P7).
+      ...(generation !== undefined ? { generation } : {}),
     };
   });
 

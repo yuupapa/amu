@@ -379,6 +379,49 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }),
   );
 
+  it.effect("stamps runtime events with the session's generation", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-generation");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+        sessionGeneration: 7,
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      const compactedEventFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "thread.state.changed"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* runtime.emit({
+        id: asEventId("evt-generation-item-completed"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId,
+        payload: {
+          completedAtMs: 1_778_000_000_000,
+          threadId: "provider-thread-1",
+          turnId: "provider-generation-turn",
+          item: {
+            id: "provider-generation-item",
+            type: "contextCompaction",
+          },
+        },
+      });
+      const event = Option.getOrThrow(yield* Fiber.join(compactedEventFiber));
+      NodeAssert.equal(event.generation, 7);
+      // The accepted turn names the session that took it.
+      const turn = yield* adapter.sendTurn({ threadId, input: "hello", attachments: [] });
+      NodeAssert.equal(turn.generation, 7);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("uploads feedback for the active Codex thread", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

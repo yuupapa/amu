@@ -245,6 +245,7 @@ function toRuntimePayloadFromSession(
     readonly continueAfterServerUpdate?: TurnId;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
+    readonly sessionGeneration?: number;
   },
 ): Record<string, unknown> {
   return {
@@ -259,6 +260,9 @@ function toRuntimePayloadFromSession(
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
+      : {}),
+    ...(extra?.sessionGeneration !== undefined
+      ? { sessionGeneration: extra.sessionGeneration }
       : {}),
   };
 }
@@ -283,6 +287,25 @@ function readPersistedCwd(
   if (typeof rawCwd !== "string") return undefined;
   const trimmed = rawCwd.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readPersistedSessionGeneration(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): number | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw = "sessionGeneration" in runtimePayload ? runtimePayload.sessionGeneration : undefined;
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : undefined;
+}
+
+function readPersistedCrossProviderHandoff(
+  runtimePayload: ProviderSessionDirectory.ProviderRuntimeBinding["runtimePayload"],
+): boolean {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return false;
+  }
+  return "crossProviderHandoff" in runtimePayload && runtimePayload.crossProviderHandoff === true;
 }
 
 /** Stopped rows with no active turn are settled; shutdown leaves them untouched. */
@@ -355,6 +378,65 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const pendingCompactions = new Map<ThreadId, PendingCompaction>();
   const timedOutNativeCompactions = new Set<ThreadId>();
+  // Session generations per thread (§7.5, §17). `floor` is the highest one
+  // given out (never reused) and `live` the last one that started. A handoff's
+  // release makes every generation up to `floor` stale (`acceptedFrom`): the
+  // sessions it stopped are never current again. A normal restart does not, so
+  // the old session's interrupted turn still settles. `checked` turns on with
+  // the thread's first cross-provider switch; until then nothing is dropped.
+  const sessionGenerations = new Map<
+    ThreadId,
+    { floor: number; live: number | null; checked: boolean; acceptedFrom: number }
+  >();
+  const generationStateFor = (
+    threadId: ThreadId,
+    binding: ProviderSessionDirectory.ProviderRuntimeBinding | undefined,
+  ) => {
+    const existing = sessionGenerations.get(threadId);
+    if (existing !== undefined) return existing;
+    // No session of this thread started in this process, so none from before
+    // can still send events.
+    const persisted = readPersistedSessionGeneration(binding?.runtimePayload) ?? 0;
+    const state = {
+      floor: persisted,
+      live: null,
+      checked: readPersistedCrossProviderHandoff(binding?.runtimePayload),
+      acceptedFrom: persisted + 1,
+    };
+    sessionGenerations.set(threadId, state);
+    return state;
+  };
+  const isStaleRuntimeEvent = (event: ProviderRuntimeEvent): boolean => {
+    const state = sessionGenerations.get(event.threadId);
+    if (state === undefined || !state.checked) return false;
+    return event.generation === undefined || event.generation < state.acceptedFrom;
+  };
+  /**
+   * Gives out `requested` (or the next free one) for a session about to
+   * start; a generation already given out is refused. `started` records it as
+   * the live one once the adapter has started the session.
+   */
+  const reserveSessionGeneration = (input: {
+    readonly threadId: ThreadId;
+    readonly binding: ProviderSessionDirectory.ProviderRuntimeBinding | undefined;
+    readonly requested: number | undefined;
+    readonly operation: string;
+  }) =>
+    Effect.gen(function* () {
+      const state = generationStateFor(input.threadId, input.binding);
+      if (input.requested !== undefined && input.requested <= state.floor) {
+        return yield* toValidationError(
+          input.operation,
+          `Session generation ${input.requested} of thread '${input.threadId}' is already used (highest ${state.floor}).`,
+        );
+      }
+      const generation = input.requested ?? state.floor + 1;
+      state.floor = generation;
+      const started = Effect.sync(() => {
+        state.live = generation;
+      });
+      return { generation, started } as const;
+    });
   const settleCompaction = (threadId: ThreadId, pending: PendingCompaction, terminal: string) =>
     Effect.gen(function* () {
       if (pendingCompactions.get(threadId) !== pending) return false;
@@ -941,6 +1023,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       readonly continueAfterServerUpdate?: TurnId;
       readonly lastRuntimeEvent?: string;
       readonly lastRuntimeEventAt?: string;
+      readonly sessionGeneration?: number;
     },
   ) =>
     Effect.gen(function* () {
@@ -967,6 +1050,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     event: ProviderRuntimeEvent,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
+      // Before any side effect: a replaced session must not touch the thread.
+      if (isStaleRuntimeEvent(event)) {
+        yield* Effect.logDebug("dropped a runtime event from a replaced provider session", {
+          threadId: event.threadId,
+          instanceId: source.instanceId,
+          type: event.type,
+          generation: event.generation ?? null,
+        });
+        return;
+      }
       const canonicalEvent = yield* Effect.sync(() =>
         correlateRuntimeEventWithInstance(source, event),
       );
@@ -1129,6 +1222,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           (session) => session.threadId === input.binding.threadId,
         );
         if (existing) {
+          generationStateFor(input.binding.threadId, input.binding);
           yield* upsertSessionBinding(
             { ...existing, providerInstanceId: bindingInstanceId },
             input.binding.threadId,
@@ -1153,6 +1247,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
       yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      // A native resume is a new session too, so it takes the next generation.
+      const reserved = yield* reserveSessionGeneration({
+        threadId: input.binding.threadId,
+        binding: input.binding,
+        requested: undefined,
+        operation: input.operation,
+      });
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
@@ -1162,8 +1263,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",
+          sessionGeneration: reserved.generation,
         })
         .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
+      yield* reserved.started;
       if (resumed.provider !== adapter.provider) {
         yield* clearMcpSession(input.binding.threadId);
         return yield* toValidationError(
@@ -1175,6 +1278,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* upsertSessionBinding(
         { ...resumed, providerInstanceId: bindingInstanceId },
         input.binding.threadId,
+        { sessionGeneration: reserved.generation },
       );
       yield* analytics.record("provider.session.recovered", {
         provider: resumed.provider,
@@ -1384,14 +1488,22 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
+        const reserved = yield* reserveSessionGeneration({
+          threadId,
+          binding: persistedBinding,
+          requested: input.sessionGeneration,
+          operation: "ProviderService.startSession",
+        }).pipe(Effect.onError(() => clearMcpSession(threadId)));
         const session = yield* adapter
           .startSession({
             ...input,
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
+            sessionGeneration: reserved.generation,
           })
           .pipe(Effect.onError(() => clearMcpSession(threadId)));
+        yield* reserved.started;
 
         if (session.provider !== adapter.provider) {
           yield* clearMcpSession(threadId);
@@ -1414,6 +1526,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           });
           yield* upsertSessionBinding(sessionWithInstance, threadId, {
             modelSelection: input.modelSelection,
+            sessionGeneration: reserved.generation,
           });
         }).pipe(
           Effect.onError(() =>
@@ -1550,6 +1663,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
       metricProvider = routed.adapter.provider;
       metricModel = input.modelSelection?.model;
+      // Read before the send: a restart after it must not relabel this turn.
+      const routedGeneration = sessionGenerations.get(input.threadId)?.live ?? undefined;
       yield* Effect.annotateCurrentSpan({
         "provider.kind": routed.adapter.provider,
         ...(input.modelSelection?.model ? { "provider.model": input.modelSelection.model } : {}),
@@ -1658,6 +1773,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         (input.modelSelection?.instanceId === routed.instanceId
           ? input.modelSelection.model
           : undefined);
+      // The adapter reports its session's generation; others fall back to the
+      // generation that was live when the turn was routed.
+      const acceptedGeneration = turn.generation ?? routedGeneration;
       return {
         ...turn,
         providerInstanceId: routed.instanceId,
@@ -1665,6 +1783,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ...(acceptedModel !== undefined && acceptedModel.trim().length > 0
           ? { model: acceptedModel }
           : {}),
+        ...(acceptedGeneration !== undefined ? { generation: acceptedGeneration } : {}),
       };
     }).pipe(
       withMetrics({
@@ -1969,6 +2088,32 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     "releaseThreadForHandoff",
   )(function* (threadId, options) {
     const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    // From here on the thread is checked, and every session given out so far
+    // is stale: only the new provider's session will be current (§7.5).
+    const generations = generationStateFor(threadId, binding);
+    const before = { checked: generations.checked, acceptedFrom: generations.acceptedFrom };
+    const raisedTo = generations.floor + 1;
+    generations.checked = true;
+    generations.acceptedFrom = raisedTo;
+    yield* releaseBoundSessions(threadId, binding, options, generations.floor).pipe(
+      Effect.onError(() =>
+        Effect.sync(() => {
+          // The old session may still be running; it stays current.
+          if (generations.acceptedFrom === raisedTo) {
+            generations.checked = before.checked;
+            generations.acceptedFrom = before.acceptedFrom;
+          }
+        }),
+      ),
+    );
+  });
+
+  const releaseBoundSessions = Effect.fn("releaseBoundSessions")(function* (
+    threadId: ThreadId,
+    binding: ProviderSessionDirectory.ProviderRuntimeBinding | undefined,
+    options: { readonly alsoStopInstanceId?: ProviderInstanceId } | undefined,
+    sessionGeneration: number,
+  ) {
     // A session whose start was never recorded is not in the binding.
     const extra = options?.alsoStopInstanceId;
     if (extra !== undefined && extra !== binding?.providerInstanceId) {
@@ -2007,7 +2152,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           : {}),
         status: "stopped",
         resumeCursor: null,
-        runtimePayload: { activeTurnId: null },
+        runtimePayload: { activeTurnId: null, crossProviderHandoff: true, sessionGeneration },
       },
       { replaceRuntimePayload: true },
     );
@@ -2164,6 +2309,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       return sessions;
     },
   );
+
+  const currentSessionGeneration: ProviderServiceMethod<"currentSessionGeneration"> = (threadId) =>
+    Effect.gen(function* () {
+      const known = sessionGenerations.get(threadId);
+      if (known !== undefined) return known.floor;
+      // Only a binding that was read seeds the state; a failed read is not "none".
+      const binding = yield* directory.getBinding(threadId).pipe(Effect.option);
+      if (Option.isNone(binding)) return 0;
+      return generationStateFor(threadId, Option.getOrUndefined(binding.value)).floor;
+    });
 
   const listThreadSessions: ProviderServiceMethod<"listThreadSessions"> = Effect.fn(
     "listThreadSessions",
@@ -2425,6 +2580,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getThreadBinding,
     releaseThreadForHandoff,
     listThreadSessions,
+    currentSessionGeneration,
+    isStaleRuntimeEvent: (event) => Effect.sync(() => isStaleRuntimeEvent(event)),
     listSessions,
     getCapabilities,
     getInstanceInfo,

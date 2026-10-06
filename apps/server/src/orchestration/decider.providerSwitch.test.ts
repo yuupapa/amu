@@ -808,9 +808,27 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
             ...attemptResult("submit", 2, "succeeded", turnId),
             model: "model-b",
           }),
-        ).toContain("different turn or model");
+        ).toContain("different turn, model or generation");
         const { types } = yield* run(model, [
           { ...attemptResult("submit", 2, "succeeded", turnId), model: "model-a" },
+        ]);
+        expect(types).toEqual(["thread.provider-switch-attempt-recorded"]);
+      }),
+    );
+
+    it.effect("refuses a repeated submit result with a different accepting generation", () =>
+      Effect.gen(function* () {
+        const model = yield* runModel(yield* submitting, [
+          { ...attemptResult("submit", 2, "succeeded", turnId), acceptedGeneration: 3 },
+        ]);
+        expect(
+          yield* refusal(model, {
+            ...attemptResult("submit", 2, "succeeded", turnId),
+            acceptedGeneration: 4,
+          }),
+        ).toContain("different turn, model or generation");
+        const { types } = yield* run(model, [
+          { ...attemptResult("submit", 2, "succeeded", turnId), acceptedGeneration: 3 },
         ]);
         expect(types).toEqual(["thread.provider-switch-attempt-recorded"]);
       }),

@@ -191,6 +191,7 @@ describe("ProviderCommandReactor", () => {
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
     readonly crossProviderHandoff?: boolean;
+    readonly handoffAllowedDrivers?: ReadonlyArray<string>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -207,6 +208,8 @@ describe("ProviderCommandReactor", () => {
     const runtimeSessions: Array<ProviderSession> = [];
     // The persisted binding: the last session started for each thread.
     const boundSessions = new Map<ThreadId, ProviderSession>();
+    // Mirrors ProviderService: a start takes the requested generation or the next one.
+    const sessionGenerations = new Map<ThreadId, number>();
     const modelSelection = input?.threadModelSelection ?? {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5-codex",
@@ -225,6 +228,17 @@ describe("ProviderCommandReactor", () => {
         typeof input.threadId === "string"
           ? ThreadId.make(input.threadId)
           : ThreadId.make(`thread-${sessionIndex}`);
+      const requestedGeneration =
+        typeof input === "object" &&
+        input !== null &&
+        "sessionGeneration" in input &&
+        typeof input.sessionGeneration === "number"
+          ? input.sessionGeneration
+          : undefined;
+      sessionGenerations.set(
+        threadId,
+        requestedGeneration ?? (sessionGenerations.get(threadId) ?? 0) + 1,
+      );
       const inputModelSelection =
         typeof input === "object" && input !== null && "modelSelection" in input
           ? (input.modelSelection as ModelSelection | undefined)
@@ -289,6 +303,9 @@ describe("ProviderCommandReactor", () => {
           : {}),
         ...(session !== undefined ? { provider: session.provider } : {}),
         ...(session?.model !== undefined ? { model: session.model } : {}),
+        ...(sessionGenerations.has(threadId)
+          ? { generation: sessionGenerations.get(threadId)! }
+          : {}),
       });
     });
     const compactThread = vi.fn((_: ThreadId) => input?.compactThreadEffect?.() ?? Effect.void);
@@ -399,6 +416,9 @@ describe("ProviderCommandReactor", () => {
         releaseThreadForHandoff as ProviderServiceShape["releaseThreadForHandoff"],
       listThreadSessions: (threadId) =>
         Effect.succeed(runtimeSessions.filter((session) => session.threadId === threadId)),
+      currentSessionGeneration: (threadId) =>
+        Effect.sync(() => sessionGenerations.get(threadId) ?? 0),
+      isStaleRuntimeEvent: () => Effect.succeed(false),
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       compactThread,
@@ -536,7 +556,20 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(Layer.mock(TerminalManager)({ closeIdle: closeIdleTerminals })),
       Layer.provideMerge(
         ServerSettingsService.layerTest(
-          input?.crossProviderHandoff === true ? { crossProviderHandoff: { enabled: true } } : {},
+          input?.crossProviderHandoff === true
+            ? {
+                crossProviderHandoff: {
+                  enabled: true,
+                  ...(input.handoffAllowedDrivers !== undefined
+                    ? {
+                        allowedDrivers: input.handoffAllowedDrivers.map((driver) =>
+                          ProviderDriverKind.make(driver),
+                        ),
+                      }
+                    : {}),
+                },
+              }
+            : {},
         ),
       ),
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -647,6 +680,21 @@ describe("ProviderCommandReactor", () => {
       engine,
       snapshotQuery,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      readTurnAssignmentGenerations: () =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const rows = yield* sql<{
+              readonly messageId: string;
+              readonly generation: number | null;
+            }>`
+              SELECT message_id AS "messageId", generation
+              FROM projection_turn_assignments
+              ORDER BY recorded_at ASC, message_id ASC
+            `;
+            return rows.map((row) => [row.messageId, row.generation] as const);
+          }),
+        ),
       readTurnAssignments: () =>
         runtime!.runPromise(
           Effect.gen(function* () {
@@ -4719,7 +4767,8 @@ describe("ProviderCommandReactor", () => {
       expect(pending).toMatchObject({
         awaitingReason: "failed-retryable",
         milestone: "old-stopped",
-        attempts: [expect.objectContaining({ kind: "start", status: "failed", generation: 1 })],
+        // Thread-wide: above the first session's generation 1 (§7.5).
+        attempts: [expect.objectContaining({ kind: "start", status: "failed", generation: 2 })],
       });
       expect(harness.sendTurn).toHaveBeenCalledTimes(1);
 
@@ -4817,6 +4866,64 @@ describe("ProviderCommandReactor", () => {
       ]);
       expect(await deliveryState(harness, "message-first")).toBe("delivered");
       expect(await deliveryState(harness, "message-switch")).toBe("delivered");
+    });
+
+    it("starts the new provider above every earlier generation and records it", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+
+      expect(harness.startSession.mock.calls.at(-1)?.[1]).toMatchObject({ sessionGeneration: 2 });
+      expect((await switchState(harness))?.pending ?? null).toBeNull();
+      // The native send carries its session's generation, the handoff the reserved one.
+      expect(await harness.readTurnAssignmentGenerations()).toEqual([
+        ["message-first", 1],
+        ["message-switch", 2],
+      ]);
+    });
+
+    it("records the generation of the session that accepted the handoff", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      // The new session started as generation 2, then was lost before the
+      // send; ProviderService resumed it natively as generation 3.
+      harness.sendTurn.mockImplementationOnce((sendInput: unknown) =>
+        Effect.succeed({
+          threadId: (sendInput as { threadId: ThreadId }).threadId,
+          turnId: asTurnId("turn-resumed"),
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          provider: ProviderDriverKind.make("claudeAgent"),
+          model: "claude-opus-5-5",
+          generation: 3,
+        }),
+      );
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+
+      expect(harness.startSession.mock.calls.at(-1)?.[1]).toMatchObject({ sessionGeneration: 2 });
+      expect(await harness.readTurnAssignmentGenerations()).toEqual([
+        ["message-first", 1],
+        ["message-switch", 3],
+      ]);
+    });
+
+    it("refuses a switch to a driver that does not stamp generations yet", async () => {
+      const harness = await createHarness({
+        crossProviderHandoff: true,
+        handoffAllowedDrivers: ["claudeAgent", "codex", "cursor"],
+      });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Cursor で続けて", {
+        instanceId: ProviderInstanceId.make("cursor"),
+        model: "auto",
+      });
+
+      await waitFor(async () =>
+        (await failureDetails(harness)).some((detail) => detail.includes("まだ対応していません")),
+      );
+      expect(harness.releaseThreadForHandoff).not.toHaveBeenCalled();
+      expect(await switchState(harness)).toBeUndefined();
     });
 
     it("leaves a native send that failed out of the handoff", async () => {
@@ -5382,6 +5489,8 @@ describe("ProviderCommandReactor", () => {
           status: "succeeded",
           turnId: asTurnId("turn-recover4"),
           model: "claude-opus-5-5",
+          // A native resume before the send moved past the start's generation 1.
+          acceptedGeneration: 3,
         },
       ]) {
         await dispatchSwitchCommand(harness, command);
@@ -5395,6 +5504,9 @@ describe("ProviderCommandReactor", () => {
           instanceId: "claudeAgent",
           model: "claude-opus-5-5",
         },
+      ]);
+      expect(await harness.readTurnAssignmentGenerations()).toEqual([
+        ["message-recover4-trigger", 3],
       ]);
       expect(harness.sendTurn).not.toHaveBeenCalled();
     });

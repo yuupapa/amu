@@ -596,6 +596,8 @@ const make = Effect.gen(function* () {
       // its cursor cleared, so the model-change and cross-driver guards and an
       // unknown old instance do not apply.
       readonly handoff?: boolean;
+      // The generation the switch's start attempt reserved (§7.5).
+      readonly sessionGeneration?: number;
     },
   ) {
     const thread = yield* resolveThreadShell(threadId);
@@ -776,6 +778,9 @@ const make = Effect.gen(function* () {
           modelSelection: desiredModelSelection,
           ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
           runtimeMode: desiredRuntimeMode,
+          ...(options?.sessionGeneration !== undefined
+            ? { sessionGeneration: options.sessionGeneration }
+            : {}),
         })
         .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
 
@@ -1279,6 +1284,7 @@ const make = Effect.gen(function* () {
         modelSelection: input.modelSelection,
         pendingTurnStart: true,
         handoff: true,
+        sessionGeneration: input.sessionGeneration,
       }).pipe(
         Effect.tap(() =>
           Effect.sync(() => threadModelSelections.set(input.threadId, input.modelSelection)),

@@ -62,6 +62,11 @@ export const ProviderSwitchAttemptState = Schema.Struct({
   turnId: Schema.NullOr(TurnId),
   /** A succeeded submit: the model the provider reported. Optional for stored states. */
   model: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  /**
+   * A succeeded submit: the generation of the session that accepted the turn,
+   * which a native resume may have moved past the start's (§5.4, P7).
+   */
+  acceptedGeneration: Schema.optional(Schema.NullOr(NonNegativeInt)),
 });
 export type ProviderSwitchAttemptState = typeof ProviderSwitchAttemptState.Type;
 
@@ -194,6 +199,8 @@ export const ThreadProviderSwitchMilestonePayloadFields = {
   turnId: Schema.optional(TurnId),
   /** delivered: the model the provider reported for the accepted turn (§5.4). */
   model: Schema.optional(TrimmedNonEmptyString),
+  /** delivered: the generation of the session that accepted the turn (§5.4). */
+  generation: Schema.optional(NonNegativeInt),
 } as const;
 
 export const ThreadProviderSwitchPacketPayloadFields = {
@@ -216,6 +223,8 @@ export const ThreadProviderSwitchAttemptPayloadFields = {
   turnId: Schema.optional(TurnId),
   /** submit succeeded: the model the provider reported. */
   model: Schema.optional(TrimmedNonEmptyString),
+  /** submit succeeded: the generation of the session that accepted the turn. */
+  acceptedGeneration: Schema.optional(NonNegativeInt),
   detail: Schema.optional(Schema.String),
 } as const;
 

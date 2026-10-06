@@ -213,6 +213,9 @@ const ProviderRuntimeEventBase = Schema.Struct({
   requestId: Schema.optional(RuntimeRequestId),
   providerRefs: Schema.optional(ProviderRefs),
   raw: Schema.optional(RuntimeEventRaw),
+  /** Session generation stamped by the adapter when it creates the event, so
+      queued events of a replaced session stay recognizable (handoff §7.5). */
+  generation: Schema.optional(NonNegativeInt),
 });
 export type ProviderRuntimeEventBase = typeof ProviderRuntimeEventBase.Type;
 

@@ -45,6 +45,9 @@ import { expandTurnInputText } from "../turnInputText.ts";
 export const PENDING_SWITCH_REJECTION =
   "乗り換えの途中です。完了を待つか、表示中の選択肢から選んでください。";
 const NOT_ALLOWED_DETAIL = "このモデルへの乗り換えはまだ対応していません。";
+// Only these adapters stamp session generations yet (§7.5, §10). After a
+// switch, events without one are dropped, so no other driver can take over.
+const GENERATION_STAMPING_DRIVERS: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
 const REQUIRED_EXCEEDS_DETAIL =
   "今回の発言が長すぎて、引き継ぎに必要な情報を入れられません。発言を短くするか、新しいチャットで始めてください。";
 
@@ -72,6 +75,8 @@ export interface ProviderSwitchFlowDeps {
     readonly threadId: ThreadId;
     readonly createdAt: string;
     readonly modelSelection: ModelSelection;
+    /** Reserved by the start attempt; ProviderService starts the session with it. */
+    readonly sessionGeneration: number;
   }) => Effect.Effect<unknown, ProviderSwitchStepError>;
   readonly appendTurnStartFailure: (input: {
     readonly threadId: ThreadId;
@@ -323,6 +328,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
           );
     if (
       fromDriver === null ||
+      !GENERATION_STAMPING_DRIVERS.has(desired.value.driver) ||
       !isProviderHandoffAllowed({
         fromDriver,
         toDriver: desired.value.driver,
@@ -412,6 +418,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
       readonly providerInstanceId?: ProviderInstanceId | undefined;
       readonly provider?: ProviderDriverKind | undefined;
       readonly model?: string | undefined;
+      readonly generation?: number | undefined;
     };
   }) {
     const enabled = (yield* deps.getSettings).enabled;
@@ -456,7 +463,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
         instanceId: party.instanceId,
         driver: party.driver,
         model: party.model,
-        generation: null,
+        generation: result.generation ?? null,
         createdAt,
       })
       .pipe(Effect.retry({ times: 4, schedule: Schedule.exponential("100 millis") }));
@@ -524,7 +531,6 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
         ),
         Effect.orElseSucceed(() => false),
       ));
-    let generation = latestStart?.generation ?? null;
     if (!live) {
       // A session of the new provider may survive an earlier start whose
       // bookkeeping and undo both failed: stop it by instance first.
@@ -540,15 +546,19 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
         if (!cleared) return;
       }
       const attemptId = lastAttemptId(pending) + 1;
-      generation =
-        pending.attempts.reduce(
-          (max, attempt) =>
-            attempt.kind === "start" && attempt.generation !== null
-              ? Math.max(max, attempt.generation)
-              : max,
-          0,
+      // Above every generation this switch reserved and every one the thread's
+      // sessions used, so only the new session's events are current (§7.5).
+      const startGeneration =
+        Math.max(
+          pending.attempts.reduce(
+            (max, attempt) =>
+              attempt.kind === "start" && attempt.generation !== null
+                ? Math.max(max, attempt.generation)
+                : max,
+            0,
+          ),
+          yield* deps.providerService.currentSessionGeneration(threadId),
         ) + 1;
-      const startGeneration = generation;
       yield* dispatchSwitch(
         (base) => ({
           type: "thread.provider-switch.attempt",
@@ -567,6 +577,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
           threadId,
           createdAt: yield* deps.nowIso,
           modelSelection: trigger.toSelection,
+          sessionGeneration: startGeneration,
         })
         .pipe(
           Effect.as({ ok: true as const }),
@@ -693,6 +704,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
           ok: true as const,
           turnId: result.turnId,
           model: result.model,
+          generation: result.generation,
         })),
         Effect.catchCause((cause) =>
           Effect.succeed({ ok: false as const, detail: describeCause(cause) }),
@@ -716,6 +728,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
           ...(sent.model !== undefined && sent.model.trim().length > 0
             ? { model: sent.model }
             : {}),
+          ...(sent.generation !== undefined ? { acceptedGeneration: sent.generation } : {}),
         }),
         "submit-succeeded",
       );
@@ -731,6 +744,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
           ...(sent.model !== undefined && sent.model.trim().length > 0
             ? { model: sent.model }
             : {}),
+          ...(sent.generation !== undefined ? { generation: sent.generation } : {}),
         }),
         "delivered",
       );
@@ -1046,6 +1060,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
       const turnId = latestSubmit.turnId;
       const attemptId = latestSubmit.attemptId;
       const model = latestSubmit.model ?? undefined;
+      const generation = latestSubmit.acceptedGeneration ?? undefined;
       yield* dispatchSwitch(
         (base) => ({
           type: "thread.provider-switch.milestone",
@@ -1056,6 +1071,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
           attemptId,
           turnId,
           ...(model !== undefined ? { model } : {}),
+          ...(generation !== undefined ? { generation } : {}),
         }),
         "recover-delivered",
       );

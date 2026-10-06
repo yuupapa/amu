@@ -1418,3 +1418,107 @@ Blocker: なし。Major: なし。Minor: なし。
 server/contractsの型チェックとgit diff --checkは通過。実行確認は現行処理を使うインメモリハーネスで行いました。Vitestは再実行していません。コード変更はありません。
 
 次の部分（世代の付与と古いイベントの破棄）に進んでよいか: **進んでよいです。**
+
+## コードレビュー: Phase 1 第3部分（セッション世代の付与と古いイベントの破棄、2026-10-06）
+
+経過: 第1巡 Red（Major4・Minor1）→ 第2巡 Red（Major2）→ 第3巡 Green
+
+### 第1巡（Codex 原文）
+
+判定: **Red**
+
+Blocker: なし。Major: 4件。Minor: 1件。
+
+1. **Major — native resumeの保存失敗で、新セッションのイベントを捨て続ける**
+
+   [ProviderService.ts:1286](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1286)
+
+   新セッション開始後のbinding保存に失敗すると、停止せずにliveだけ旧世代へ戻します。世代2のセッションが生存し、live=1となる状態を再現しました。次の送信はそのセッションを使いながらgeneration=1を返し、実際の世代2のイベントはすべてstaleになります。
+
+   **直し方:** 保存失敗時にも新セッションの停止・生存確認を行い、実際のセッションとliveを一致させてください。停止できない場合にも復旧できる扱いが必要です。保存失敗後の次の送信までテストしてください。
+
+2. **Major — 通常の再開始で、旧ターンの終了処理を失う**
+
+   [ProviderService.ts:1495](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1495)、[ClaudeAdapter.ts:4338](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ClaudeAdapter.ts:4338)
+
+   乗り換え済みスレッドで通常の再開始をすると、liveを新世代へ変えた後にClaudeAdapterが旧セッションを止めます。その停止で生成する`turn.completed(interrupted)`や`item.completed`は旧世代なので捨てられます。現行関数で中断イベントがstaleになることを確認しました。終了イベントに依存する旧ターン・発言・checkpointの後始末が抜けます。
+
+   **直し方:** 旧ターンの終了・取消を確定してからliveを切り替えるか、再開始側で同じ後始末を明示的に行ってください。乗り換え後の実行中ターンで、モデル選択オプションやruntimeModeを変更するテストが必要です。
+
+3. **Major — Claude内部再開始のFIFOの前提が成り立たない**
+
+   [ClaudeAdapter.ts:2138](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ClaudeAdapter.ts:2138)、[ClaudeAdapter.ts:4833](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ClaudeAdapter.ts:4833)
+
+   SDKのcanUseToolはrunPromiseで動き、stopSessionInternalが待つstreamFiberとは別です。旧ExitPlanModeコールバックをイベント生成前で待たせ、停止・新セッション開始後に再開すると、`session.started`の後に旧`turn.proposed.completed`が同じ世代で追加されました。FIFOは、停止しきれていない生成元からの追加を防げません。
+
+   **直し方:** SDKコールバックも追跡して停止・完了待ちを行うか、内部再開始にも別の識別子を付けて旧生成元を拒否してください。遅延コールバックのテストと、§17-3の根拠の修正が必要です。
+
+4. **Major — 送信結果の世代を、受付後のliveから取り直している**
+
+   [ProviderService.ts:1784](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1784)
+
+   adapterの受付後、binding保存やanalyticsを待ってからliveを読みます。その間に再開始すると、旧セッションで受け付けたターンに新しい世代を付けます。世代2で受付後にliveを3へ変えると、結果がgeneration=3になることを再現しました。
+
+   **直し方:** adapterの受付結果に、そのセッションの世代を固定して返し、ProviderServiceでもその値を使ってください。P7の担当記録まで含め、受付後・記録前に再開始するテストが必要です。
+
+5. **Minor — 失敗済みの最大世代を再利用できる**
+
+   [ProviderService.ts:424](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:424)
+
+   世代2を予約してundoするとfloor=2、live=1になります。要求値2は拒否されず、古い世代2のイベントも有効になります。現行flowのmax+1では避けられていますが、サービスの検証では防げません。
+
+   **直し方:** 既に配った世代は`requested <= floor`で拒否してください。失敗・解放後のfloorと同値の要求をテストに追加してください。
+
+server/contractsの型チェックとgit diff --checkは通過。再現は現行関数を使うインメモリハーネスで行い、Vitestは再実行していません。コード変更はありません。
+
+**次の部分（CHANGESの差分、巻き戻し境界、/compact）には、上記Majorを修正してから進んでください。**
+
+### 第2巡（Codex 原文）
+
+判定：**Red**。Blocker 0件、Major 2件、Minor 0件です。
+
+前回のMajor 1・2・4とMinorは解消しました。Major 3は一部解消です。下限方式で旧担当の世代を除外し、通常再開始の終了イベントを残す方針は妥当です。開始失敗後の残存セッションは乗り換え先の世代なので、イベントを受け付けること自体は追加の指摘にしていません。retry前の解放で下限を上げる処理も確認しました。
+
+Blocker：なし。
+
+Major：
+
+1. **置換済みのClaude contextが、後続セッションの停止後に再び有効になる**  
+   [ClaudeAdapter.ts:2141](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ClaudeAdapter.ts:2141)
+
+   `current`が`undefined`なら通すため、旧context AをBへ置換し、Bも通常停止してmapが空になると、Aの遅いコールバックを受け付けます。再現では、新セッションの終了後に旧`request.opened`が入り、世代判定も`stale=false`でした。内部再開始は同じ世代なので、下限方式でも除外できません。§17-3の保証が成立していません。
+
+   **直し方：** mapが空の場合も除外するよう、`sessions.get(threadId) !== context`で判定してください。通常停止の終了イベントはmap削除前に出るため維持できます。「置換→新セッションも停止→旧コールバック」と、通常停止の終了イベントを確認するテストを追加してください。
+
+2. **乗り換え経路が受付結果のgenerationを捨て、担当記録に開始試行の世代を使う**  
+   [providerSwitchFlow.ts:703](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:703)、[decider.ts:2377](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.ts:2377)
+
+   開始試行が世代2で成功したあと、パケット作成中などにセッションが失われると、`sendTurn`のnative resumeが世代3を作れます。ProviderServiceは3を返しますが、flowは`turnId`と`model`しか保存せず、deciderは開始試行の2を担当記録に入れます。この不一致を再現しました。§15 P7の「受付結果と同時に固定する」規則を満たしません。
+
+   **直し方：** submitの成功結果に受付世代を保存し、deliveredの担当記録と起動時復旧でその値を使ってください。開始試行の予約世代とは分け、旧イベントもdecodeできる任意項目にしてください。「開始2→送信直前に消失→native resume 3」と、その成功記録からの復旧をテストに追加してください。
+
+Minor：なし。
+
+server・contractsの型チェックはエラー0でした。再現には実装を使うメモリ上のハーネスを使用しました。Vitestは再実行していません。コードとファイルは変更していません。
+
+**次の部分（CHANGESの差分、巻き戻し境界、/compact）に進んでよいか：現時点では不可です。** 上のMajor 2件を直してから進んでください。
+
+### 第3巡（Codex 原文）
+
+判定：**Green**。
+
+- Blocker：なし
+- Major：なし
+- Minor：なし
+
+前回のMajor 2件は解消しています。
+
+1. [ClaudeAdapter.ts:2141](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ClaudeAdapter.ts:2141)  
+   後続セッションの停止後も旧contextを除外します。通常停止の`turn.completed`と`session.exited`が届くことも確認しました。
+
+2. [providerSwitchFlow.ts:729](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:729)  
+   受付世代3が成功記録・delivered・担当記録まで保持されます。起動時復旧でも世代3を使い、再送しません。旧状態のdecodeと、受付世代が異なる重複結果の拒否も確認しました。
+
+server・contractsの型チェックはエラー0でした。再現確認には実装を使うメモリ上のハーネスを使用し、Vitestは再実行していません。コードとファイルは変更していません。
+
+**次の部分（CHANGESの差分、巻き戻し境界、/compact）に進んでよいと判断します。**

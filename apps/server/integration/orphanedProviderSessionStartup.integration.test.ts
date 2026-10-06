@@ -114,6 +114,8 @@ const startupDependencies = Layer.mergeAll(
   Layer.succeed(ProviderService.ProviderService, {
     getThreadBinding: () => Effect.succeed(Option.none()),
     listThreadSessions: () => Effect.succeed([]),
+    currentSessionGeneration: () => Effect.succeed(0),
+    isStaleRuntimeEvent: () => Effect.succeed(false),
     releaseThreadForHandoff: () => Effect.void,
     startSession: () => Effect.die("unused"),
     sendTurn: () => Effect.die("unused"),

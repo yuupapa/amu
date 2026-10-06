@@ -279,9 +279,11 @@ function checkAttempt(
     return `Attempt ${command.attemptId} reserved generation ${existing.generation}.`;
   }
   if (existing.status === command.status) {
-    return existing.turnId === turnId && (existing.model ?? null) === (command.model ?? null)
+    return existing.turnId === turnId &&
+      (existing.model ?? null) === (command.model ?? null) &&
+      (existing.acceptedGeneration ?? null) === (command.acceptedGeneration ?? null)
       ? null
-      : `Attempt ${command.attemptId} already ${existing.status} with a different turn or model.`;
+      : `Attempt ${command.attemptId} already ${existing.status} with a different turn, model or generation.`;
   }
   if (existing.status !== "planned") {
     return `Attempt ${command.attemptId} already ${existing.status}.`;
@@ -528,6 +530,9 @@ export function applyProviderSwitchEvent(
           status: payload.status,
           turnId: payload.turnId ?? null,
           ...(payload.model !== undefined ? { model: payload.model } : {}),
+          ...(payload.acceptedGeneration !== undefined
+            ? { acceptedGeneration: payload.acceptedGeneration }
+            : {}),
         };
         return { ...pending, attempts };
       });

@@ -2236,6 +2236,51 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("stamps every runtime event with the session's generation", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        sessionGeneration: 7,
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+      // The accepted turn names the session that took it.
+      assert.equal(turn.generation, 7);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-generation",
+        uuid: "result-generation",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.isAbove(runtimeEvents.length, 3);
+      assert.deepEqual(
+        runtimeEvents.filter((event) => event.generation !== 7).map((event) => event.type),
+        [],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("treats user-aborted Claude results as interrupted without a runtime error", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -6197,6 +6242,77 @@ describe("ClaudeAdapterLive", () => {
 
       const permissionResult = yield* Effect.promise(() => permissionPromise);
       assert.equal((permissionResult as PermissionResult).behavior, "allow");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("drops a late permission callback of a session that was replaced", () => {
+    // Each session gets its own fake query, so a restart leaves the new one running.
+    const harness = makeHarness({ getSessionMessages: async () => [] });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const start = adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "approval-required",
+        sessionGeneration: 1,
+      });
+      // The SDK runs callbacks outside Effect; give the old one time to emit.
+      const oldCallbackSettled = () =>
+        new Promise<void>((resolve) => {
+          queueMicrotask(() => setImmediate(resolve));
+        });
+      const callbackOptions = (toolUseID: string) => ({
+        signal: new AbortController().signal,
+        requestId: `request-${toolUseID}`,
+        toolUseID,
+      });
+      const startAndGetCanUseTool = Effect.gen(function* () {
+        yield* start;
+        yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+        const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+        assert.equal(typeof canUseTool, "function");
+        return canUseTool!;
+      });
+
+      const oldCanUseTool = yield* startAndGetCanUseTool;
+      // Restarted inside the adapter with the same generation, as a rollback does.
+      const newCanUseTool = yield* startAndGetCanUseTool;
+      assert.notStrictEqual(newCanUseTool, oldCanUseTool);
+
+      // A normal stop of the newer session still reports itself.
+      const stopEvents = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "session.exited"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.stopSession(THREAD_ID);
+      assert.equal(Array.from(yield* Fiber.join(stopEvents)).at(-1)?.type, "session.exited");
+
+      // The replaced session's SDK asks only now, with no session or a newer
+      // one in place; nothing of it may reach the stream.
+      const firstRequest = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "request.opened"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      void oldCanUseTool("Bash", { command: "pwd" }, callbackOptions("tool-old"));
+      yield* Effect.promise(() => oldCallbackSettled());
+      void newCanUseTool("Bash", { command: "pwd" }, callbackOptions("tool-stopped"));
+      yield* Effect.promise(() => oldCallbackSettled());
+      const latestCanUseTool = yield* startAndGetCanUseTool;
+      void oldCanUseTool("Bash", { command: "pwd" }, callbackOptions("tool-old-again"));
+      yield* Effect.promise(() => oldCallbackSettled());
+      void latestCanUseTool("Bash", { command: "ls" }, callbackOptions("tool-latest"));
+
+      const next = yield* Fiber.join(firstRequest);
+      assert.equal(next._tag, "Some");
+      if (next._tag !== "Some") return;
+      assert.deepEqual(next.value.providerRefs, {
+        providerItemId: ProviderItemId.make("tool-latest"),
+      });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

@@ -2657,14 +2657,20 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // Checked when processed, not when queued: a switch may land in between (§7.5).
+  const unlessStale = <E, R>(event: ProviderRuntimeEvent, effect: Effect.Effect<void, E, R>) =>
+    providerService
+      .isStaleRuntimeEvent(event)
+      .pipe(Effect.flatMap((stale) => (stale ? Effect.void : effect)));
+
   const processInput = (input: RuntimeIngestionInput) => {
     switch (input.source) {
       case "runtime":
-        return processRuntimeEvent(input.event);
+        return unlessStale(input.event, processRuntimeEvent(input.event));
       case "domain":
         return processDomainEvent(input.event);
       case "diff":
-        return recordProviderDiff(input.event);
+        return unlessStale(input.event, recordProviderDiff(input.event));
     }
   };
 

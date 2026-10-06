@@ -125,6 +125,10 @@ function createProviderServiceHarness() {
   const service: ProviderServiceShape = {
     getThreadBinding: () => Effect.succeed(Option.none()),
     listThreadSessions: () => Effect.succeed([]),
+    currentSessionGeneration: () => Effect.succeed(0),
+    // Stands in for ProviderService's generation check (§7.5).
+    isStaleRuntimeEvent: (event) =>
+      Effect.succeed(String(event.eventId).startsWith("evt-replaced-session-")),
     releaseThreadForHandoff: () => Effect.void,
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
@@ -843,6 +847,32 @@ describe("ProviderRuntimeIngestion", () => {
         entry.session?.lastError === null,
     );
     expect(thread.session?.status).toBe("ready");
+    expect(thread.session?.lastError).toBeNull();
+  });
+
+  it("ignores an event that became stale while it was queued", async () => {
+    const harness = await createHarness();
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-replaced-session-error"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: { state: "error", reason: "old session crashed" },
+    });
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-current-session-waiting"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: { state: "waiting", reason: "awaiting approval" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "running",
+    );
     expect(thread.session?.lastError).toBeNull();
   });
 

@@ -2473,7 +2473,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       if (Option.isSome(persisted)) {
         assert.strictEqual(persisted.value.status, "stopped");
         assert.strictEqual(persisted.value.resumeCursor, null);
-        assert.deepEqual(persisted.value.runtimePayload, { activeTurnId: null });
+        // The thread is checked for stale events from now on, even after a restart.
+        assert.deepEqual(persisted.value.runtimePayload, {
+          activeTurnId: null,
+          crossProviderHandoff: true,
+          sessionGeneration: 1,
+        });
       }
       const after = yield* provider.getThreadBinding(threadId);
       assert.strictEqual(Option.isSome(after) && after.value.hasResumeCursor, false);
@@ -2509,6 +2514,264 @@ routing.layer("ProviderServiceLive routing", (it) => {
         );
       assert.instanceOf(error, ProviderValidationError);
       assert.include(error.issue, "did not stop");
+    }),
+  );
+
+  it.effect("gives each new session the next generation and reports it with the turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-generation-next");
+      const start = (sessionGeneration?: number) =>
+        provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: fixtureCwd("project"),
+          runtimeMode: "full-access",
+          ...(sessionGeneration !== undefined ? { sessionGeneration } : {}),
+        });
+      routing.codex.startSession.mockClear();
+      yield* start();
+      assert.equal(routing.codex.startSession.mock.calls[0]?.[0].sessionGeneration, 1);
+      const turn = yield* provider.sendTurn({ threadId, input: "hello" });
+      assert.equal(turn.generation, 1);
+      yield* start();
+      assert.equal(routing.codex.startSession.mock.calls[1]?.[0].sessionGeneration, 2);
+      assert.equal(yield* provider.currentSessionGeneration(threadId), 2);
+      // A generation already given out is never used again.
+      for (const used of [1, 2]) {
+        const error = yield* start(used).pipe(Effect.flip);
+        assert.instanceOf(error, ProviderValidationError);
+      }
+      assert.equal(routing.codex.startSession.mock.calls.length, 2);
+      yield* start(5);
+      assert.equal(yield* provider.currentSessionGeneration(threadId), 5);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("gives a native resume the next generation", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-generation-resume");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      // The adapter lost the session; the next send resumes it natively.
+      yield* routing.codex.adapter.stopSession(threadId);
+      routing.codex.startSession.mockClear();
+      const turn = yield* provider.sendTurn({ threadId, input: "hello" });
+      assert.equal(routing.codex.startSession.mock.calls[0]?.[0].sessionGeneration, 2);
+      assert.equal(turn.generation, 2);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  const generationEvent = (threadId: ThreadId, generation?: number): ProviderRuntimeEvent =>
+    ({
+      type: "turn.completed",
+      eventId: asEventId(`evt-${String(threadId)}-${generation ?? "none"}`),
+      provider: CODEX_DRIVER,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId,
+      turnId: asTurnId("turn-generation"),
+      payload: { state: "completed" },
+      ...(generation !== undefined ? { generation } : {}),
+    }) as ProviderRuntimeEvent;
+
+  it.effect("after a handoff, drops the replaced sessions' events before any side effect", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-generation-handoff");
+      const isStale = (generation?: number) =>
+        provider.isStaleRuntimeEvent(generationEvent(threadId, generation));
+      yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      // A thread that never switched keeps today's behaviour.
+      assert.equal(yield* isStale(), false);
+      assert.equal(yield* isStale(9), false);
+
+      yield* provider.releaseThreadForHandoff(threadId);
+      // Between the release and the new start, no session is current.
+      assert.equal(yield* isStale(1), true);
+
+      const next = (yield* provider.currentSessionGeneration(threadId)) + 1;
+      assert.equal(next, 2);
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+        sessionGeneration: next,
+      });
+      assert.equal(yield* isStale(2), false);
+      assert.equal(yield* isStale(1), true);
+      assert.equal(yield* isStale(), true);
+
+      // The old session's late event is never published; the new one's is.
+      const firstPublished = yield* provider.streamEvents.pipe(
+        Stream.filter((published) => published.threadId === threadId),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Effect.yieldNow;
+      routing.claude.emit({
+        ...generationEvent(threadId, 1),
+        provider: CLAUDE_AGENT_DRIVER,
+        eventId: asEventId("evt-old-claude"),
+      } as never);
+      for (let step = 0; step < 5; step += 1) yield* Effect.yieldNow;
+      routing.codex.emit({
+        ...generationEvent(threadId, 2),
+        eventId: asEventId("evt-new-codex"),
+      } as never);
+      const published = Option.getOrThrow(yield* Fiber.join(firstPublished));
+      assert.equal(published.eventId, "evt-new-codex");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("never reuses a generation whose start failed", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-generation-failed-start");
+      const isStale = (generation?: number) =>
+        provider.isStaleRuntimeEvent(generationEvent(threadId, generation));
+      const startClaude = (sessionGeneration?: number) =>
+        provider.startSession(threadId, {
+          provider: CLAUDE_AGENT_DRIVER,
+          providerInstanceId: claudeAgentInstanceId,
+          threadId,
+          cwd: fixtureCwd("project"),
+          runtimeMode: "full-access",
+          ...(sessionGeneration !== undefined ? { sessionGeneration } : {}),
+        });
+      yield* startClaude();
+      yield* provider.releaseThreadForHandoff(threadId);
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+        sessionGeneration: 2,
+      });
+      // The fake's start never fails by type; a real adapter's can.
+      routing.claude.startSession.mockImplementationOnce((() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: CLAUDE_AGENT_DRIVER,
+            method: "session/start",
+            detail: "start failed",
+          }),
+        )) as never);
+      yield* startClaude(3).pipe(Effect.flip);
+      assert.equal(yield* provider.currentSessionGeneration(threadId), 3);
+      const reused = yield* startClaude(3).pipe(Effect.flip);
+      assert.instanceOf(reused, ProviderValidationError);
+      // The running Codex session stays current.
+      assert.equal(yield* isStale(2), false);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("keeps the old session's turn end after a normal restart", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-generation-normal-restart");
+      const isStale = (generation?: number) =>
+        provider.isStaleRuntimeEvent(generationEvent(threadId, generation));
+      const startCodex = () =>
+        provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: fixtureCwd("project"),
+          runtimeMode: "full-access",
+        });
+      yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      yield* provider.releaseThreadForHandoff(threadId);
+      yield* startCodex();
+      // A model or runtime-mode change restarts Codex (generation 3); the
+      // interrupted turn of generation 2 still settles. Claude's stays stale.
+      yield* startCodex();
+      assert.equal(yield* provider.currentSessionGeneration(threadId), 3);
+      assert.equal(yield* isStale(2), false);
+      assert.equal(yield* isStale(3), false);
+      assert.equal(yield* isStale(1), true);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("reports the generation of the session that accepted the turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-generation-accepted");
+      const startCodex = () =>
+        provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: fixtureCwd("project"),
+          runtimeMode: "full-access",
+        });
+      yield* startCodex();
+      yield* startCodex();
+      // The adapter names the session that took the turn (here the older
+      // one, as when a restart lands after the acceptance); that value wins.
+      routing.codex.sendTurn.mockImplementationOnce((input) =>
+        Effect.succeed({
+          threadId: input.threadId,
+          turnId: asTurnId("turn-accepted-by-older"),
+          generation: 1,
+        }),
+      );
+      const turn = yield* provider.sendTurn({ threadId, input: "hello" });
+      assert.equal(turn.generation, 1);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("keeps the old session current when the release fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-generation-release-stuck");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      const original = routing.codex.hasSession.getMockImplementation();
+      routing.codex.hasSession.mockImplementation(() => Effect.succeed(true));
+      yield* provider
+        .releaseThreadForHandoff(threadId)
+        .pipe(
+          Effect.flip,
+          Effect.ensuring(
+            Effect.sync(() => routing.codex.hasSession.mockImplementation(original!)),
+          ),
+        );
+      // Not switched after all: nothing is dropped.
+      assert.equal(yield* provider.isStaleRuntimeEvent(generationEvent(threadId)), false);
+      assert.equal(yield* provider.isStaleRuntimeEvent(generationEvent(threadId, 1)), false);
     }),
   );
 
@@ -5681,6 +5944,89 @@ startWriteFails.layer("ProviderServiceLive failed start bookkeeping", (it) => {
         .pipe(Effect.forkChild);
       yield* advanceUntilDone(releasing);
       assert.strictEqual(yield* startWriteFails.codex.adapter.hasSession(threadId), false);
+    }),
+  );
+});
+
+const flakyBindingRows = new Map<ThreadId, ProviderSessionDirectory.ProviderRuntimeBinding>();
+let failBindingWrites = false;
+const flakyBindingWrites = makeProviderServiceLayer({
+  directory: {
+    upsert: (binding, options) =>
+      failBindingWrites
+        ? Effect.fail(
+            new ProviderValidationError({ operation: "test", issue: "binding write failed" }),
+          )
+        : Effect.sync(() => {
+            const existing = flakyBindingRows.get(binding.threadId);
+            const runtimePayload =
+              options?.replaceRuntimePayload === true
+                ? binding.runtimePayload
+                : {
+                    ...(existing?.runtimePayload as object | undefined),
+                    ...(binding.runtimePayload as object | undefined),
+                  };
+            flakyBindingRows.set(binding.threadId, { ...existing, ...binding, runtimePayload });
+          }),
+    recordImportedTranscript: () => Effect.die("unused"),
+    getProvider: () => Effect.die("unused"),
+    getBinding: (threadId) =>
+      Effect.sync(() => Option.fromNullishOr(flakyBindingRows.get(threadId))),
+    listThreadIds: () => Effect.succeed([] as never),
+    listBindings: () => Effect.succeed([] as never),
+  },
+});
+
+flakyBindingWrites.layer("ProviderServiceLive failed resume bookkeeping", (it) => {
+  it.effect("keeps a resumed session current when its binding could not be saved", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-resume-write-fails");
+      const isStale = (generation: number) =>
+        provider.isStaleRuntimeEvent({
+          type: "turn.completed",
+          eventId: asEventId(`evt-resume-write-fails-${generation}`),
+          provider: CODEX_DRIVER,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          threadId,
+          turnId: asTurnId("turn-resume-write-fails"),
+          payload: { state: "completed" },
+          generation,
+        } as ProviderRuntimeEvent);
+      yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      yield* provider.releaseThreadForHandoff(threadId);
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+        sessionGeneration: 2,
+      });
+      // Codex lost the session; the native resume (generation 3) starts, but
+      // saving its binding fails.
+      yield* flakyBindingWrites.codex.adapter.stopSession(threadId);
+      failBindingWrites = true;
+      yield* provider
+        .sendTurn({ threadId, input: "first" })
+        .pipe(Effect.flip, Effect.ensuring(Effect.sync(() => (failBindingWrites = false))));
+      assert.equal(
+        flakyBindingWrites.codex.startSession.mock.calls.at(-1)?.[0].sessionGeneration,
+        3,
+      );
+
+      // The resumed session keeps running and takes the next send; its events count.
+      const turn = yield* provider.sendTurn({ threadId, input: "second" });
+      assert.equal(turn.generation, 3);
+      assert.equal(yield* isStale(3), false);
+      assert.equal(yield* isStale(1), true);
+      yield* provider.stopSession({ threadId });
     }),
   );
 });

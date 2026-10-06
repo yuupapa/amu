@@ -120,6 +120,10 @@ function createProviderServiceHarness(
   const service: ProviderServiceShape = {
     getThreadBinding: () => Effect.succeed(Option.none()),
     listThreadSessions: () => Effect.succeed([]),
+    currentSessionGeneration: () => Effect.succeed(0),
+    // Stands in for ProviderService's generation check (§7.5).
+    isStaleRuntimeEvent: (event) =>
+      Effect.succeed(String(event.eventId).startsWith("evt-replaced-session-")),
     releaseThreadForHandoff: () => Effect.void,
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
@@ -1118,6 +1122,32 @@ describe("CheckpointReactor", () => {
 
     await harness.drain();
 
+    expect(gitStatusRefreshCalls).toEqual([harness.cwd]);
+  });
+
+  it("ignores a turn end from a replaced provider session", async () => {
+    const gitStatusRefreshCalls: string[] = [];
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      gitStatusRefreshCalls,
+    });
+    const turnCompleted = (eventId: string) =>
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.make(eventId),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-replaced-session"),
+        payload: { state: "completed" },
+      });
+
+    turnCompleted("evt-replaced-session-turn-completed");
+    await harness.drain();
+    expect(gitStatusRefreshCalls).toEqual([]);
+
+    turnCompleted("evt-current-session-turn-completed");
+    await harness.drain();
     expect(gitStatusRefreshCalls).toEqual([harness.cwd]);
   });
 

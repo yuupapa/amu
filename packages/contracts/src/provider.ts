@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ApprovalRequestId,
   EventId,
@@ -63,6 +63,12 @@ export const ProviderSessionStartInput = Schema.Struct({
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,
+  /**
+   * Session generation (handoff §7.5). ProviderService assigns it and the
+   * adapter stamps it on every runtime event the session creates. A caller may
+   * pass a generation it already reserved; it must be above every earlier one.
+   */
+  sessionGeneration: Schema.optional(NonNegativeInt),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
@@ -100,6 +106,8 @@ export const ProviderTurnStartResult = Schema.Struct({
   providerInstanceId: Schema.optional(ProviderInstanceId),
   provider: Schema.optional(ProviderDriverKind),
   model: Schema.optional(TrimmedNonEmptyString),
+  /** Generation of the session that accepted the turn (§5.4). */
+  generation: Schema.optional(NonNegativeInt),
 });
 export type ProviderTurnStartResult = typeof ProviderTurnStartResult.Type;
 
