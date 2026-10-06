@@ -362,6 +362,10 @@
     "./lunaAuto": {
       "types": "./src/lunaAuto.ts",
       "import": "./src/lunaAuto.ts"
+    },
+    "./providerContinuation": {
+      "types": "./src/providerContinuation.ts",
+      "import": "./src/providerContinuation.ts"
     }
   },
   "scripts": {
