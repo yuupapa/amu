@@ -14,6 +14,7 @@ import {
   OrchestrationThreadSearchSource,
   type OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationThreadProviderSwitchState,
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
   ProjectIconOverride,
@@ -1060,6 +1061,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           AND threads.archived_at IS NOT NULL
           AND threads.latest_turn_id IS NOT NULL
         ORDER BY turns.thread_id ASC
+      `,
+  });
+
+  const listProviderSwitchStateRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: Schema.Struct({
+      threadId: ThreadId,
+      state: Schema.fromJsonString(OrchestrationThreadProviderSwitchState),
+    }),
+    execute: () =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          state_json AS "state"
+        FROM projection_thread_provider_switch_state
       `,
   });
 
@@ -2484,6 +2500,14 @@ pending_approval_requests AS (
               ),
             ),
           ),
+          listProviderSwitchStateRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listProviderSwitchStates:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listProviderSwitchStates:decodeRows",
+              ),
+            ),
+          ),
         ]),
       )
       .pipe(
@@ -2496,6 +2520,7 @@ pending_approval_requests AS (
             sessionRows,
             latestTurnRows,
             stateRows,
+            providerSwitchRows,
           ]) =>
             Effect.gen(function* () {
               const linkedThreadIds = new Set(pullRequestRows.map((row) => row.threadId));
@@ -2586,6 +2611,12 @@ pending_approval_requests AS (
               const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
               const pullRequestsByThread = groupPullRequestRowsByThread(pullRequestRows);
               const sessionByThread = new Map<string, OrchestrationSession>();
+              // In-flight reverts do not survive a restart (design §4.4).
+              const providerSwitchByThread = new Map(
+                providerSwitchRows.map(
+                  (row) => [row.threadId, { ...row.state, revertsInFlight: [] }] as const,
+                ),
+              );
 
               for (let index = 0; index < sessionRows.length; index += 1) {
                 const row = sessionRows[index];
@@ -2646,6 +2677,9 @@ pending_approval_requests AS (
                   activities: [],
                   checkpoints: [],
                   session: sessionByThread.get(row.threadId) ?? null,
+                  ...(providerSwitchByThread.has(row.threadId)
+                    ? { providerSwitch: providerSwitchByThread.get(row.threadId)! }
+                    : {}),
                 });
               }
 

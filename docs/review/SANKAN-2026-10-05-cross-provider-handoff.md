@@ -919,3 +919,66 @@ resumeCountはawaiting-userから再開するときだけ増加します。連�
 検証：新規59件のテスト本体をメモリ上のハーネスで実行し、全件成功。contracts／serverの型チェックもエラー0でした。Vitestによる関連149件とlintは、読み取り専用環境では再実行していません。
 
 **次の層（SQL projectionと読み戻し）に進んでよいか：はい。** Phase 0の対象範囲では進行を妨げる指摘はありません。次の層ではresumeCountも永続化・読み戻しの対象に含めてください。
+
+---
+
+## コードレビュー: SQL projection と起動時の読み戻し（2026-10-06）
+
+対象: persistence/Migrations/055、Services|Layers/ProjectionThreadProviderSwitches.ts、ProjectionThreadMessages（delivery_state）、Layers/ProjectionPipeline.ts、Layers/ProjectionSnapshotQuery.ts、テスト
+
+経過: 第1巡 Red（Major2・Minor2）→ 第2巡 Green
+
+### 第1巡（Codex 原文）
+
+判定：**Red**。Blocker 0件／Major 2件／Minor 2件。コード・ファイルは変更していません。
+
+**Major 1：巻き戻しで、残したメッセージの送信状態が消えます。**  
+[ProjectionPipeline.ts:1236](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProjectionPipeline.ts:1236)
+
+`thread.reverted`は全メッセージを削除し、残す行を再挿入します。既存のメッセージリポジトリがdelivery_stateをSELECT・INSERTしないため、残した行もNULLへ戻ります。cancelledのユーザーメッセージを残す巻き戻しで、**cancelled → NULL（delivered）**を再現しました。
+
+直し方：不要な行だけ削除するか、内部リポジトリの型・SELECT・再挿入にdelivery_stateを含めてください。公開読み出しを次の層へ送る場合でも、この保持処理は今回必要です。送信状態を付けた行が、巻き戻しとbootstrap後も保持されるテストを追加してください。
+
+**Major 2：packetIdの衝突を無視すると、状態と本文が食い違います。**  
+[ProjectionThreadProviderSwitches.ts:78](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/persistence/Layers/ProjectionThreadProviderSwitches.ts:78)、[ProjectionPipeline.ts:1980](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProjectionPipeline.ts:1980)
+
+別の操作が同じpacketIdを使うと、`INSERT OR IGNORE`は以前の行を残したまま成功し、その後のfoldは新しいハッシュを状態へ保存します。2スレッドで同じIDに本文`packet-a`／`packet-b`を指定すると、両方のdispatchが成功。後の状態は`packet-b`のハッシュですが、保存された本文は`packet-a`でした。
+
+直し方：衝突時に所有threadId・switchId、本文・ハッシュ・統計を照合し、同一内容だけ無視してください。不一致ならエラーにして、イベントと状態のコミットも取り消します。同一内容の再記録と、別内容・別操作の衝突をテストしてください。現在の「never rewrites」テストはSELECTだけで、再挿入を確認していません。
+
+**Minor 1：migrationの時刻が、最終イベントの時刻ではありません。**  
+[055_ProjectionThreadProviderSwitches.ts:57](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/persistence/Migrations/055_ProjectionThreadProviderSwitches.ts:57)
+
+`MAX(occurred_at)`は最大sequenceとは別の行を選べます。最終sequence=3の時刻が9月1日でも、カーソルには先行イベントの10月2日が入りました。この値もスナップショットのupdatedAt算出に含まれます。また、実行計画は`SCAN orchestration_events`でした。
+
+直し方：`ORDER BY sequence DESC LIMIT 1`でsequenceとoccurred_atを同じ最終行から取得し、空DBでは0とepochを補ってください。時刻が逆順になる既存DBと空DBのテストを追加します。
+
+**Minor 2：乗り換え後のthread.updatedAtが、読み戻しで古い値へ戻ります。**  
+[ProjectionPipeline.ts:1995](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProjectionPipeline.ts:1995)
+
+純粋projectorは乗り換えイベントでthread.updatedAtも更新しますが、SQLでは乗り換え状態行だけを更新しています。10時のスレッドに11時のrequestを送ると、純粋projectorでは11時、getCommandReadModelでは10時でした。
+
+直し方：threads projectorでも対象イベントのupdatedAtを反映してください。既存テストは全コマンドで同じcreatedAtを使うため、時刻を分けて比較する必要があります。
+
+resumeCount・resendAllowed・lastDeliveredの読み戻し、thread.createdの削除処理、カーソルを戻した後のbootstrapでは乗り換え状態が一致しました。新規7件のテスト本体は、ディレクトリ作成・ファイル操作をスタブにしたメモリ上のSQLiteハーネスで全件成功。serverの型チェックもエラー0でした。Vitestそのものは未実行です。
+
+**次の層に進んでよいか：現時点では不可です。** Major 2件を修正し、保存内容と再構築結果を再確認してから進めてください。
+
+### 第2巡（Codex 原文）
+
+判定：**Green**。コード・ファイルは変更していません。
+
+- **Blocker：なし**
+- **Major：なし**
+- **Minor：なし**
+
+前巡のMajor 2件・Minor 2件はいずれも解消しています。
+
+- 巻き戻し・bootstrap後もdelivery_stateを保持。状態なしのupsertでも消えません。
+- packetId衝突時はdispatchが失敗し、イベント数・保存済み本文・状態・読み戻しは変化しません。
+- migrationは最終sequenceと時刻を同じ行から取得。時刻が逆順のDB・空DBでも正しく初期化されます。
+- 乗り換えイベント後のthread.updatedAtも、純粋projectorと一致しました。
+
+新規11件と既存メッセージリポジトリ6件のテスト本体を、ファイル操作をスタブにしたメモリ上のSQLiteハーネスで実行し、全17件成功。実際の巻き戻しとカーソルを戻した後のbootstrapも別途確認しました。serverの型チェックはエラー0です。Vitestの783件とlintは再実行していません。
+
+**次の層に進んでよいか：はい。** 今回のSQL projectionと起動時の読み戻しの範囲では、進行を妨げる指摘はありません。

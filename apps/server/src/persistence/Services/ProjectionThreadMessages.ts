@@ -8,6 +8,7 @@
  */
 import {
   ChatAttachment,
+  MessageDeliveryState,
   MessageId,
   OrchestrationMessageContext,
   OrchestrationMessageRole,
@@ -32,6 +33,8 @@ export const ProjectionThreadMessage = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   context: Schema.optional(OrchestrationMessageContext),
   isStreaming: Schema.Boolean,
+  // Absent means delivered. upsert never clears a stored state (see the layer).
+  deliveryState: Schema.optional(MessageDeliveryState),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

@@ -1,5 +1,6 @@
 import {
   ApprovalRequestId,
+  EMPTY_THREAD_PROVIDER_SWITCH_STATE,
   isImportedAgentSessionMessageId,
   UserInputAttachmentAnswerPayload,
   type ChatAttachment,
@@ -43,6 +44,9 @@ import {
   ProjectionTurnRepository,
 } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionThreadProviderSwitchRepository } from "../../persistence/Services/ProjectionThreadProviderSwitches.ts";
+import { ProjectionThreadProviderSwitchRepositoryLive } from "../../persistence/Layers/ProjectionThreadProviderSwitches.ts";
+import { applyProviderSwitchEvent } from "../providerSwitchState.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
@@ -74,6 +78,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  threadProviderSwitches: "projection.thread-provider-switches",
 } as const;
 
 type ProjectorName =
@@ -141,6 +146,10 @@ function isStalePendingApprovalFailureDetail(detail: string | null): boolean {
 
 // A refresh reads each persisted summary source, so skip activities that cannot change the result.
 function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
+  // A switch changes no shell summary field; only the thread's updatedAt moves.
+  if (event.type.startsWith("thread.provider-switch-")) {
+    return false;
+  }
   if (event.type !== "thread.activity-appended") {
     return true;
   }
@@ -491,6 +500,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
+    const projectionThreadProviderSwitchRepository =
+      yield* ProjectionThreadProviderSwitchRepository;
 
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -1037,7 +1048,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
-        case "thread.user-input-response-requested": {
+        case "thread.user-input-response-requested":
+        // Switch events touch the thread like the in-memory projector does.
+        case "thread.provider-switch-requested":
+        case "thread.provider-switch-milestone-reached":
+        case "thread.provider-switch-packet-built":
+        case "thread.provider-switch-attempt-recorded":
+        case "thread.provider-switch-awaiting-user":
+        case "thread.provider-switch-retry-requested":
+        case "thread.provider-switch-aborted":
+        case "thread.provider-switch-resolved": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -1196,6 +1216,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
         }
+
+        // Owned here, not by the switch projector, so the message row it
+        // updates is always projected first even when cursors differ.
+        case "thread.message-delivery-state-set":
+          yield* projectionThreadProviderSwitchRepository.setMessageDeliveryState({
+            messageId: event.payload.messageId,
+            deliveryState: event.payload.state,
+          });
+          return;
 
         case "thread.reverted": {
           const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
@@ -1950,6 +1979,68 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    const applyThreadProviderSwitchesProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyThreadProviderSwitchesProjection",
+    )(function* (event) {
+      switch (event.type) {
+        case "thread.created":
+          yield* projectionThreadProviderSwitchRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
+
+        case "thread.provider-switch-packet-built":
+          yield* projectionThreadProviderSwitchRepository.insertPacket({
+            packetId: event.payload.packetId,
+            threadId: event.payload.threadId,
+            switchId: event.payload.switchId,
+            text: event.payload.text,
+            sha256: event.payload.sha256,
+            chars: event.payload.chars,
+            includedMessages: event.payload.includedMessages,
+            omittedMessages: event.payload.omittedMessages,
+            truncated: event.payload.truncated,
+            createdAt: event.payload.createdAt,
+          });
+          yield* foldProviderSwitchEvent(event);
+          return;
+
+        case "thread.provider-switch-requested":
+        case "thread.provider-switch-milestone-reached":
+        case "thread.provider-switch-attempt-recorded":
+        case "thread.provider-switch-awaiting-user":
+        case "thread.provider-switch-retry-requested":
+        case "thread.provider-switch-aborted":
+        case "thread.provider-switch-resolved":
+          yield* foldProviderSwitchEvent(event);
+          return;
+
+        default:
+          return;
+      }
+    });
+
+    // Same fold as the in-memory projector. revertsInFlight is never
+    // persisted: a restart drops in-flight reverts.
+    const foldProviderSwitchEvent = Effect.fn("foldProviderSwitchEvent")(function* (
+      event: Parameters<typeof applyProviderSwitchEvent>[1],
+    ) {
+      const existing = yield* projectionThreadProviderSwitchRepository.getStateByThreadId({
+        threadId: event.payload.threadId,
+      });
+      const current = Option.match(existing, {
+        onNone: () => EMPTY_THREAD_PROVIDER_SWITCH_STATE,
+        onSome: (row) => row.state,
+      });
+      const next = applyProviderSwitchEvent(current, event);
+      if (next === current) return;
+      yield* projectionThreadProviderSwitchRepository.upsertState({
+        threadId: event.payload.threadId,
+        state: { ...next, revertsInFlight: [] },
+        updatedAt: event.occurredAt,
+      });
+    });
+
     const projectors: ReadonlyArray<ProjectorDefinition> = [
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
@@ -1986,6 +2077,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threads,
         apply: applyThreadsProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadProviderSwitches,
+        apply: applyThreadProviderSwitchesProjection,
       },
     ];
 
@@ -2218,5 +2313,6 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
+  Layer.provideMerge(ProjectionThreadProviderSwitchRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
 );
