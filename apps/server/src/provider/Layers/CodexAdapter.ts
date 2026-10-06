@@ -2616,7 +2616,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       !options?.resolveRuntime && input.modelSelection?.instanceId === boundInstanceId
         ? getCodexServiceTierOptionValue(input.modelSelection)
         : undefined;
-    return yield* session.runtime
+    // The model this turn runs, read before sending so a later change cannot
+    // be attributed to it (handoff §5.4).
+    const turnModel =
+      input.modelSelection?.instanceId === boundInstanceId
+        ? input.modelSelection.model
+        : (yield* session.runtime.getSession).model;
+    const accepted = yield* session.runtime
       .sendTurn({
         ...(input.input !== undefined ? { input: input.input } : {}),
         ...(input.modelSelection?.instanceId === boundInstanceId
@@ -2632,6 +2638,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })
       .pipe(Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)));
+    return {
+      ...accepted,
+      ...(turnModel !== undefined && turnModel.length > 0 ? { model: turnModel } : {}),
+    };
   });
 
   const requireSession = Effect.fn("requireSession")(function* (threadId: ThreadId) {

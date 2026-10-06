@@ -1039,3 +1039,157 @@ Minor（新規1件）
 server/contractsの型チェックは成功。独自インメモリハーネスでSQL統合19件、純粋関数・設定9件のテスト本体が通過しました。Vitestでの実行結果ではありません。送信テキストも旧新224組合せで一致しました。
 
 **Phase 0を完了としてPhase 1に進んでよいか：進んでよいです。** 上記Minorは改善事項として残せます。
+
+---
+
+## コードレビュー: Phase 1 第1部分（送信の流れへの組み込み、2026-10-06）
+
+経過: 第1巡 Yellow（Major8・Minor1）→ 第2巡 Yellow（Major3・Minor2）→ 第3巡 Yellow（Major4）→ 第4巡 Yellow（Major1・Minor1）→ 第5巡 Green
+
+### 第1巡（Codex 原文）
+
+判定：**Yellow**。Blocker 0件、Major 8件、Minor 1件です。コードは変更していません。
+
+Blocker：なし。
+
+Major
+
+1. [ProviderCommandReactor.ts:1613](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1613) — request の記録前に次の送信が通ります。  
+   `startSwitch`全体をforkしているため、checkpoint数の取得中はDBにpendingがありません。次の旧担当宛て送信はnative経路に進み、その後の乗り換えで旧セッションを停止できます。取得をDeferredで止め、次の送信が拒否されないことを再現しました。  
+   **直し方：** requestのdispatch完了までworker内で待ち、その後の`continueSwitch`をforkしてください。request前の競合を回帰テストに追加します。
+
+2. [providerSwitchFlow.ts:482](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:482) — 送信前の失敗が`in-progress`のまま残ります。  
+   `readHandoffSource`、設定・状態の再取得、各段階のdispatchには失敗処理がなく、外側ではログを出すだけです。材料取得失敗で`old-stopped / in-progress`、到達点の記録失敗で`requested / in-progress`に残ることを再現しました。retry・abortの受付条件を満たしません。  
+   **直し方：** request成立後の処理全体で失敗を受け、submitのplanned前なら`failed-retryable`、それ以降なら`unknown-delivery`を記録してください。各段階で一度だけ失敗させるテストが必要です。
+
+3. [providerSwitchFlow.ts:577](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:577)、[同:599](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:599) — 完了の記録が途中で確定します。  
+   `delivered`でpendingを消してから、担当記録と発言の送信状態を別々にdispatchしています。後者が失敗すると、操作は解決済みなのに担当記録などが欠けます。担当記録失敗で`lastDelivered`だけが残ることを再現しました。`awaitUser`はpendingがないと何もしないため、catch追加だけでは直りません。  
+   **直し方：** delivered・担当記録・発言の送信状態を、1コマンドの同一コミットで確定してください。
+
+4. [providerSwitchFlow.ts:620](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:620)、[ProviderCommandReactor.ts:1590](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1590) — 未送信・拒否済みの発言を配達済みとして扱います。  
+   保存直後の発言をpendingにする処理がなく、`delivery_state`はNULLです。NULLはdelivered扱いなので、後続の未送信発言を引き継ぎ履歴に入れられます。また、`hasOtherUserMessages`は送信状態を絞らず、rejectedしかないスレッドでもtrueになります。実際のengineとSQLで確認しました。  
+   **直し方：** フラグonの新規発言は保存時からpendingにし、通常経路でも受付成功時にdeliveredを記録してください。乗り換え用の会話有無はdeliveredと旧データのNULLだけで判定し、既存の初回発言判定とは分けます。
+
+5. [ProviderCommandReactor.ts:630](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:630)、[ProviderService.ts:1892](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1892) — 停止に失敗した旧セッションのcursorを新担当へ渡せます。  
+   `stopSession`の失敗後も旧セッションが`listSessions`に残る場合、handoff経路も既存セッション分岐に入ります。820行で旧`resumeCursor`を取得し、新しい`startSession`へ渡します。DBのcursorをnullにしても、この明示入力は消えません。  
+   **直し方：** handoffでは旧セッションを再利用せず、旧cursorを明示入力・bindingのどちらからも渡さないようにしてください。停止失敗で旧セッションが残るケースを検証します。
+
+6. [ProviderService.ts:1908](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1908) — runtimePayloadを置き換えず、旧担当の情報を残します。  
+   `directory.upsert`はオブジェクトをマージします。`activeTurnId`だけの指定では旧モデル情報や自動継続マーカーが残ります。実リポジトリで`continueAfterServerUpdate`と`continueAfterServerUpdatePrepared`の残存を確認しました。§5.3と異なり、既存の起動処理でも旧ターンの継続判定に使われます。  
+   **直し方：** runtimePayloadを丸ごと置き換える更新を用意し、cursorの消去と同時に保存してください。
+
+7. [providerSwitchFlow.ts:202](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:202) — 再起動後の旧モデルを、変更後の選択値から取得します。  
+   稼働中セッションがなければ、`currentModel`は`thread.modelSelection.model`になります。クライアントは送信前にこの値を移行先へ更新するため、旧Codexの`from.model`がClaudeのモデルになる経路があります。同一担当で`requiresNewThreadForModelChange = true`の場合も、`modelChanged`がfalseになってnativeと誤判定することを再現しました。  
+   **直し方：** bindingに保存した実際のモデルを返し、稼働中セッションがなければそれを使って旧担当とモデル変更を判定してください。
+
+8. [providerSwitchFlow.ts:342](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:342) — 通常送信の担当を、受付後の可変セッションから取得します。  
+   Aの受付後に`listSessions`を読み直すため、その間にBがセッションを変更すると、AのturnIdにBのinstance・driverを記録します。変更後のセッションを返す検証では、Claudeの担当とAのCodexモデルを組み合わせて記録しました。最初の担当記録を残す規則により、後から訂正できません。  
+   **直し方：** 実際に送信したinstance・driver・解決済みモデルを受付結果に固定し、その結果から担当を記録してください。世代管理の追加とは別に必要です。
+
+Minor
+
+1. [ProviderCommandReactor.test.ts:4624](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts:4624) — `inputTextExpanded`の実サービスの検証がありません。  
+   新テストはmockにtrueが渡ったことを確認するだけです。  
+   **直し方：** ProviderServiceのテストで、引用・添付パス・captured-windowの二重追記防止、上限超過の拒否、添付のネイティブ送信、false／未指定時の従来動作を確認してください。
+
+serverとcontractsの型チェックは成功しました。再現には独自のインメモリ検証を使っており、報告されたVitest一式は再実行していません。クライアントから`inputTextExpanded`を指定できる経路は見つかりませんでした。
+
+次の部分（retry/resolve/abort と起動時の復旧）に進んでよいか：**現状は不可です。先にMajorを修正して再レビューしてください。**
+
+### 第2巡（Codex 原文）
+
+判定：**Yellow**。Blocker 0件、Major 3件、Minor 2件です。コードは変更していません。
+
+requestのworker内での確定、乗り換え中の失敗処理、完了の同一コミット、旧cursorの遮断、runtimePayloadの置き換えは修正を確認しました。
+
+Blocker：なし。
+
+Major
+
+1. [ProjectionThreadProviderSwitches.ts:258](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/persistence/Layers/ProjectionThreadProviderSwitches.ts:258)、[ProviderCommandReactor.ts:1335](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1335) — `createdBefore`では保存からreactor処理までの隙間を塞げません。  
+   AとBが先に保存され、workerがAを処理している間、BはNULLのままです。Bの`createdAt`がrequestの時刻以前なら履歴に入ります。実際のengineとSQLで、Aだけをpendingにした状態からBを取得することを再現しました。後でBを拒否しても、保存済みパケットからは消えません。`countDeliveredUserMessages`にも同じNULLが混入します。また、クライアント時計が進んでいれば、配達済みの履歴を時刻条件で除外します。  
+   **直し方：** 新しい送信は保存と同じコミットでpendingにしてください。サーバー側で開始時のフラグを確定し、内部コマンドに初期送信状態を渡せば、deciderが設定を読む必要はありません。旧データのNULLとの区別を永続化してください。A・Bを保存してworkerの再開を待つテストと、端末時計がずれたテストが必要です。
+
+2. [ProviderCommandReactor.ts:1708](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1708)、[providerSwitchFlow.ts:363](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:363) — 通常送信の受付済み発言がpendingのまま残ります。  
+   担当記録のdispatch失敗はログだけで終了します。SQLの失敗注入で、pendingからdeliveredへの確定が失敗するとpendingに残ることを確認しました。また、pending化後にフラグをoffにすると、受付成功後の担当記録を省略することも再現しました。実際には届いた発言を次の引き継ぎから除外し、起動時にpendingを一律rejectedにする復旧とも矛盾します。  
+   **直し方：** 保持した受付結果から担当記録を冪等に再試行する経路を設けてください。追跡を開始した発言は、途中でフラグがoffになっても送信状態を確定させます。受付後の記録失敗とフラグ切り替えをテストしてください。
+
+3. [ProviderService.ts:1617](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1617) — 受付結果のモデルがまだ固定されていません。  
+   `modelSelection`を省略した送信では、adapterの受付、binding更新、analyticsの後に`listSessions`からモデルを読みます。その間に次の送信でモデルが変わると、前のturnIdに新しいモデルを返します。実際のsendTurnの処理を使った障害注入で、モデルAで受付後にモデルBを返すことを再現しました。モデル指定時も要求値を返しており、adapterが別名から解決したモデルとは限りません。  
+   **直し方：** adapterの受付結果に、そのターンの解決済みモデルを含めてください。ProviderServiceはその値を使い、受付後のセッション一覧から取得しないようにします。指定省略時のモデル変更と、別名の解決をテストしてください。
+
+Minor
+
+1. [ProviderCommandReactor.ts:1335](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1335)、[同:316](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:316) — 圧縮待ちの通常発言を取り消してもpendingが残ります。  
+   待機中の発言もpendingになりますが、`cancelTurnsAfterCompaction`は失敗activityを追加するだけです。圧縮失敗や割り込みでキューを取り消した後も送信状態が終端になりません。  
+   **直し方：** 取り消した通常発言をrejectedまたはcancelledに確定し、取り消し後の状態を検証してください。
+
+2. [ProjectionThreadProviderSwitches.ts:590](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/persistence/Layers/ProjectionThreadProviderSwitches.ts:590) — 会話の有無の判定に全件COUNTを使っています。  
+   呼び出し側が必要とするのは1件でも存在するかだけですが、フラグonの通常送信ごとに全対象発言を数えます。  
+   **直し方：** `EXISTS`、または`SELECT 1 LIMIT 1`による存在判定に置き換えてください。
+
+serverとcontractsの型チェックは成功しました。障害注入とSQLの確認は独自のインメモリ検証です。報告されたVitest一式は再実行していません。
+
+次の部分（retry/resolve/abort と起動時の復旧）に進んでよいか：**現状は不可です。先にMajor 3件を修正して再レビューしてください。**
+
+### 第3巡（Codex 原文）
+
+判定: **Yellow**。Blockerなし、Major 4件、Minorなし。コードは変更していません。
+
+1. Major / [decider.ts:1575](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.ts:1575)  
+   **bootstrapで先行保存した発言がpendingになりません。**  
+   [ws.ts:1449](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/ws.ts:1449)で発言を保存すると、後続turn-startでは`userMessageEvent === null`となり、`trackDelivery: true`でもpendingイベントを出しません。SQLでも`delivery_state=NULL`を確認しました。送信失敗時も`isTracked`がfalseとなり、未送信の発言を配達済みの履歴として扱います。  
+   直し方: bootstrapの先行保存にも追跡指定を渡し、appendとpendingを同じコミットで出してください。先行保存後の送信失敗をテストに追加してください。
+
+2. Major / [providerSwitchFlow.ts:349](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:349)  
+   **モデルを返さないアダプターでは、受付済み発言がpendingに残ります。**  
+   Cursor・Grok・OpenCode・Antigravityの送信結果には`model`がありません。`modelSelection`を省略した通常送信ではProviderServiceも補えず、このreturnで担当記録とdelivered確定を両方省きます。追跡指定は全プロバイダーに付くため、乗り換えの許可リスト外でも発生します。  
+   直し方: 全アダプターで受付時のモデルを返すか、担当情報が不足しても受付済み発言のdelivered確定は行ってください。各アダプターでモデル指定なしの送信を検証してください。
+
+3. Major / [ProviderCommandReactor.ts:1367](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1367)、[ProviderService.ts:1589](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1589)  
+   **受付後の保存失敗を送信拒否にしています。**  
+   アダプターがturnIdを返した後でも、bindingのupsertが失敗するとsendTurn全体が失敗します。reactorは受付前後を区別せずrejectedを記録する実装です。受付成功後のupsert失敗を注入して確認しました。届いた発言を履歴から除外し、再送による二重実行につながります。  
+   直し方: 受付済みturnIdを含む結果またはエラーを返し、受付前の失敗と区別してください。受付済みなら担当記録とdeliveredの保存を再試行し、rejectedにはしないでください。
+
+4. Major / [providerSwitchFlow.ts:377](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:377)、[ProviderCommandReactor.ts:1702](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/ProviderCommandReactor.ts:1702)  
+   **再試行が尽きると、復旧に必要な受付結果が失われます。**  
+   担当記録が保存されなければ、ユーザー発言の`turn_id`はNULLのままで、受付結果はログだけで終わります。A、Bの順に要求を保存してAの開始を記録し、担当保存を全試行失敗させると、A/Bともpending・`turn_id=NULL`で、Aターンの`pending_message_id`はBでした。既存のpending対応から復旧すると、Bを誤ってdeliveredにする経路があります。  
+   直し方: messageId・turnId・受付時モデルの正しい組を永続化し、再起動後も保存を再試行できるようにしてください。保存できなかった発言は受付不明として扱う必要があります。予定している復旧を、既存の`pending_message_id`だけから行うことはできません。
+
+server・contractsの型チェックは成功しました。SQLテスト本体19件と上記の反例を読み取り専用ハーネスで確認しました。Vitest全体は再実行していません。
+
+次の部分（retry/resolve/abortと起動時の復旧）に進んでよいか: **現段階をGreenとして確定するのはまだ勧めません。** 上記を修正し、特に受付結果の保存方法を決めてから進んでください。
+
+### 第4巡（Codex 原文）
+
+判定: **Yellow**。Blocker 0件、Major 1件、Minor 1件。
+
+前回のMajor 4件は解消と判断します。受付結果を保存できなかった発言をpendingのまま残し、推測で確定せず引き継ぎから除く新方針も妥当です。
+
+1. Major / [providerSwitchFlow.ts:601](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/Layers/providerSwitchFlow.ts:601)、[decider.ts:2384](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/orchestration/decider.ts:2384)  
+   **乗り換え経路で、解決済みモデルを担当記録に使っていません。**  
+   flowはsendTurnの結果をturnIdだけに変換し、deciderは`pending.to.model`を保存します。
+
+   実際のflow・engine・SQL projectionを通した検証で、要求が`opus-5.5`、受付結果が`claude-opus-5-5`でも、担当記録は`opus-5.5`でした。同じターンへの追加指示で`claude-opus-5-5`を記録すると、モデルを変えていないのに`changed_mid_turn=true`になります。§5.4の規則に反します。
+
+   直し方: 受付結果のmodelをdeliveredコマンドまで渡し、担当イベントにはその値を使ってください。同一コミットでの確定を維持し、別名での乗り換え後に同じモデルで追加指示するテストを追加してください。
+
+2. Minor / [ProviderService.ts:1576](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1576)、[ProviderService.ts:1599](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/server/src/provider/Layers/ProviderService.ts:1599)  
+   **受付後の記録失敗を成功として返す変更に、回帰テストがありません。**  
+   今回追加したassociation・binding保存失敗の分岐を、既存テストでは検証していません。読み取り専用ハーネスでは、この2処理が失敗しても受付結果が返ることを確認しました。
+
+   直し方: 受付後にbinding保存を失敗させ、成功結果が返ること、再送されないこと、発言がrejectedにならないことを固定テストに追加してください。
+
+server・contractsの型チェックは成功。SQLテスト本体19件と反例はインメモリハーネスで確認しました。Vitest全体は再実行していません。コード変更なしです。
+
+次の部分（retry/resolve/abortと起動時の復旧）に進んでよいか: **Majorの担当モデル誤記録を修正してから進むことを勧めます。** pendingに関する新方針は、そのまま採用して構いません。
+
+### 第5巡（Codex 原文）
+
+判定: **Green**。Blocker 0件、Major 0件、Minor 0件。
+
+前回のMajor・Minorは解消しました。実際のflow・engine・SQL projectionで解決済みモデルが保存され、同じモデルで追加指示しても`changed_mid_turn=false`になることを確認しました。model省略時の互換性と、受付後のbinding保存失敗を検証する固定テストも確認しています。
+
+server・contractsの型チェックは成功。SQLテスト本体19件と前回の反例は、読み取り専用ハーネスで再検証しました。Vitest全体は再実行していません。コード変更なしです。
+
+**次の部分（retry/resolve/abortと起動時の復旧）に進んでよいです。** 復旧でも、§4.5の「pendingを推測でdelivered／rejectedに変えない」方針を維持してください。

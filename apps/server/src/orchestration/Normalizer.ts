@@ -20,6 +20,7 @@ import {
   resolveAttachmentPath,
 } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
@@ -333,6 +334,14 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
                 : record,
             ),
           };
+    // Fixed here, at the server edge, so the decider never reads settings.
+    const settingsService = yield* Effect.serviceOption(ServerSettingsService);
+    const trackDelivery =
+      settingsService._tag === "Some" &&
+      (yield* settingsService.value.getSettings.pipe(
+        Effect.map((settings) => settings.crossProviderHandoff.enabled),
+        Effect.orElseSucceed(() => false),
+      ));
     return {
       ...canonicalCommand,
       message: {
@@ -340,6 +349,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         attachments: normalizedAttachments,
         ...(normalizedContext !== undefined ? { context: normalizedContext } : {}),
       },
+      ...(trackDelivery ? { trackDelivery: true as const } : {}),
     } satisfies OrchestrationCommand;
   });
 

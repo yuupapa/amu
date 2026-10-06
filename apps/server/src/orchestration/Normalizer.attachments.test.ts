@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
 
 const testLayer = Layer.mergeAll(
@@ -58,6 +59,21 @@ function turnStartCommand(input: {
     createdAt: "2026-08-01T00:00:00.000Z",
   };
 }
+
+describe("normalizeDispatchCommand delivery tracking", () => {
+  it.effect("marks a send for delivery tracking only while handoff is on", () =>
+    Effect.gen(function* () {
+      const plain = yield* normalizeDispatchCommand(turnStartCommand({ attachments: [] }));
+      expect(plain.type === "thread.turn.start" && plain.trackDelivery).toBeFalsy();
+      const tracked = yield* normalizeDispatchCommand(turnStartCommand({ attachments: [] })).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({ crossProviderHandoff: { enabled: true } }),
+        ),
+      );
+      expect(tracked.type === "thread.turn.start" && tracked.trackDelivery).toBe(true);
+    }).pipe(Effect.provide(testLayer)),
+  );
+});
 
 describe("normalizeDispatchCommand attachments", () => {
   it.effect("accepts 100 inline images and rejects 101 before writing files", () =>

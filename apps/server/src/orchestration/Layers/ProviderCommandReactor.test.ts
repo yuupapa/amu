@@ -188,6 +188,7 @@ describe("ProviderCommandReactor", () => {
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
+    readonly crossProviderHandoff?: boolean;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -200,6 +201,7 @@ describe("ProviderCommandReactor", () => {
       input?.tryHandlePromptCommandEffect ?? (() => Effect.succeed(false)),
     );
     let nextSessionIndex = 1;
+    let sendTurnCount = 0;
     const runtimeSessions: Array<ProviderSession> = [];
     const modelSelection = input?.threadModelSelection ?? {
       instanceId: ProviderInstanceId.make("codex"),
@@ -267,12 +269,23 @@ describe("ProviderCommandReactor", () => {
         ),
       );
     });
-    const sendTurn = vi.fn((_: unknown) =>
-      Effect.succeed({
+    // Like ProviderService: the result names who accepted the turn.
+    const sendTurn = vi.fn((sendInput: unknown) => {
+      const threadId =
+        typeof sendInput === "object" && sendInput !== null && "threadId" in sendInput
+          ? (sendInput as { threadId: ThreadId }).threadId
+          : ThreadId.make("thread-1");
+      const session = runtimeSessions.find((entry) => entry.threadId === threadId);
+      return Effect.succeed({
         threadId: ThreadId.make("thread-1"),
-        turnId: asTurnId("turn-1"),
-      }),
-    );
+        turnId: asTurnId(`turn-${++sendTurnCount}`),
+        ...(session?.providerInstanceId !== undefined
+          ? { providerInstanceId: session.providerInstanceId }
+          : {}),
+        ...(session !== undefined ? { provider: session.provider } : {}),
+        ...(session?.model !== undefined ? { model: session.model } : {}),
+      });
+    });
     const compactThread = vi.fn((_: ThreadId) => input?.compactThreadEffect?.() ?? Effect.void);
     const interruptTurn = vi.fn((_: unknown) => input?.interruptTurnEffect?.() ?? Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
@@ -357,7 +370,17 @@ describe("ProviderCommandReactor", () => {
     ];
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    // Stops the thread's live session, like the real release for a handoff.
+    const releaseThreadForHandoff = vi.fn((threadId: ThreadId) =>
+      Effect.sync(() => {
+        const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
+        if (index >= 0) runtimeSessions.splice(index, 1);
+      }),
+    );
     const service: ProviderServiceShape = {
+      getThreadBinding: () => Effect.succeed(Option.none()),
+      releaseThreadForHandoff:
+        releaseThreadForHandoff as ProviderServiceShape["releaseThreadForHandoff"],
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       compactThread,
@@ -493,7 +516,11 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(Layer.mock(TerminalManager)({ closeIdle: closeIdleTerminals })),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest(
+          input?.crossProviderHandoff === true ? { crossProviderHandoff: { enabled: true } } : {},
+        ),
+      ),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -602,6 +629,32 @@ describe("ProviderCommandReactor", () => {
       engine,
       snapshotQuery,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
+      readTurnAssignments: () =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            return yield* sql<{
+              readonly messageId: string;
+              readonly instanceId: string;
+              readonly model: string;
+            }>`
+              SELECT message_id AS "messageId", instance_id AS "instanceId", model
+              FROM projection_turn_assignments
+              ORDER BY recorded_at ASC, message_id ASC
+            `;
+          }),
+        ),
+      readDeliveryState: (messageId: string) =>
+        runtime!.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const rows = yield* sql<{ readonly state: string | null }>`
+              SELECT delivery_state AS "state" FROM projection_thread_messages
+              WHERE message_id = ${messageId}
+            `;
+            return rows[0]?.state ?? null;
+          }),
+        ),
       readPendingTurnStarts: () =>
         runtime!.runPromise(
           Effect.gen(function* () {
@@ -629,6 +682,7 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
+      releaseThreadForHandoff,
       stateDir,
       drain,
       startReactor,
@@ -4500,4 +4554,279 @@ describe("ProviderCommandReactor", () => {
         expect(harness.closeIdleTerminals).toHaveBeenCalledTimes(1);
       }),
   );
+
+  describe("cross-provider handoff", () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    const claudeSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-opus-5-5",
+    };
+    type Harness = Awaited<ReturnType<typeof createHarness>>;
+
+    const startTurn = (
+      harness: Harness,
+      id: string,
+      text: string,
+      modelSelection?: ModelSelection,
+    ) =>
+      harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-handoff-${id}`),
+          threadId: ThreadId.make("thread-1"),
+          message: { messageId: asMessageId(`message-${id}`), role: "user", text, attachments: [] },
+          ...(modelSelection !== undefined ? { modelSelection } : {}),
+          // What the server edge (Normalizer) adds while the feature is on.
+          trackDelivery: true,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+    /** One finished Codex turn, so the thread has a conversation to hand over. */
+    const firstCodexTurn = async (harness: Harness, status: "ready" | "running" = "ready") => {
+      await startTurn(harness, "first", "最初の依頼");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.runEffect(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-handoff-session-${status}`),
+          threadId: ThreadId.make("thread-1"),
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status,
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    };
+
+    const switchState = (harness: Harness) =>
+      harness.runEffect(
+        harness.snapshotQuery
+          .getCommandReadModel()
+          .pipe(
+            Effect.map(
+              (model) =>
+                model.threads.find((thread) => thread.id === ThreadId.make("thread-1"))
+                  ?.providerSwitch,
+            ),
+          ),
+      );
+
+    const deliveryState = (harness: Harness, messageId: string) =>
+      harness.readDeliveryState(messageId);
+
+    const failureDetails = async (harness: Harness) => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (thread?.activities ?? [])
+        .filter((activity) => activity.kind === "provider.turn.start.failed")
+        .map((activity) => (activity.payload as { detail?: string }).detail ?? "");
+    };
+
+    it("hands a started Codex chat over to Claude with a packet", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+
+      expect(harness.releaseThreadForHandoff).toHaveBeenCalledTimes(1);
+      expect(harness.startSession.mock.calls.at(-1)?.[1]).toMatchObject({
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        modelSelection: claudeSelection,
+      });
+      const sent = harness.sendTurn.mock.calls[1]?.[0] as {
+        input: string;
+        inputTextExpanded?: boolean;
+        modelSelection?: ModelSelection;
+      };
+      expect(sent.inputTextExpanded).toBe(true);
+      expect(sent.modelSelection).toEqual(claudeSelection);
+      expect(sent.input.startsWith("[[AMU-HANDOFF v1]]")).toBe(true);
+      expect(sent.input).toContain("最初の依頼");
+      expect(sent.input.endsWith("[[AMU-NOW]]\nClaude で続けて")).toBe(true);
+
+      const state = await switchState(harness);
+      expect(state?.pending).toBeNull();
+      expect(state?.lastDelivered).toMatchObject({ attemptId: 2, boundaryTurnCount: 0 });
+      await waitFor(async () => (await deliveryState(harness, "message-switch")) === "delivered");
+    });
+
+    it("waits for the user when the new session fails to start, refusing new sends meanwhile", async () => {
+      const harness = await createHarness({
+        crossProviderHandoff: true,
+        startSessionEffect: (session) =>
+          session.providerInstanceId === ProviderInstanceId.make("claudeAgent")
+            ? Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "claudeAgent",
+                  method: "session.start",
+                  detail: "claude is not signed in",
+                }),
+              )
+            : Effect.succeed(session),
+      });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      const pending = (await switchState(harness))?.pending;
+      expect(pending).toMatchObject({
+        awaitingReason: "failed-retryable",
+        milestone: "old-stopped",
+        attempts: [expect.objectContaining({ kind: "start", status: "failed", generation: 1 })],
+      });
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+
+      await startTurn(harness, "blocked", "これは送れない");
+      await waitFor(async () =>
+        (await failureDetails(harness)).includes(
+          "乗り換えの途中です。完了を待つか、表示中の選択肢から選んでください。",
+        ),
+      );
+      expect(await deliveryState(harness, "message-blocked")).toBe("rejected");
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses to switch while the old provider is still working", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness, "running");
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+
+      await waitFor(async () =>
+        (await failureDetails(harness)).some((detail) => detail.includes("作業中です")),
+      );
+      expect(await deliveryState(harness, "message-switch")).toBe("rejected");
+      expect(harness.releaseThreadForHandoff).not.toHaveBeenCalled();
+      expect(await switchState(harness)).toBeUndefined();
+    });
+
+    it("treats a send that fails after it was planned as delivery unknown", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      harness.sendTurn.mockImplementation(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "claudeAgent",
+              method: "turn.start",
+              detail: "connection reset",
+            }),
+          ) as never,
+      );
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      expect((await switchState(harness))?.pending).toMatchObject({
+        awaitingReason: "unknown-delivery",
+        milestone: "packet-built",
+        deliveryUncertain: true,
+      });
+    });
+
+    it("refuses a send that arrives right after a switch was requested", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await startTurn(harness, "next", "すぐ次の発言");
+
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      await waitFor(async () => (await deliveryState(harness, "message-next")) === "rejected");
+      // Only the first turn and the packet were sent.
+      expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+    });
+
+    it("waits for the user when stopping the old session fails", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      harness.releaseThreadForHandoff.mockImplementation(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "codex",
+              method: "session.stop",
+              detail: "still running",
+            }),
+          ) as never,
+      );
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+
+      await waitFor(async () => (await switchState(harness))?.pending?.status === "awaiting-user");
+      expect((await switchState(harness))?.pending).toMatchObject({
+        awaitingReason: "failed-retryable",
+        milestone: "requested",
+      });
+      expect(harness.startSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("records the answering provider and delivery with the delivered switch", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+
+      const assignments = await harness.readTurnAssignments();
+      expect(assignments).toEqual([
+        { messageId: "message-first", instanceId: "codex", model: "gpt-5-codex" },
+        { messageId: "message-switch", instanceId: "claudeAgent", model: "claude-opus-5-5" },
+      ]);
+      expect(await deliveryState(harness, "message-first")).toBe("delivered");
+      expect(await deliveryState(harness, "message-switch")).toBe("delivered");
+    });
+
+    it("leaves a native send that failed out of the handoff", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      await firstCodexTurn(harness);
+      const realSend = harness.sendTurn.getMockImplementation()!;
+      harness.sendTurn.mockImplementationOnce(
+        () =>
+          Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: "codex",
+              method: "turn.start",
+              detail: "rate limited",
+            }),
+          ) as never,
+      );
+      await startTurn(harness, "failed", "届かなかった発言");
+      await waitFor(async () => (await deliveryState(harness, "message-failed")) === "rejected");
+      harness.sendTurn.mockImplementation(realSend);
+
+      await startTurn(harness, "switch", "Claude で続けて", claudeSelection);
+      await waitFor(async () => ((await switchState(harness))?.lastDelivered ?? null) !== null);
+      const packet = (harness.sendTurn.mock.calls.at(-1)?.[0] as { input: string }).input;
+      expect(packet).toContain("最初の依頼");
+      expect(packet).not.toContain("届かなかった発言");
+    });
+
+    it("settles a tracked send even when the feature is off", async () => {
+      const harness = await createHarness();
+      await startTurn(harness, "first", "最初の依頼");
+      await waitFor(async () => (await deliveryState(harness, "message-first")) === "delivered");
+    });
+
+    it("delivers a tracked send even when the adapter does not report its model", async () => {
+      const harness = await createHarness({ crossProviderHandoff: true });
+      harness.sendTurn.mockImplementationOnce(
+        (sendInput: unknown) =>
+          Effect.succeed({
+            threadId: (sendInput as { threadId: ThreadId }).threadId,
+            turnId: asTurnId("turn-no-model"),
+          }) as never,
+      );
+      await startTurn(harness, "first", "最初の依頼");
+      await waitFor(async () => (await deliveryState(harness, "message-first")) === "delivered");
+      expect(await harness.readTurnAssignments()).toEqual([]);
+    });
+  });
 });

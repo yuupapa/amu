@@ -186,6 +186,19 @@ export interface ProjectionThreadProviderSwitchRepositoryShape {
   readonly readHandoffSource: (
     input: ReadHandoffSourceInput,
   ) => Effect.Effect<HandoffSourceRows, ProjectionRepositoryError>;
+  /** Whether a delivered user message (NULL counts as delivered) other than `excludeMessageId` exists. */
+  readonly hasDeliveredUserMessage: (input: {
+    readonly threadId: ThreadId;
+    readonly excludeMessageId: MessageId;
+  }) => Effect.Effect<boolean, ProjectionRepositoryError>;
+  /** The stored delivery state; null means delivered from before the feature (or unknown message). */
+  readonly getMessageDeliveryState: (input: {
+    readonly messageId: MessageId;
+  }) => Effect.Effect<MessageDeliveryState | null, ProjectionRepositoryError>;
+  /** Highest checkpoint turn count of the thread, 0 when none: a switch's boundary S (§7.4). */
+  readonly getLatestCheckpointTurnCount: (
+    input: ProjectionThreadIdInput,
+  ) => Effect.Effect<number, ProjectionRepositoryError>;
   /** Writes projection_thread_messages.delivery_state; NULL there means delivered. */
   readonly setMessageDeliveryState: (
     input: SetProjectionMessageDeliveryStateInput,

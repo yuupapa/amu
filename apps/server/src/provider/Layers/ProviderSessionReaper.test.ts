@@ -190,6 +190,8 @@ describe("ProviderSessionReaper", () => {
     );
 
     const providerService: ProviderServiceShape = {
+      getThreadBinding: () => Effect.succeed(Option.none()),
+      releaseThreadForHandoff: () => Effect.void,
       startSession: () => unsupported(),
       sendTurn: () => unsupported(),
       compactThread: () => unsupported(),

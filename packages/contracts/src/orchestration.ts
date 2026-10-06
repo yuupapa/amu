@@ -1354,6 +1354,12 @@ export const ThreadTurnStartCommand = Schema.Struct({
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
+  /**
+   * Server-set only (clients send ClientThreadTurnStartCommand, which lacks
+   * it): cross-provider handoff is on, so the new message is saved pending in
+   * the same commit and settles to delivered or rejected later (§4.5).
+   */
+  trackDelivery: Schema.optional(Schema.Literal(true)),
 });
 
 const ClientThreadTurnStartCommand = Schema.Struct({
@@ -1615,6 +1621,8 @@ const ThreadMessageUserAppendCommand = Schema.Struct({
     context: Schema.optional(OrchestrationMessageContext),
   }),
   createdAt: IsoDateTime,
+  /** Same as ThreadTurnStartCommand.trackDelivery, for a send persisted ahead of its turn. */
+  trackDelivery: Schema.optional(Schema.Literal(true)),
 });
 
 const ThreadProposedPlanUpsertCommand = Schema.Struct({

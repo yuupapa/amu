@@ -36,6 +36,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -1462,11 +1463,19 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       );
     }
 
-    const expanded = expandProviderTurnText({
-      text: parsed.input,
-      attachments,
-      attachmentsDir: serverConfig.attachmentsDir,
-    });
+    // A handoff packet arrives already expanded and measured (design §6.5).
+    const expanded =
+      parsed.inputTextExpanded === true
+        ? ({
+            _tag: "expanded",
+            textWithCitations: parsed.input,
+            text: parsed.input,
+          } as const)
+        : expandProviderTurnText({
+            text: parsed.input,
+            attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+          });
     if (expanded.textWithCitations !== parsed.input) {
       yield* decodeInputOrValidationError({
         operation: "ProviderService.sendTurn",
@@ -1562,12 +1571,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 }),
               ),
             );
+            // The provider accepted the turn: bookkeeping failures from here on
+            // must not turn it into a failed send (it is running).
             yield* associateTurnAnalytics({
               providerInstanceId: routed.instanceId,
               threadId: input.threadId,
               turnId: String(turn.turnId),
               metadata: turnMetadata,
-            });
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("sendTurn: turn analytics association failed after acceptance", {
+                  threadId: input.threadId,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            );
             return turn;
           }),
         (turnMetadata) =>
@@ -1577,22 +1595,32 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             requestId: turnMetadata.requestId,
           }),
       );
-      yield* directory.upsert({
-        threadId: input.threadId,
-        provider: routed.adapter.provider,
-        providerInstanceId: routed.instanceId,
-        status: "running",
-        ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
-        runtimePayload: {
-          ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-          activeTurnId: turn.turnId,
-          // Admission and marker consumption must survive the same restart.
-          continueAfterServerUpdate: null,
-          continueAfterServerUpdatePrepared: null,
-          lastRuntimeEvent: "provider.sendTurn",
-          lastRuntimeEventAt: yield* nowIso,
-        },
-      });
+      const acceptedAt = yield* nowIso;
+      yield* directory
+        .upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          providerInstanceId: routed.instanceId,
+          status: "running",
+          ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+          runtimePayload: {
+            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+            activeTurnId: turn.turnId,
+            // Admission and marker consumption must survive the same restart.
+            continueAfterServerUpdate: null,
+            continueAfterServerUpdatePrepared: null,
+            lastRuntimeEvent: "provider.sendTurn",
+            lastRuntimeEventAt: acceptedAt,
+          },
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("sendTurn: binding update failed after the turn was accepted", {
+              threadId: input.threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
       yield* analytics.record("provider.turn.sent", {
         provider: routed.adapter.provider,
         ...(subscriptionSharing ? { subscriptionSharing: true } : {}),
@@ -1605,7 +1633,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         attachmentCount: attachments.length,
         hasInput: typeof input.input === "string" && input.input.trim().length > 0,
       });
-      return turn;
+      // The adapter reports the model it ran; never re-read after the send.
+      const acceptedModel =
+        turn.model ??
+        (input.modelSelection?.instanceId === routed.instanceId
+          ? input.modelSelection.model
+          : undefined);
+      return {
+        ...turn,
+        providerInstanceId: routed.instanceId,
+        provider: routed.adapter.provider,
+        ...(acceptedModel !== undefined && acceptedModel.trim().length > 0
+          ? { model: acceptedModel }
+          : {}),
+      };
     }).pipe(
       withMetrics({
         counter: providerTurnsTotal,
@@ -1856,6 +1897,72 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             operation: "user-input-response",
           }),
       }),
+    );
+  });
+
+  const getThreadBinding: ProviderServiceMethod<"getThreadBinding"> = Effect.fn("getThreadBinding")(
+    function* (threadId) {
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      if (binding === undefined || binding.providerInstanceId === undefined) {
+        return Option.none();
+      }
+      const payload =
+        typeof binding.runtimePayload === "object" && binding.runtimePayload !== null
+          ? (binding.runtimePayload as Record<string, unknown>)
+          : {};
+      const selection = readPersistedModelSelection(binding.runtimePayload);
+      const model =
+        selection?.model ??
+        (typeof payload.model === "string" && payload.model.length > 0 ? payload.model : null);
+      return Option.some({
+        instanceId: binding.providerInstanceId,
+        driver: binding.provider,
+        hasResumeCursor: binding.resumeCursor !== undefined && binding.resumeCursor !== null,
+        model,
+      });
+    },
+  );
+
+  const releaseThreadForHandoff: ProviderServiceMethod<"releaseThreadForHandoff"> = Effect.fn(
+    "releaseThreadForHandoff",
+  )(function* (threadId) {
+    const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    if (binding === undefined) return;
+    // A deleted or disabled old instance has no session to stop; the cursor
+    // is cleared either way.
+    yield* stopSession({ threadId }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logInfo("handoff: old provider session was not stopped", {
+          threadId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    const stillAlive =
+      binding.providerInstanceId === undefined
+        ? false
+        : yield* registry.getByInstance(binding.providerInstanceId).pipe(
+            Effect.flatMap((adapter) => adapter.hasSession(threadId)),
+            Effect.orElseSucceed(() => false),
+          );
+    if (stillAlive) {
+      return yield* toValidationError(
+        "ProviderService.releaseThreadForHandoff",
+        `The previous provider session of thread '${threadId}' did not stop.`,
+      );
+    }
+    yield* directory.upsert(
+      {
+        threadId,
+        provider: binding.provider,
+        ...(binding.providerInstanceId !== undefined
+          ? { providerInstanceId: binding.providerInstanceId }
+          : {}),
+        status: "stopped",
+        resumeCursor: null,
+        runtimePayload: { activeTurnId: null },
+      },
+      { replaceRuntimePayload: true },
     );
   });
 
@@ -2242,6 +2349,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToRequest,
     respondToUserInput,
     stopSession,
+    getThreadBinding,
+    releaseThreadForHandoff,
     listSessions,
     getCapabilities,
     getInstanceInfo,

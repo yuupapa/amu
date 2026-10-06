@@ -1,4 +1,7 @@
-import { OrchestrationThreadProviderSwitchState } from "@t3tools/contracts";
+import {
+  OrchestrationThreadProviderSwitchState,
+  type MessageDeliveryState,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -577,6 +580,34 @@ const makeProjectionThreadProviderSwitchRepository = Effect.gen(function* () {
           rows.map((row) => ({ ...row, changedMidTurn: row.changedMidTurn === 1 })),
         ),
         Effect.mapError(fail("listTurnAssignments")),
+      ),
+    hasDeliveredUserMessage: (input) =>
+      sql<{ readonly found: number }>`
+        SELECT EXISTS (
+          SELECT 1 FROM projection_thread_messages m
+          WHERE ${deliveredUserFilter(input.threadId, input.excludeMessageId)}
+        ) AS "found"
+      `.pipe(
+        Effect.map((rows) => (rows[0]?.found ?? 0) === 1),
+        Effect.mapError(fail("hasDeliveredUserMessage")),
+      ),
+    getMessageDeliveryState: (input) =>
+      sql<{ readonly state: string | null }>`
+        SELECT delivery_state AS "state"
+        FROM projection_thread_messages
+        WHERE message_id = ${input.messageId}
+      `.pipe(
+        Effect.map((rows) => (rows[0]?.state ?? null) as MessageDeliveryState | null),
+        Effect.mapError(fail("getMessageDeliveryState")),
+      ),
+    getLatestCheckpointTurnCount: (input) =>
+      sql<{ readonly count: number | null }>`
+        SELECT MAX(checkpoint_turn_count) AS "count"
+        FROM projection_turns
+        WHERE thread_id = ${input.threadId}
+      `.pipe(
+        Effect.map((rows) => rows[0]?.count ?? 0),
+        Effect.mapError(fail("getLatestCheckpointTurnCount")),
       ),
     readHandoffSource: (input) =>
       readHandoffSourceRows(input).pipe(Effect.mapError(fail("readHandoffSource"))),

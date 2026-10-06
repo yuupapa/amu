@@ -81,6 +81,13 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  /**
+   * Internal: `input` already went through expandProviderTurnText (a handoff
+   * packet measured against the limit), so citations, attachment paths and
+   * captured-window data are not appended again. Attachments still go to the
+   * adapter natively, and the input limit is still checked.
+   */
+  inputTextExpanded: Schema.optional(Schema.Boolean),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
@@ -88,6 +95,11 @@ export const ProviderTurnStartResult = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
   resumeCursor: Schema.optional(Schema.Unknown),
+  // Set by ProviderService, not adapters: who actually accepted the turn, so
+  // the answering provider is recorded from the send itself, not re-read later.
+  providerInstanceId: Schema.optional(ProviderInstanceId),
+  provider: Schema.optional(ProviderDriverKind),
+  model: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderTurnStartResult = typeof ProviderTurnStartResult.Type;
 

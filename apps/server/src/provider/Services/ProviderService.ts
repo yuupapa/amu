@@ -12,6 +12,7 @@
  * @module ProviderService
  */
 import type {
+  ProviderDriverKind,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
@@ -29,6 +30,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+import type * as Option from "effect/Option";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
@@ -79,6 +81,33 @@ export interface ProviderServiceShape {
    */
   readonly respondToUserInput: (
     input: ProviderRespondToUserInputInput,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * The thread's persisted provider binding, for deciding whether the next
+   * turn can continue natively (cross-provider handoff §3.1). None when the
+   * thread was never bound.
+   */
+  readonly getThreadBinding: (threadId: ThreadId) => Effect.Effect<
+    Option.Option<{
+      readonly instanceId: ProviderInstanceId;
+      readonly driver: ProviderDriverKind;
+      readonly hasResumeCursor: boolean;
+      /** The model the bound session last ran, when recorded. */
+      readonly model: string | null;
+    }>,
+    ProviderServiceError
+  >;
+
+  /**
+   * Hands the thread over to another provider (handoff milestone
+   * old-stopped, §5.3): stops the live session if any and clears the bound
+   * resume cursor, so nothing can resume the old conversation natively. Works
+   * when the old instance no longer exists. Fails when the old session is
+   * still alive after the stop. Idempotent.
+   */
+  readonly releaseThreadForHandoff: (
+    threadId: ThreadId,
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**

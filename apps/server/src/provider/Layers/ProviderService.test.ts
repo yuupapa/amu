@@ -2324,6 +2324,154 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("sends an already expanded handoff packet without appending to it", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const session = yield* provider.startSession(asThreadId("thread-expanded"), {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-expanded"),
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      const attachment = {
+        type: "file" as const,
+        id: "thread-expanded-12345678-1234-1234-1234-123456789abc-pdf",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 456,
+      };
+      const packet = '[[AMU-HANDOFF v1]]\n…\n\n[[AMU-NOW]]\nsee [Attached file "report.pdf"]';
+
+      routing.codex.sendTurn.mockClear();
+      const result = yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: packet,
+        attachments: [attachment],
+        inputTextExpanded: true,
+      });
+      const sent = routing.codex.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput;
+      // Text is exactly the measured packet; the attachment still goes natively.
+      assert.strictEqual(sent.input, packet);
+      assert.deepEqual(sent.attachments, [attachment]);
+      // The result names who accepted the turn.
+      assert.strictEqual(result.providerInstanceId, codexInstanceId);
+      assert.strictEqual(result.provider, "codex");
+
+      // Without the flag the path line is appended as before.
+      routing.codex.sendTurn.mockClear();
+      yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "summarize",
+        attachments: [attachment],
+      });
+      const normal = routing.codex.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput;
+      assert.include(normal.input ?? "", '[Attached file "report.pdf" is saved at: ');
+
+      // The input limit still applies to an expanded packet.
+      const tooLong = yield* provider
+        .sendTurn({
+          threadId: session.threadId,
+          input: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS + 1),
+          inputTextExpanded: true,
+        })
+        .pipe(Effect.flip);
+      assert.ok(tooLong);
+      yield* provider.stopSession({ threadId: session.threadId });
+    }),
+  );
+
+  it.effect("returns the model the adapter reports for the accepted turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-accepted-model");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      routing.codex.sendTurn.mockImplementationOnce(
+        (input: ProviderSendTurnInput) =>
+          Effect.succeed({
+            threadId: input.threadId,
+            turnId: asTurnId("turn-accepted-model"),
+            model: "gpt-6.1-sol-2026-09",
+          }) as never,
+      );
+      const result = yield* provider.sendTurn({
+        threadId,
+        input: "hi",
+        modelSelection: { instanceId: codexInstanceId, model: "gpt-6.1-sol" },
+      });
+      // The adapter's resolved name, not the alias that was requested.
+      assert.strictEqual(result.model, "gpt-6.1-sol-2026-09");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("releases a thread for a handoff: cursor cleared, runtime payload replaced", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-release");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      const before = yield* provider.getThreadBinding(threadId);
+      assert.strictEqual(Option.isSome(before) && before.value.hasResumeCursor, true);
+
+      yield* provider.releaseThreadForHandoff(threadId);
+
+      const persisted = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(persisted), true);
+      if (Option.isSome(persisted)) {
+        assert.strictEqual(persisted.value.status, "stopped");
+        assert.strictEqual(persisted.value.resumeCursor, null);
+        assert.deepEqual(persisted.value.runtimePayload, { activeTurnId: null });
+      }
+      const after = yield* provider.getThreadBinding(threadId);
+      assert.strictEqual(Option.isSome(after) && after.value.hasResumeCursor, false);
+      assert.strictEqual(
+        (yield* provider.listSessions()).some((s) => s.threadId === threadId),
+        false,
+      );
+      // Idempotent.
+      yield* provider.releaseThreadForHandoff(threadId);
+    }),
+  );
+
+  it.effect("refuses to release a thread whose old session survives the stop", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-release-stuck");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      const original = routing.codex.hasSession.getMockImplementation();
+      routing.codex.hasSession.mockImplementation(() => Effect.succeed(true));
+      const error = yield* provider
+        .releaseThreadForHandoff(threadId)
+        .pipe(
+          Effect.flip,
+          Effect.ensuring(
+            Effect.sync(() => routing.codex.hasSession.mockImplementation(original!)),
+          ),
+        );
+      assert.instanceOf(error, ProviderValidationError);
+      assert.include(error.issue, "did not stop");
+    }),
+  );
+
   it.effect("preserves captured-window identity without accessibility data", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
@@ -5356,6 +5504,54 @@ chatGptTelemetry.layer("ChatGPT connector turn analytics", (it) => {
         subscriptionSharing: true,
         errorType: "ProviderAdapterSessionNotFoundError",
       });
+    }),
+  );
+});
+
+// Writes the binding normally, except the one sendTurn makes after acceptance.
+const failingBindings = new Map<string, ProviderSessionDirectory.ProviderRuntimeBinding>();
+const postAcceptWriteFails = makeProviderServiceLayer({
+  directory: {
+    upsert: (binding) => {
+      const payload = binding.runtimePayload as { lastRuntimeEvent?: string } | null | undefined;
+      if (payload?.lastRuntimeEvent === "provider.sendTurn") {
+        return Effect.fail(
+          new ProviderValidationError({ operation: "test", issue: "binding write failed" }),
+        );
+      }
+      return Effect.sync(() => {
+        failingBindings.set(binding.threadId, {
+          ...failingBindings.get(binding.threadId),
+          ...binding,
+        });
+      });
+    },
+    recordImportedTranscript: () => Effect.die("unused"),
+    getProvider: () => Effect.die("unused"),
+    getBinding: (threadId) => Effect.succeed(Option.fromNullishOr(failingBindings.get(threadId))),
+    listThreadIds: () => Effect.succeed([...failingBindings.keys()] as never),
+    listBindings: () => Effect.succeed([...failingBindings.values()] as never),
+  },
+});
+
+postAcceptWriteFails.layer("ProviderServiceLive after acceptance", (it) => {
+  it.effect("still returns an accepted turn when saving the binding afterwards fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-accepted-then-save-fails");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "full-access",
+      });
+      postAcceptWriteFails.codex.sendTurn.mockClear();
+      const result = yield* provider.sendTurn({ threadId, input: "hi" });
+      // Accepted once, reported as accepted, never retried as a new send.
+      assert.strictEqual(postAcceptWriteFails.codex.sendTurn.mock.calls.length, 1);
+      assert.ok(result.turnId);
+      assert.strictEqual(result.providerInstanceId, codexInstanceId);
     }),
   );
 });

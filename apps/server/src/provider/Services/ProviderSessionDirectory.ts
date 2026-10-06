@@ -43,6 +43,12 @@ export type ProviderSessionDirectoryWriteError =
 
 export interface ProviderSessionDirectoryUpsertOptions {
   readonly onConflict?: "update" | "ignore";
+  /**
+   * Replace the stored runtimePayload instead of merging into it. A handoff
+   * uses this so no key of the old provider (auto-continue markers, model)
+   * survives into the next one (design §5.3).
+   */
+  readonly replaceRuntimePayload?: boolean;
 }
 
 export interface ProviderSessionDirectoryShape {

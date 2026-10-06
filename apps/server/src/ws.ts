@@ -1459,6 +1459,7 @@ const makeWsRpcLayer = (
                     : {}),
                 },
                 createdAt: command.createdAt,
+                ...(command.trackDelivery === true ? { trackDelivery: true as const } : {}),
               });
               if (tracked) {
                 const running = yield* worktreeSetupTracker.get(threadId);

@@ -161,6 +161,8 @@ export const ThreadProviderSwitchMilestonePayloadFields = {
   milestone: Schema.Literals(["old-stopped", "delivered"]),
   attemptId: Schema.optional(PositiveInt),
   turnId: Schema.optional(TurnId),
+  /** delivered: the model the provider reported for the accepted turn (§5.4). */
+  model: Schema.optional(TrimmedNonEmptyString),
 } as const;
 
 export const ThreadProviderSwitchPacketPayloadFields = {

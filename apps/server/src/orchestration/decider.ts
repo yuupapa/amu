@@ -1570,9 +1570,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         });
       }
+      // A tracked send is pending from the commit that saves it (§4.5).
+      const pendingDeliveryEvent: Omit<OrchestrationEvent, "sequence"> | null =
+        command.trackDelivery === true && userMessageEvent !== null
+          ? {
+              ...(yield* withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              })),
+              causationEventId: userMessageEvent.eventId,
+              type: "thread.message-delivery-state-set",
+              payload: {
+                threadId: command.threadId,
+                messageId: command.message.messageId,
+                state: "pending",
+                createdAt: command.createdAt,
+              },
+            }
+          : null;
       return [
         ...lifecycleResetEvents,
         ...(userMessageEvent ? [userMessageEvent] : []),
+        ...(pendingDeliveryEvent ? [pendingDeliveryEvent] : []),
         turnStartRequestedEvent,
       ];
     }
@@ -1595,7 +1616,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Message '${command.message.messageId}' already exists on thread '${command.threadId}'.`,
         });
       }
-      return {
+      const appendedEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1617,6 +1638,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
+      if (command.trackDelivery !== true) return appendedEvent;
+      // Pending from the commit that persists it, like a tracked turn start (§4.5).
+      const pendingEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: appendedEvent.eventId,
+        type: "thread.message-delivery-state-set",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.message.messageId,
+          state: "pending",
+          createdAt: command.createdAt,
+        },
+      };
+      return [appendedEvent, pendingEvent];
     }
 
     case "thread.turn.interrupt": {
@@ -2310,6 +2350,56 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         commandId: command.commandId,
       });
       const switchEvent = providerSwitchEventFor(command, eventBase);
+      // Delivery settles the switch, records who answered the turn and marks
+      // the message delivered, all in one commit (§4.5, §5.4).
+      if (
+        command.type === "thread.provider-switch.milestone" &&
+        command.milestone === "delivered" &&
+        state.pending !== null &&
+        state.pending.switchId === command.switchId &&
+        command.turnId !== undefined
+      ) {
+        const pending = state.pending;
+        const generation =
+          pending.attempts.findLast(
+            (attempt) => attempt.kind === "start" && attempt.status === "succeeded",
+          )?.generation ?? null;
+        const followUp = (): Effect.Effect<PlannedEventBase, never, Crypto.Crypto> =>
+          withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }).pipe(Effect.orDie);
+        const assignmentEvent: PlannedOrchestrationEvent = {
+          ...(yield* followUp()),
+          causationEventId: eventBase.eventId,
+          type: "thread.turn-assignment-recorded",
+          payload: {
+            threadId: command.threadId,
+            messageId: pending.triggerMessageId,
+            turnId: command.turnId,
+            instanceId: pending.to.instanceId,
+            driver: pending.to.driver,
+            // The resolved name the provider ran, not the requested alias.
+            model: command.model ?? pending.to.model,
+            generation,
+            createdAt: command.createdAt,
+          },
+        };
+        const deliveredEvent: PlannedOrchestrationEvent = {
+          ...(yield* followUp()),
+          causationEventId: eventBase.eventId,
+          type: "thread.message-delivery-state-set",
+          payload: {
+            threadId: command.threadId,
+            messageId: pending.triggerMessageId,
+            state: "delivered",
+            createdAt: command.createdAt,
+          },
+        };
+        return [switchEvent, assignmentEvent, deliveredEvent];
+      }
       // Closing a switch settles its message in the same commit (§4.5).
       const closedMessageState =
         state.pending === null ? null : closedMessageDeliveryState(state.pending, command);
@@ -2342,7 +2432,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const { type: _type, commandId: _commandId, ...payload } = command;
-      return {
+      const assignmentEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -2352,6 +2442,24 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.turn-assignment-recorded",
         payload,
       };
+      // An accepted turn delivered its message: recorded in the same commit.
+      const deliveredEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: assignmentEvent.eventId,
+        type: "thread.message-delivery-state-set",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          state: "delivered",
+          createdAt: command.createdAt,
+        },
+      };
+      return [assignmentEvent, deliveredEvent];
     }
 
     case "thread.message.delivery-state.set": {

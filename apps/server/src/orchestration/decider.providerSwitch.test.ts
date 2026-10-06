@@ -1249,4 +1249,88 @@ it.layer(NodeServices.layer)("provider switch decider", (it) => {
       }),
     );
   });
+
+  describe("delivery tracking", () => {
+    it.effect("saves a tracked send pending in the same commit as the message", () =>
+      Effect.gen(function* () {
+        const { types, events } = yield* run(yield* readModelWithThread, [
+          {
+            type: "thread.turn.start",
+            ...base(),
+            message: { messageId: triggerMessageId, role: "user", text: "hi", attachments: [] },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            trackDelivery: true,
+          },
+        ]);
+        expect(types).toEqual([
+          "thread.message-sent",
+          "thread.message-delivery-state-set",
+          "thread.turn-start-requested",
+        ]);
+        expect(events[1]?.payload).toMatchObject({ messageId: triggerMessageId, state: "pending" });
+      }),
+    );
+
+    it.effect("saves a tracked send persisted ahead of its turn pending in the same commit", () =>
+      Effect.gen(function* () {
+        const { types, events } = yield* run(yield* readModelWithThread, [
+          {
+            type: "thread.message.user.append",
+            ...base(),
+            message: { messageId: triggerMessageId, text: "hi", attachments: [] },
+            trackDelivery: true,
+          },
+        ]);
+        expect(types).toEqual(["thread.message-sent", "thread.message-delivery-state-set"]);
+        expect(events[1]?.payload).toMatchObject({ messageId: triggerMessageId, state: "pending" });
+      }),
+    );
+
+    it.effect("leaves an untracked send without a delivery state", () =>
+      Effect.gen(function* () {
+        const { types } = yield* run(yield* readModelWithThread, [
+          {
+            type: "thread.turn.start",
+            ...base(),
+            message: { messageId: triggerMessageId, role: "user", text: "hi", attachments: [] },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
+        ]);
+        expect(types).toEqual(["thread.message-sent", "thread.turn-start-requested"]);
+      }),
+    );
+  });
+
+  describe("answering model", () => {
+    it.effect("records the model the provider reported, not the requested alias", () =>
+      Effect.gen(function* () {
+        const { events } = yield* run(yield* submitting, [
+          attemptResult("submit", 2, "succeeded", turnId),
+          { ...delivered(), model: "gpt-6.1-sol-2026-09" },
+        ]);
+        expect(
+          events.find((event) => event.type === "thread.turn-assignment-recorded")?.payload,
+        ).toMatchObject({
+          turnId,
+          instanceId: codex.instanceId,
+          model: "gpt-6.1-sol-2026-09",
+          generation: 5,
+        });
+      }),
+    );
+
+    it.effect("falls back to the requested model when none was reported", () =>
+      Effect.gen(function* () {
+        const { events } = yield* run(yield* submitting, [
+          attemptResult("submit", 2, "succeeded", turnId),
+          delivered(),
+        ]);
+        expect(
+          events.find((event) => event.type === "thread.turn-assignment-recorded")?.payload,
+        ).toMatchObject({ model: codex.model });
+      }),
+    );
+  });
 });

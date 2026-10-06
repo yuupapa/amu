@@ -66,6 +66,10 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
+import { ServerConfig } from "../../config.ts";
+import { ProjectionThreadProviderSwitchRepositoryLive } from "../../persistence/Layers/ProjectionThreadProviderSwitches.ts";
+import { ProjectionThreadProviderSwitchRepository } from "../../persistence/Services/ProjectionThreadProviderSwitches.ts";
+import { makeProviderSwitchFlow, ProviderSwitchStepError } from "./providerSwitchFlow.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -224,6 +228,8 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const switchRepository = yield* ProjectionThreadProviderSwitchRepository;
+  const serverConfig = yield* ServerConfig;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const settings = yield* serverSettingsService.getSettings;
@@ -323,6 +329,10 @@ const make = Effect.gen(function* () {
         createdAt: DateTime.formatIso(yield* DateTime.now),
         requestId: event.payload.messageId,
       }).pipe(Effect.ignore({ log: true, message: "failed to report canceled queued message" }));
+      // A tracked queued send never went out: settle it so no handoff counts it.
+      yield* providerSwitchFlow
+        .markSendRejected({ threadId, messageId: event.payload.messageId, detail })
+        .pipe(Effect.ignore({ log: true, message: "failed to settle canceled queued message" }));
     }
   });
 
@@ -578,6 +588,10 @@ const make = Effect.gen(function* () {
       // First-turn prompt seed. A manual title that still equals this seed was
       // written by the client's auto-title, not a user rename.
       readonly titleSeed?: string;
+      // Cross-provider handoff (§7.2): the old session is already stopped and
+      // its cursor cleared, so the model-change and cross-driver guards and an
+      // unknown old instance do not apply.
+      readonly handoff?: boolean;
     },
   ) {
     const thread = yield* resolveThreadShell(threadId);
@@ -617,6 +631,7 @@ const make = Effect.gen(function* () {
         : thread.modelSelection.instanceId;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const desiredInstanceId = desiredModelSelection.instanceId;
+    const isHandoff = options?.handoff === true;
     const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
       Effect.mapError(
         () =>
@@ -630,6 +645,8 @@ const make = Effect.gen(function* () {
             detail: `Thread '${threadId}' references unknown provider instance '${currentInstanceId}'. The instance is not configured in this build.`,
           }),
       ),
+      Effect.map(Option.some),
+      Effect.catch((error) => (isHandoff ? Effect.succeed(Option.none()) : Effect.fail(error))),
     );
     const desiredInfo = yield* providerService.getInstanceInfo(desiredInstanceId).pipe(
       Effect.mapError(
@@ -668,7 +685,7 @@ const make = Effect.gen(function* () {
         createdAt,
       });
     }
-    if (thread.session !== null) {
+    if (thread.session !== null && !isHandoff) {
       yield* rejectStartedThreadModelChangeIfRequired({
         threadId,
         currentModelSelection:
@@ -684,18 +701,20 @@ const make = Effect.gen(function* () {
     }
     if (
       thread.session !== null &&
+      !isHandoff &&
+      Option.isSome(currentInfo) &&
       requestedModelSelection !== undefined &&
       requestedModelSelection.instanceId !== currentInstanceId
     ) {
-      if (currentInfo.driverKind !== desiredInfo.driverKind) {
+      if (currentInfo.value.driverKind !== desiredInfo.driverKind) {
         return yield* new ProviderAdapterRequestError({
           provider: preferredProvider,
           method: "thread.turn.start",
-          detail: `Thread '${threadId}' is bound to driver '${currentInfo.driverKind}' and cannot switch to '${desiredInfo.driverKind}'.`,
+          detail: `Thread '${threadId}' is bound to driver '${currentInfo.value.driverKind}' and cannot switch to '${desiredInfo.driverKind}'.`,
         });
       }
       if (
-        currentInfo.continuationIdentity.continuationKey !==
+        currentInfo.value.continuationIdentity.continuationKey !==
         desiredInfo.continuationIdentity.continuationKey
       ) {
         return yield* new ProviderAdapterRequestError({
@@ -771,8 +790,12 @@ const make = Effect.gen(function* () {
         });
       });
 
+    // A handoff never reuses or restarts the old session, so its resume cursor
+    // can never reach the new provider (§5.3).
     const existingSessionThreadId =
-      thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
+      !isHandoff && thread.session && thread.session.status !== "stopped" && activeSession
+        ? thread.id
+        : null;
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
@@ -1215,6 +1238,71 @@ const make = Effect.gen(function* () {
     processThreadTitleRegenerationSafely,
   );
 
+  const providerSwitchFlow = makeProviderSwitchFlow({
+    dispatch: (command) => orchestrationEngine.dispatch(command),
+    providerService,
+    switches: switchRepository,
+    getSettings: serverSettingsService.getSettings.pipe(
+      Effect.map((settings) => settings.crossProviderHandoff),
+    ),
+    randomId: crypto.randomUUIDv4,
+    nowIso: Effect.map(DateTime.now, DateTime.formatIso),
+    attachmentsDir: serverConfig.attachmentsDir,
+    requiresNewThreadForModelChange: (instanceId) =>
+      providerRegistry.getProviders.pipe(
+        Effect.map(
+          (providers) =>
+            providers.find((snapshot) => snapshot.instanceId === instanceId)
+              ?.requiresNewThreadForModelChange === true,
+        ),
+      ),
+    startHandoffSession: (input) =>
+      ensureSessionForThread(input.threadId, input.createdAt, {
+        modelSelection: input.modelSelection,
+        pendingTurnStart: true,
+        handoff: true,
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => threadModelSelections.set(input.threadId, input.modelSelection)),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.fail(
+            new ProviderSwitchStepError({
+              step: "start-session",
+              detail: formatFailureDetail(cause),
+            }),
+          ),
+        ),
+      ),
+    appendTurnStartFailure: (input) =>
+      appendProviderFailureActivity({
+        threadId: input.threadId,
+        kind: "provider.turn.start.failed",
+        summary: input.summary,
+        detail: input.detail,
+        turnId: null,
+        createdAt: input.createdAt,
+        requestId: input.messageId,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.fail(
+            new ProviderSwitchStepError({
+              step: "failure-activity",
+              detail: formatFailureDetail(cause),
+            }),
+          ),
+        ),
+      ),
+    resolveCwd: (thread) =>
+      resolveProject(thread.projectId).pipe(
+        Effect.map(
+          (project) =>
+            resolveThreadWorkspaceCwd({ thread, projects: project ? [project] : [] }) ?? null,
+        ),
+        Effect.orElseSucceed(() => null),
+      ),
+  });
+
   const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
     receivedEvent: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) {
@@ -1275,6 +1363,13 @@ const make = Effect.gen(function* () {
         createdAt: event.payload.createdAt,
       }).pipe(
         Effect.flatMap(() => appendTurnStartFailure("Provider turn start failed", detail)),
+        Effect.andThen(
+          providerSwitchFlow.markSendRejected({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+            detail,
+          }),
+        ),
         Effect.asVoid,
       );
     };
@@ -1377,6 +1472,19 @@ const make = Effect.gen(function* () {
           ...generationInput,
         }).pipe(Effect.forkScoped);
       }
+    }
+
+    // §9.3: an unresolved switch refuses every new send, /compact included.
+    if (
+      yield* providerSwitchFlow
+        .rejectTurnStartIfSwitchPending({
+          threadId: event.payload.threadId,
+          messageId: event.payload.messageId,
+          createdAt: event.payload.createdAt,
+        })
+        .pipe(Effect.catchCause((cause) => recoverTurnStartFailure(cause).pipe(Effect.as(true))))
+    ) {
+      return;
     }
 
     let compactionSessionEnsured = false;
@@ -1490,6 +1598,75 @@ const make = Effect.gen(function* () {
       turnsAfterCompaction.set(event.payload.threadId, queued);
       return;
     }
+    const switchDecision = yield* providerSwitchFlow
+      .decide({
+        thread,
+        requestedModelSelection: event.payload.modelSelection,
+        triggerMessageId: message.id,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          recoverTurnStartFailure(cause).pipe(Effect.as({ kind: "refused-silently" } as const)),
+        ),
+      );
+    if (switchDecision.kind === "refused-silently") {
+      return;
+    }
+    if (switchDecision.kind === "refuse") {
+      yield* providerSwitchFlow
+        .refuseSwitch({
+          threadId: event.payload.threadId,
+          messageId: event.payload.messageId,
+          detail: switchDecision.detail,
+          createdAt: event.payload.createdAt,
+        })
+        .pipe(Effect.catchCause(recoverTurnStartFailure));
+      return;
+    }
+    if (switchDecision.kind === "handoff") {
+      // The request is recorded here, inside the worker, so the next send is
+      // already refused by the DB state; the rest runs forked like a send.
+      const switchId = yield* providerSwitchFlow
+        .requestSwitch({
+          thread,
+          from: switchDecision.from,
+          to: switchDecision.to,
+          triggerMessageId: message.id,
+          createdAt: event.payload.createdAt,
+        })
+        .pipe(Effect.catchCause((cause) => recoverTurnStartFailure(cause).pipe(Effect.as(null))));
+      if (switchId === null) {
+        return;
+      }
+      yield* providerSwitchFlow
+        .continueSwitch({
+          thread,
+          switchId,
+          trigger: {
+            message: {
+              id: message.id,
+              text: message.text,
+              context: message.context,
+              attachments: message.attachments,
+            },
+            interactionMode: event.payload.interactionMode,
+            toSelection: switchDecision.toSelection,
+          },
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider switch could not record its failure", {
+              threadId: event.payload.threadId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+          Effect.ensuring(resumed ? Deferred.succeed(resumed.sent, undefined) : Effect.void),
+          Effect.forkScoped,
+        );
+      if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
+      return;
+    }
+
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
       messageText: expandTurnInputText(message) ?? "",
@@ -1513,9 +1690,26 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const send = providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure));
+    const send = providerService.sendTurn(sendTurnRequest.value).pipe(
+      Effect.tap((result) =>
+        providerSwitchFlow
+          .recordNativeTurnAssignment({
+            threadId: event.payload.threadId,
+            messageId: event.payload.messageId,
+            result,
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to record turn assignment", {
+                threadId: event.payload.threadId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+      ),
+      Effect.asVoid,
+      Effect.catchCause(recoverTurnStartFailure),
+    );
     // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
     if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
     yield* send.pipe(
@@ -1959,4 +2153,6 @@ const make = Effect.gen(function* () {
   } satisfies ProviderCommandReactorShape;
 });
 
-export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make);
+export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make).pipe(
+  Layer.provide(ProjectionThreadProviderSwitchRepositoryLive),
+);

@@ -5274,12 +5274,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           : message,
     }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)));
 
+    // The resolved model this turn runs, recorded as its answerer (handoff §5.4).
+    const turnModel = modelSelection?.model ?? context.session.model;
     return {
       threadId: context.session.threadId,
       turnId,
       ...(context.session.resumeCursor !== undefined
         ? { resumeCursor: context.session.resumeCursor }
         : {}),
+      ...(turnModel !== undefined && turnModel.length > 0 ? { model: turnModel } : {}),
     };
   });
 

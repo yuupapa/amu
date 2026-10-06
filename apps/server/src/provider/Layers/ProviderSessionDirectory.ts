@@ -141,12 +141,15 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
             binding.resumeCursor !== undefined
               ? binding.resumeCursor
               : (existingRuntime?.resumeCursor ?? null),
-          runtimePayload: mergeRuntimePayload(
-            existingRuntime?.runtimePayload ?? null,
-            binding.runtimePayload,
-          ),
+          runtimePayload:
+            options?.replaceRuntimePayload === true
+              ? (binding.runtimePayload ?? null)
+              : mergeRuntimePayload(
+                  existingRuntime?.runtimePayload ?? null,
+                  binding.runtimePayload,
+                ),
         },
-        options,
+        options?.onConflict !== undefined ? { onConflict: options.onConflict } : undefined,
       )
       .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.upsert:upsert")));
   });
