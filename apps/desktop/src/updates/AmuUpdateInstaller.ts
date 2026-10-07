@@ -1,12 +1,17 @@
 import { AMU_REPLACEABLE_RESOURCES } from "./AmuUpdateFeed.ts";
 
 // The installer runs as a detached shell process after Amu quits, because a
-// running app cannot replace its own app.asar. It copies the staged files
-// into the bundle under temporary names, then swaps them in by renames inside
-// Resources, so the old files are never half copied. It updates the asar hash
-// and version in Info.plist and opens Amu again. When the new Amu does not
-// come up, it renames the old files back and opens the old one. Inputs come
-// only through AMU_* environment variables.
+// running app cannot replace its own app.asar. It copies the staged files and
+// an edited Info.plist into the bundle under temporary names, then swaps them
+// in by renames inside the bundle, so no file is ever half copied and the
+// swap itself takes milliseconds. It opens Amu again; when the new Amu does
+// not come up, it renames the old files back and opens the old one.
+//
+// A journal outside the bundle records how far the swap got, and a watchdog
+// job in launchd (loaded from the updates folder, gone after a restart) runs
+// this same script with AMU_MODE=recover if the installer dies on the way: it
+// restores the old files or finishes the health check the installer began.
+// Inputs come only through AMU_* environment variables.
 
 export const AMU_INSTALL_SCRIPT = `#!/bin/bash
 set -u
@@ -22,15 +27,25 @@ for item in $AMU_REPLACE; do
 done
 case "$AMU_ASAR_HASH" in *[!0-9a-f]*|"") log "refusing asar hash"; exit 2 ;; esac
 case "$AMU_VERSION" in *[!0-9.]*|"") log "refusing version: $AMU_VERSION"; exit 2 ;; esac
+MODE="\${AMU_MODE:-install}"
+case "$MODE" in install|recover) ;; *) log "refusing mode: $MODE"; exit 2 ;; esac
 
 CONTENTS="$AMU_APP/Contents"
 RES="$CONTENTS/Resources"
 PLIST="$CONTENTS/Info.plist"
 SAVED_PLIST="$CONTENTS/.amu-old-Info.plist"
+NEW_PLIST="$CONTENTS/.amu-new-Info.plist"
 PB=/usr/libexec/PlistBuddy
 OPEN="\${AMU_OPEN:-/usr/bin/open}"
+LAUNCHCTL="\${AMU_LAUNCHCTL:-/bin/launchctl}"
 HEALTH_TIMEOUT="\${AMU_HEALTH_TIMEOUT:-180}"
+WATCH_INTERVAL="\${AMU_WATCH_INTERVAL:-15}"
 APP_REAL="$(cd "$AMU_APP" 2>/dev/null && pwd -P)"
+SCRIPT="$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)/$(basename "$0")"
+JOURNAL="$AMU_UPDATES/install-journal"
+WATCH_LABEL="com.yuupapa.amu.update-watchdog"
+WATCH_PLIST="$AMU_UPDATES/update-watchdog.plist"
+WATCH_DOMAIN="gui/$(id -u)"
 
 # A process belongs to Amu when its executable lives in this bundle. The
 # path is compared as a plain prefix, never as a pattern.
@@ -61,21 +76,29 @@ answers() {
 }
 LAUNCH_MARK="$AMU_UPDATES/.launched"
 STATE_FILE="\${AMU_STATE_DIR:-}/server-runtime.json"
-# Without a pinned port, the port the new backend wrote after this launch.
-runtime_port() {
+# What the new backend wrote about itself after this launch, if anything.
+runtime_field() {
   [ -n "\${AMU_STATE_DIR:-}" ] && [ "$STATE_FILE" -nt "$LAUNCH_MARK" ] || return 0
-  sed -n 's/.*"port":\\([0-9][0-9]*\\).*/\\1/p' "$STATE_FILE"
+  sed -n "s/.*\\"$1\\":\\\\([0-9][0-9]*\\\\).*/\\\\1/p" "$STATE_FILE"
 }
 healthy() {
   [ -n "$(app_pids)" ] || return 1
-  local port="\${AMU_PORT:-}"
-  [ -n "$port" ] || port="$(runtime_port)"
-  if [ -z "$port" ]; then
-    # Nothing to check beyond the process only when no state folder is known.
-    [ -z "\${AMU_STATE_DIR:-}" ]
+  if [ -z "\${AMU_STATE_DIR:-}" ]; then
+    # Without a state folder, the pinned port is all there is to check.
+    [ -n "\${AMU_PORT:-}" ] || return 0
+    port_held_by_app "$AMU_PORT" && answers "$AMU_PORT"
     return
   fi
-  port_held_by_app "$port" && answers "$port"
+  # The backend that wrote the state file after this launch must be a
+  # process of this bundle, hold the port it wrote, and answer there.
+  local port pid
+  port="$(runtime_field port)"
+  pid="$(runtime_field pid)"
+  [ -n "$port" ] && [ -n "$pid" ] || return 1
+  [ -z "\${AMU_PORT:-}" ] || [ "$port" = "$AMU_PORT" ] || return 1
+  in_bundle "$(ps -p "$pid" -o comm= 2>/dev/null)" || return 1
+  lsof -nP -a -p "$pid" -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 || return 1
+  answers "$port"
 }
 wait_pid_exit() { local i=0; while kill -0 "$1" 2>/dev/null; do i=$((i + 1)); [ "$i" -ge "$2" ] && return 1; sleep 1; done; return 0; }
 wait_port_free() { local i=0; while port_busy; do i=$((i + 1)); [ "$i" -ge "$1" ] && return 1; sleep 1; done; return 0; }
@@ -86,53 +109,67 @@ stop_app() {
   while [ -n "$(app_pids)" ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 1; done
   for pid in $(app_pids); do kill -9 "$pid" 2>/dev/null; done
 }
+boot_time() { sysctl -n kern.boottime 2>/dev/null | sed -n 's/^[^0-9]*\\([0-9][0-9]*\\).*/\\1/p'; }
 
-log "installing Amu $AMU_VERSION over $AMU_OLD_VERSION"
-if ! wait_pid_exit "$AMU_PID" 120; then log "Amu did not quit; update skipped"; exit 1; fi
-if ! wait_port_free 60; then log "port $AMU_PORT is still in use; update skipped"; launch; exit 1; fi
-
-# Leftovers of an earlier run. Amu was just running, so the live files work.
-# A leftover that cannot be removed would swallow the live folder on rename.
-for item in $AMU_REPLACE; do
-  # Only the app code must already be there; a part new in this version is added.
-  [ "$item" != "app.asar" ] || [ -e "$RES/$item" ] || { log "update skipped: $item is missing"; launch; exit 1; }
-  rm -rf "$RES/.amu-new-$item" "$RES/.amu-failed-$item" "$RES/.amu-old-$item"
-  if [ -e "$RES/.amu-new-$item" ] || [ -e "$RES/.amu-failed-$item" ] || [ -e "$RES/.amu-old-$item" ]; then
-    log "update skipped: could not clear an earlier attempt for $item"; launch; exit 1
-  fi
-done
-rm -f "$SAVED_PLIST"
-
-# 1. Copy the new files next to the live ones. Nothing live changes yet.
-skip() {
-  log "update skipped: $1"
-  for item in $AMU_REPLACE; do rm -rf "$RES/.amu-new-$item"; done
-  rm -f "$SAVED_PLIST"
-  launch
-  exit 1
+# The journal: which phase the swap is in, who is running it, and which
+# parts the old Amu did not have. Written whole, then renamed into place.
+write_journal() {
+  printf 'phase=%s\\npid=%s\\nboot=%s\\nabsent=%s\\n' "$1" "$$" "$(boot_time)" "$WAS_ABSENT" > "$JOURNAL.tmp" &&
+    mv -f "$JOURNAL.tmp" "$JOURNAL"
 }
-for item in $AMU_REPLACE; do
-  ditto "$AMU_STAGING/$item" "$RES/.amu-new-$item" || skip "could not copy the new $item"
-done
-cp -p "$PLIST" "$SAVED_PLIST" || skip "could not save Info.plist"
+journal_field() { sed -n "s/^$1=//p" "$JOURNAL" 2>/dev/null | head -n 1; }
 
-# 2. Swap by renames inside Resources, which cannot leave half a file.
-SWAPPED=""
-WAS_ABSENT=""
+xml() { printf '%s' "$1" | sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g'; }
+# Loads a launchd job that runs this script with AMU_MODE=recover every few
+# seconds. It is loaded from the updates folder, so a restart drops it.
+start_watchdog() {
+  local name
+  "$LAUNCHCTL" bootout "$WATCH_DOMAIN/$WATCH_LABEL" >/dev/null 2>&1
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\\n<plist version="1.0"><dict>\\n'
+    printf '<key>Label</key><string>%s</string>\\n' "$WATCH_LABEL"
+    printf '<key>ProgramArguments</key><array><string>/bin/bash</string><string>%s</string></array>\\n' "$(xml "$SCRIPT")"
+    printf '<key>StartInterval</key><integer>%s</integer>\\n' "$WATCH_INTERVAL"
+    printf '<key>EnvironmentVariables</key><dict>\\n'
+    printf '<key>AMU_MODE</key><string>recover</string>\\n'
+    for name in AMU_PID AMU_APP AMU_STAGING AMU_UPDATES AMU_LOG AMU_VERSION AMU_OLD_VERSION AMU_ASAR_HASH AMU_REPLACE AMU_PORT AMU_STATE_DIR AMU_OPEN AMU_HEALTH_TIMEOUT; do
+      [ -n "\${!name:-}" ] || continue
+      printf '<key>%s</key><string>%s</string>\\n' "$name" "$(xml "\${!name}")"
+    done
+    printf '</dict>\\n</dict></plist>\\n'
+  } > "$WATCH_PLIST" || { log "could not write the update watchdog"; return 1; }
+  "$LAUNCHCTL" bootstrap "$WATCH_DOMAIN" "$WATCH_PLIST" >> "$AMU_LOG" 2>&1 ||
+    log "could not start the update watchdog; an interrupted update will need a manual restore"
+}
+# Last step on every way out: unloading the job also ends a running recovery.
+stop_watchdog() {
+  rm -f "$WATCH_PLIST"
+  "$LAUNCHCTL" bootout "$WATCH_DOMAIN/$WATCH_LABEL" >/dev/null 2>&1
+}
+
+# Puts back whatever the files on disk say was swapped, so it works both
+# right after a failed check and for a recovery after the installer died.
 restore() {
-  local item status=0
-  for item in $SWAPPED; do
-    # Rename the new file away first, so the old one never lands inside a
-    # leftover folder; deleting comes last and may fail harmlessly.
-    if [ -e "$RES/$item" ] && ! mv "$RES/$item" "$RES/.amu-failed-$item"; then
-      status=1
-      continue
+  local item status=0 absent
+  absent=" \${WAS_ABSENT:-} "
+  for item in $AMU_REPLACE; do
+    if [ -e "$RES/.amu-old-$item" ]; then
+      # Rename the new file away first, so the old one never lands inside a
+      # leftover folder; deleting comes last and may fail harmlessly.
+      if [ -e "$RES/$item" ] && ! mv "$RES/$item" "$RES/.amu-failed-$item"; then
+        status=1
+        continue
+      fi
+      mv "$RES/.amu-old-$item" "$RES/$item" || status=1
+    else
+      case "$absent" in
+        *" $item "*) if [ -e "$RES/$item" ]; then mv "$RES/$item" "$RES/.amu-failed-$item" || status=1; fi ;;
+      esac
     fi
-    case " $WAS_ABSENT " in *" $item "*) ;; *) mv "$RES/.amu-old-$item" "$RES/$item" || status=1 ;; esac
   done
   for item in $AMU_REPLACE; do rm -rf "$RES/.amu-new-$item" "$RES/.amu-failed-$item"; done
-  cp -p "$SAVED_PLIST" "$PLIST" || status=1
-  [ "$status" -eq 0 ] && rm -f "$SAVED_PLIST"
+  rm -f "$NEW_PLIST"
+  if [ -e "$SAVED_PLIST" ]; then mv -f "$SAVED_PLIST" "$PLIST" || status=1; fi
   return "$status"
 }
 fail() {
@@ -140,53 +177,129 @@ fail() {
   printf '%s\\n' "$AMU_VERSION: $1" > "$AMU_UPDATES/last-failure.txt"
   stop_app
   wait_port_free 60
-  if ! restore; then log "RESTORE INCOMPLETE: check $RES for .amu-old-* files"; fi
+  if restore; then
+    rm -f "$JOURNAL"
+  else
+    log "RESTORE INCOMPLETE: check $RES for .amu-old-* files"
+  fi
+  launch
+  stop_watchdog
+  exit 1
+}
+
+# 3. Healthy once the new Amu runs and its own backend holds its port and
+# answers there. Then keep the previous files as one backup outside the bundle.
+verify_and_finish() {
+  local i=0
+  until healthy; do
+    i=$((i + 1))
+    [ "$i" -ge "$HEALTH_TIMEOUT" ] && fail "the new Amu did not start"
+    sleep 1
+  done
+  log "Amu $AMU_VERSION is running"
+  rm -f "$JOURNAL" "$AMU_UPDATES/last-failure.txt" "$SAVED_PLIST"
+  rm -rf "$AMU_STAGING"
+  ls -d "$AMU_UPDATES"/backup-* 2>/dev/null | while IFS= read -r old; do rm -rf "$old"; done
+  BACKUP="$AMU_UPDATES/backup-$AMU_OLD_VERSION"
+  mkdir -p "$BACKUP"
+  for item in $AMU_REPLACE; do
+    [ -e "$RES/.amu-old-$item" ] || continue
+    if ! mv "$RES/.amu-old-$item" "$BACKUP/$item"; then
+      rm -rf "$BACKUP/$item"
+      log "kept the previous $item inside the app; the next update removes it"
+    fi
+  done
+  stop_watchdog
+  exit 0
+}
+
+if [ "$MODE" = recover ]; then
+  [ -f "$JOURNAL" ] || { stop_watchdog; exit 0; }
+  PHASE="$(journal_field phase)"
+  OWNER="$(journal_field pid)"
+  case "$OWNER" in ""|*[!0-9]*) OWNER="" ;; esac
+  # The installer is still at work: same boot, and its process is alive.
+  if [ -n "$OWNER" ] && [ "$(journal_field boot)" = "$(boot_time)" ] && kill -0 "$OWNER" 2>/dev/null &&
+    ps -p "$OWNER" -o command= 2>/dev/null | grep -qF "$SCRIPT"; then
+    exit 0
+  fi
+  WAS_ABSENT=""
+  for item in $(journal_field absent); do
+    case " $AMU_REPLACE " in *" $item "*) WAS_ABSENT="$WAS_ABSENT $item" ;; esac
+  done
+  log "the installer stopped during the $PHASE phase; finishing the update for it"
+  case "$PHASE" in
+    verify)
+      # The installer may have died before it opened the new Amu.
+      if [ -z "$(app_pids)" ]; then
+        touch "$LAUNCH_MARK"
+        launch
+      fi
+      verify_and_finish
+      ;;
+    *) fail "the installer stopped while swapping files" ;;
+  esac
+fi
+
+log "installing Amu $AMU_VERSION over $AMU_OLD_VERSION"
+if ! wait_pid_exit "$AMU_PID" 120; then log "Amu did not quit; update skipped"; exit 1; fi
+if ! wait_port_free 60; then log "port $AMU_PORT is still in use; update skipped"; launch; exit 1; fi
+
+# Leftovers of an earlier run. Amu was just running, so the live files work,
+# and a journal left behind describes a state that no longer applies.
+# A leftover that cannot be removed would swallow the live folder on rename.
+stop_watchdog
+rm -f "$JOURNAL" "$JOURNAL.tmp"
+WAS_ABSENT=""
+for item in $AMU_REPLACE; do
+  # Only the app code must already be there; a part new in this version is added.
+  [ "$item" != "app.asar" ] || [ -e "$RES/$item" ] || { log "update skipped: $item is missing"; launch; exit 1; }
+  [ -e "$RES/$item" ] || WAS_ABSENT="$WAS_ABSENT $item"
+  rm -rf "$RES/.amu-new-$item" "$RES/.amu-failed-$item" "$RES/.amu-old-$item"
+  if [ -e "$RES/.amu-new-$item" ] || [ -e "$RES/.amu-failed-$item" ] || [ -e "$RES/.amu-old-$item" ]; then
+    log "update skipped: could not clear an earlier attempt for $item"; launch; exit 1
+  fi
+done
+rm -f "$SAVED_PLIST" "$NEW_PLIST"
+
+# 1. Copy the new files and the edited Info.plist next to the live ones.
+# Nothing live changes yet.
+skip() {
+  log "update skipped: $1"
+  for item in $AMU_REPLACE; do rm -rf "$RES/.amu-new-$item"; done
+  rm -f "$SAVED_PLIST" "$NEW_PLIST"
   launch
   exit 1
 }
 for item in $AMU_REPLACE; do
+  ditto "$AMU_STAGING/$item" "$RES/.amu-new-$item" || skip "could not copy the new $item"
+done
+cp -p "$PLIST" "$SAVED_PLIST" || skip "could not save Info.plist"
+cp -p "$PLIST" "$NEW_PLIST" || skip "could not copy Info.plist"
+if "$PB" -c "Print :ElectronAsarIntegrity" "$NEW_PLIST" >/dev/null 2>&1; then
+  "$PB" -c "Set :ElectronAsarIntegrity:Resources/app.asar:hash $AMU_ASAR_HASH" "$NEW_PLIST" || skip "could not update the asar hash"
+fi
+"$PB" -c "Set :CFBundleShortVersionString $AMU_VERSION" "$NEW_PLIST" || skip "could not update the version"
+"$PB" -c "Set :CFBundleVersion $AMU_VERSION" "$NEW_PLIST" || skip "could not update the version"
+
+# 2. Swap by renames inside the bundle, which cannot leave half a file. From
+# here the journal and the watchdog can finish the job if this process dies.
+write_journal swap || skip "could not write the update journal"
+start_watchdog
+for item in $AMU_REPLACE; do
   if [ -e "$RES/$item" ]; then
     mv "$RES/$item" "$RES/.amu-old-$item" || fail "could not move $item aside"
-  else
-    WAS_ABSENT="$WAS_ABSENT $item"
   fi
-  SWAPPED="$SWAPPED $item"
   mv "$RES/.amu-new-$item" "$RES/$item" || fail "could not move the new $item in"
 done
-if "$PB" -c "Print :ElectronAsarIntegrity" "$PLIST" >/dev/null 2>&1; then
-  "$PB" -c "Set :ElectronAsarIntegrity:Resources/app.asar:hash $AMU_ASAR_HASH" "$PLIST" || fail "could not update the asar hash"
-fi
-"$PB" -c "Set :CFBundleShortVersionString $AMU_VERSION" "$PLIST" || fail "could not update the version"
-"$PB" -c "Set :CFBundleVersion $AMU_VERSION" "$PLIST" || fail "could not update the version"
+mv -f "$NEW_PLIST" "$PLIST" || fail "could not put the new Info.plist in place"
 for item in $AMU_REPLACE; do xattr -dr com.apple.quarantine "$RES/$item" 2>/dev/null; done
+write_journal verify || log "could not record the swap as done; a recovery would restore the old Amu"
 
-# 3. Open the new Amu. Healthy once it runs and its own backend holds its
-# port and answers there.
 touch "$LAUNCH_MARK"
 sleep 1
 launch
-i=0
-until healthy; do
-  i=$((i + 1))
-  [ "$i" -ge "$HEALTH_TIMEOUT" ] && fail "the new Amu did not start"
-  sleep 1
-done
-log "Amu $AMU_VERSION is running"
-rm -f "$AMU_UPDATES/last-failure.txt" "$SAVED_PLIST"
-rm -rf "$AMU_STAGING"
-
-# 4. Keep the previous files as one backup outside the bundle.
-ls -d "$AMU_UPDATES"/backup-* 2>/dev/null | while IFS= read -r old; do rm -rf "$old"; done
-BACKUP="$AMU_UPDATES/backup-$AMU_OLD_VERSION"
-mkdir -p "$BACKUP"
-for item in $AMU_REPLACE; do
-  [ -e "$RES/.amu-old-$item" ] || continue
-  if ! mv "$RES/.amu-old-$item" "$BACKUP/$item"; then
-    rm -rf "$BACKUP/$item"
-    log "kept the previous $item inside the app; the next update removes it"
-  fi
-done
-exit 0
+verify_and_finish
 `;
 
 export interface AmuInstallInput {

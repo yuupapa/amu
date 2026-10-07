@@ -121,7 +121,8 @@ describe("Luna Auto authenticated local HTTP route", () => {
                   response.status,
                   `${base} ${origin} ${bearer === token ? "valid" : "invalid/absent"} ${response.status === 500 ? await response.text() : ""}`,
                 ).toBe(expected);
-                if (expected === 200) expect(await response.json()).toEqual({ cancelled: true });
+                // Nothing was issued under this id, so there was nothing to cancel.
+                if (expected === 200) expect(await response.json()).toEqual({ cancelled: false });
               }
             }),
           (web) => Effect.promise(() => web.dispose()),
@@ -188,6 +189,25 @@ it.effect(
         })),
         ({ web, judge }) =>
           Effect.promise(async () => {
+            const post = (body: unknown) =>
+              web.handler(
+                new Request("http://127.0.0.1:5233/api/luna-auto", {
+                  method: "POST",
+                  headers: {
+                    host: "127.0.0.1:5233",
+                    origin: "t3code://app",
+                    authorization: `Bearer ${token}`,
+                    "content-type": "application/json",
+                    "x-amu-auto": "1",
+                  },
+                  body: encodeJson(body),
+                }),
+                requestContext,
+              );
+            const issued = await post({ action: "issue" });
+            expect(issued.status).toBe(200);
+            const { result: id } = (await issued.json()) as { result: string };
+            expect(id).toMatch(/^luna-[0-9a-f-]{36}$/);
             const response = await web.handler(
               new Request("http://127.0.0.1:5233/api/luna-auto", {
                 method: "POST",
@@ -199,7 +219,7 @@ it.effect(
                   "x-amu-auto": "1",
                 },
                 body: encodeJson({
-                  id: "luna-1760000000000-legacy-route-0001",
+                  id,
                   action: "decide",
                   prompt: "架空の依頼",
                   models: [{ instanceId: "codex", model: "gpt-6-luna" }],

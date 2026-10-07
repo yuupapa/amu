@@ -511,10 +511,8 @@ export function SplitDropOverlay() {
         className="pointer-events-none fixed z-50 max-w-64 rounded-md border bg-popover px-2.5 py-1.5 text-popover-foreground shadow-lg"
         style={dragCardPosition(point)}
       >
-        <div
-          className="truncate text-xs font-medium"
-          translate={shell?.title === "New thread" ? undefined : "no"}
-        >
+        {/* A saved title, shown as stored like in the sidebar, even when it reads "New thread". */}
+        <div className="truncate text-xs font-medium" translate="no">
           {shell?.title ?? ""}
         </div>
         <div className={cn("text-2xs", blocked ? "text-destructive" : "text-muted-foreground")}>

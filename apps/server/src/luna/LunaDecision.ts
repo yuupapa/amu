@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - captured ephemeral CLI, bounded output and cancellation.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -208,57 +209,71 @@ export async function runLunaJudge(input: JudgeInput): Promise<AutoDecision> {
 }
 
 /**
- * Each request id carries the time it was made (`luna-<ms>-<random>`), so a
- * repeated id is refused while it is remembered and an old one is refused for
- * being old. Nothing has to be remembered past that window.
+ * Luna only judges under an id this server handed out (`issue`), and each id
+ * is good for one judgement. Ids live in memory, so a restart forgets every
+ * one of them: an id from before it, or one replayed later, is refused. Age
+ * is measured on a monotonic clock, so changing the system time does not
+ * bring an old id back.
  */
-export const LUNA_REQUEST_TTL_MS = 10 * 60_000;
-const SEEN_ID_LIMIT = 4_096;
+export const LUNA_TICKET_TTL_MS = 10 * 60_000;
+const TICKET_LIMIT = 256;
 const RUNNING_LIMIT = 16;
 
-export function lunaRequestTime(id: string): number | null {
-  const match = /^luna-(\d{13})-[A-Za-z0-9-]{8,}$/.exec(id);
-  return match ? Number(match[1]) : null;
-}
+const monotonicNow = () => performance.now();
+const newTicketId = () => `luna-${NodeCrypto.randomUUID()}`;
 
 export class LunaDecisionBroker {
+  /** Ids handed out and not used yet, with when they were handed out. */
+  private readonly issued = new Map<string, number>();
   /** Judgements running now. */
   private readonly running = new Map<string, AbortController>();
-  /** Finished, failed or cancelled ids and when their request was made. */
-  private readonly seen = new Map<string, number>();
   private readonly judge: typeof runLunaJudge;
   private readonly now: () => number;
-  constructor(judge = runLunaJudge, now: () => number = Date.now) {
+  private readonly newId: () => string;
+  constructor(
+    judge = runLunaJudge,
+    now: () => number = monotonicNow,
+    newId: () => string = newTicketId,
+  ) {
     this.judge = judge;
     this.now = now;
+    this.newId = newId;
   }
   private forgetOld() {
-    const oldest = this.now() - LUNA_REQUEST_TTL_MS;
-    for (const [id, at] of this.seen) if (at < oldest) this.seen.delete(id);
+    const oldest = this.now() - LUNA_TICKET_TTL_MS;
+    for (const [id, at] of this.issued) if (at < oldest) this.issued.delete(id);
   }
-  private remember(id: string, at: number) {
+  /** A fresh single-use id. When too many are outstanding the oldest stops working. */
+  issue(): string {
     this.forgetOld();
-    this.seen.set(id, at);
+    for (const id of this.issued.keys()) {
+      if (this.issued.size < TICKET_LIMIT) break;
+      this.issued.delete(id);
+    }
+    const id = this.newId();
+    this.issued.set(id, this.now());
+    return id;
   }
-  private inWindow(at: number | null): at is number {
-    const now = this.now();
-    return at !== null && at >= now - LUNA_REQUEST_TTL_MS && at <= now + 60_000;
-  }
-  cancel(id: string) {
-    const at = lunaRequestTime(id);
-    if (!this.inWindow(at)) return;
-    // A cancel that arrives before its judgement still stops it.
-    this.running.get(id)?.abort();
-    this.forgetOld();
-    if (this.seen.size < SEEN_ID_LIMIT) this.remember(id, at);
+  /** Whether the id was waiting or running here, so it can no longer be judged. */
+  cancel(id: string): boolean {
+    const running = this.running.get(id);
+    if (running) {
+      running.abort();
+      return true;
+    }
+    // Withdrawing an unused id is enough: a judgement needs it.
+    return this.issued.delete(id);
   }
   async decide(id: string, input: Omit<JudgeInput, "signal">): Promise<AutoDecision> {
-    const at = lunaRequestTime(id);
-    if (!this.inWindow(at)) throw new Error("このモデル選択は期限切れです。送信し直してください。");
-    this.forgetOld();
-    if (this.running.has(id) || this.seen.has(id))
+    if (this.running.has(id))
       throw new Error("このモデル選択は開始済みです。結果不明の依頼を自動再送しません。");
-    if (this.running.size >= RUNNING_LIMIT || this.seen.size >= SEEN_ID_LIMIT)
+    this.forgetOld();
+    // Used up here, before anything can fail, so the id never runs twice.
+    if (!this.issued.delete(id))
+      throw new Error(
+        "このモデル選択は期限切れか、開始済みです。結果不明の依頼は自動再送しません。送信し直してください。",
+      );
+    if (this.running.size >= RUNNING_LIMIT)
       throw new Error("モデル選択が混み合っています。少し待ってから送信してください。");
     const c = new AbortController();
     this.running.set(id, c);
@@ -268,7 +283,6 @@ export class LunaDecisionBroker {
       return validateAutoDecision(result, input.choices);
     } finally {
       this.running.delete(id);
-      this.remember(id, at);
     }
   }
   close() {

@@ -499,14 +499,16 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
           const data = yield* Schema.decodeEffect(
             Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
           )(body).pipe(Effect.orElseSucceed(() => null));
+          // A single-use id from this server; every judgement needs one.
+          if (data?.action === "issue")
+            return HttpServerResponse.jsonUnsafe({ result: broker.issue() });
           if (!data || typeof data.id !== "string" || !/^[a-zA-Z0-9-]{20,80}$/.test(data.id))
             return HttpServerResponse.jsonUnsafe(
               { error: "モデル選択の形式が不正です。" },
               { status: 400 },
             );
           if (data.action === "cancel") {
-            broker.cancel(data.id);
-            return HttpServerResponse.jsonUnsafe({ cancelled: true });
+            return HttpServerResponse.jsonUnsafe({ cancelled: broker.cancel(data.id) });
           }
           if (
             data.action !== "decide" ||

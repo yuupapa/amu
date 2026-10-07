@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - Runs the real installer script against a fake bundle and times other processes around it.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - Runs the real installer script against a fake bundle and times other processes around it.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
@@ -31,6 +31,7 @@ let fakeAppBinary: string;
 let app: string;
 let staging: string;
 let updates: string;
+let launchctl: string;
 
 const read = (path: string) => NodeFS.readFileSync(path, "utf8");
 const plistValue = (key: string) =>
@@ -53,29 +54,86 @@ function bundlePids(): number[] {
     );
 }
 
-function runInstaller(extra: Record<string, string>) {
+function installerEnv(extra: Record<string, string>, appPid: number, port?: string) {
+  return {
+    ...amuInstallEnvironment({
+      appPid,
+      appBundlePath: app,
+      stagingDir: staging,
+      updatesDir: updates,
+      logPath: NodePath.join(updates, "install.log"),
+      version: "0.0.45",
+      oldVersion: "0.0.44",
+      asarIntegrityHash: "c".repeat(64),
+      replace: ["app.asar", "app.asar.unpacked"],
+      port,
+    }),
+    // Never load a real launchd job from a test.
+    AMU_LAUNCHCTL: launchctl,
+    ...extra,
+  };
+}
+
+function writeScript() {
   const scriptPath = NodePath.join(updates, "install-update.sh");
   NodeFS.writeFileSync(scriptPath, AMU_INSTALL_SCRIPT, { mode: 0o700 });
+  return scriptPath;
+}
+
+function runInstaller(extra: Record<string, string>) {
+  const scriptPath = writeScript();
   // A process that has already exited stands in for the quitting Amu.
   const quitPid = NodeChildProcess.spawnSync("/usr/bin/true").pid ?? 999_999;
   return NodeChildProcess.spawnSync("/bin/bash", [scriptPath], {
-    env: {
-      ...amuInstallEnvironment({
-        appPid: quitPid,
-        appBundlePath: app,
-        stagingDir: staging,
-        updatesDir: updates,
-        logPath: NodePath.join(updates, "install.log"),
-        version: "0.0.45",
-        oldVersion: "0.0.44",
-        asarIntegrityHash: "c".repeat(64),
-        replace: ["app.asar", "app.asar.unpacked"],
-        port: undefined,
-      }),
-      ...extra,
-    },
+    env: installerEnv(extra, quitPid),
     timeout: 30_000,
   });
+}
+
+const launchctlCalls = () =>
+  NodeFS.existsSync(NodePath.join(root, "launchctl.log"))
+    ? read(NodePath.join(root, "launchctl.log")).trim().split("\n")
+    : [];
+
+const bootTime = () =>
+  NodeChildProcess.execFileSync("/usr/sbin/sysctl", ["-n", "kern.boottime"])
+    .toString()
+    .match(/sec = (\d+)/)![1]!;
+
+function writeLauncher() {
+  const launcher = NodePath.join(root, "launch.sh");
+  NodeFS.writeFileSync(launcher, '#!/bin/sh\n"$1/Contents/MacOS/Amu" 20 >/dev/null 2>&1 &\n', {
+    mode: 0o755,
+  });
+  return launcher;
+}
+
+/** The bundle as an installer that died halfway through the swap left it. */
+function leaveHalfSwapped(journal: { phase: string; pid: number; boot?: string }) {
+  const resources = NodePath.join(app, "Contents/Resources");
+  NodeFS.renameSync(
+    NodePath.join(resources, "app.asar"),
+    NodePath.join(resources, ".amu-old-app.asar"),
+  );
+  NodeFS.renameSync(
+    NodePath.join(resources, "app.asar.unpacked"),
+    NodePath.join(resources, ".amu-old-app.asar.unpacked"),
+  );
+  NodeFS.cpSync(
+    NodePath.join(staging, "app.asar.unpacked"),
+    NodePath.join(resources, "app.asar.unpacked"),
+    {
+      recursive: true,
+    },
+  );
+  NodeFS.copyFileSync(
+    NodePath.join(app, "Contents/Info.plist"),
+    NodePath.join(app, "Contents/.amu-old-Info.plist"),
+  );
+  NodeFS.writeFileSync(
+    NodePath.join(updates, "install-journal"),
+    `phase=${journal.phase}\npid=${journal.pid}\nboot=${journal.boot ?? bootTime()}\nabsent=\n`,
+  );
 }
 
 // A tiny "app" that sleeps. macOS kills copies of its own system binaries
@@ -112,6 +170,10 @@ beforeEach(() => {
   NodeFS.writeFileSync(NodePath.join(staging, "app.asar"), "new code");
   NodeFS.writeFileSync(NodePath.join(staging, "app.asar.unpacked/native.node"), "new native");
   NodeFS.mkdirSync(updates, { recursive: true });
+  launchctl = NodePath.join(root, "launchctl.sh");
+  NodeFS.writeFileSync(launchctl, `#!/bin/sh\necho "$*" >> "${root}/launchctl.log"\n`, {
+    mode: 0o755,
+  });
 });
 
 afterEach(() => {
@@ -235,6 +297,7 @@ describe.skipIf(!isMac)("Amu update installer", () => {
             port,
           }),
           AMU_OPEN: "/usr/bin/true",
+          AMU_LAUNCHCTL: launchctl,
         },
       });
       await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -275,6 +338,7 @@ describe.skipIf(!isMac)("Amu update installer", () => {
         }),
         AMU_OPEN: launcher,
         AMU_HEALTH_TIMEOUT: "4",
+        AMU_LAUNCHCTL: launchctl,
       },
     });
     // After the swap starts, another process takes the port, so the new app
@@ -289,6 +353,163 @@ describe.skipIf(!isMac)("Amu update installer", () => {
     expect(plistValue(":CFBundleShortVersionString")).toBe("0.0.44");
     expect(read(NodePath.join(updates, "last-failure.txt"))).toContain("did not start");
   }, 30_000);
+
+  it("watches the swap with a launchd job and unloads it when done", () => {
+    const result = runInstaller({ AMU_OPEN: writeLauncher(), AMU_HEALTH_TIMEOUT: "10" });
+
+    expect(result.status, read(NodePath.join(updates, "install.log"))).toBe(0);
+    const calls = launchctlCalls();
+    expect(calls.some((call) => call.startsWith("bootstrap gui/"))).toBe(true);
+    expect(calls.at(-1)).toMatch(/^bootout gui\/\d+\/com\.yuupapa\.amu\.update-watchdog$/);
+    expect(NodeFS.existsSync(NodePath.join(updates, "install-journal"))).toBe(false);
+    expect(NodeFS.existsSync(NodePath.join(updates, "update-watchdog.plist"))).toBe(false);
+  });
+
+  it("writes a watchdog job that runs this script in recovery mode", () => {
+    // Stop at the health check, so the job file is still there to read.
+    const scriptPath = writeScript();
+    const child = NodeChildProcess.spawn("/bin/bash", [scriptPath], {
+      env: installerEnv({ AMU_OPEN: "/usr/bin/true", AMU_HEALTH_TIMEOUT: "20" }, 999_999),
+    });
+    const plistPath = NodePath.join(updates, "update-watchdog.plist");
+    const deadline = Date.now() + 10_000;
+    while (!NodeFS.existsSync(plistPath) && Date.now() < deadline) {
+      NodeChildProcess.spawnSync("/bin/sleep", ["0.2"]);
+    }
+    child.kill("SIGKILL");
+    const lint = NodeChildProcess.spawnSync("/usr/bin/plutil", ["-lint", plistPath]);
+    expect(lint.status, lint.stdout.toString()).toBe(0);
+    const job = NodeChildProcess.execFileSync("/usr/bin/plutil", [
+      "-convert",
+      "json",
+      "-o",
+      "-",
+      plistPath,
+    ]);
+    const parsed = JSON.parse(job.toString());
+    expect(parsed.ProgramArguments).toEqual(["/bin/bash", NodeFS.realpathSync(scriptPath)]);
+    expect(parsed.EnvironmentVariables.AMU_MODE).toBe("recover");
+    expect(parsed.EnvironmentVariables.AMU_APP).toBe(app);
+  });
+
+  it("restores the old app when the installer died in the middle of the swap", () => {
+    leaveHalfSwapped({ phase: "swap", pid: 999_999 });
+    const result = runInstaller({ AMU_MODE: "recover", AMU_OPEN: "/usr/bin/true" });
+
+    expect(result.status).toBe(1);
+    const resources = NodePath.join(app, "Contents/Resources");
+    expect(read(NodePath.join(resources, "app.asar"))).toBe("old code");
+    expect(read(NodePath.join(resources, "app.asar.unpacked/native.node"))).toBe("old native");
+    expect(plistValue(":CFBundleShortVersionString")).toBe("0.0.44");
+    expect(NodeFS.readdirSync(resources).filter((name) => name.startsWith(".amu-"))).toEqual([]);
+    expect(NodeFS.existsSync(NodePath.join(updates, "install-journal"))).toBe(false);
+    expect(read(NodePath.join(updates, "install.log"))).toContain("stopped during the swap phase");
+    expect(launchctlCalls().at(-1)).toMatch(/^bootout /);
+  });
+
+  it("does nothing while the installer that wrote the journal is still running", () => {
+    const scriptPath = writeScript();
+    // A live process whose command line names the script stands in for it.
+    const stand = NodeChildProcess.spawn("/bin/sh", [
+      "-c",
+      "sleep 10; true",
+      NodeFS.realpathSync(scriptPath),
+    ]);
+    try {
+      leaveHalfSwapped({ phase: "swap", pid: stand.pid! });
+      const result = NodeChildProcess.spawnSync("/bin/bash", [scriptPath], {
+        env: installerEnv({ AMU_MODE: "recover", AMU_OPEN: "/usr/bin/true" }, 999_999),
+      });
+
+      expect(result.status).toBe(0);
+      const resources = NodePath.join(app, "Contents/Resources");
+      expect(NodeFS.existsSync(NodePath.join(resources, ".amu-old-app.asar"))).toBe(true);
+      expect(NodeFS.existsSync(NodePath.join(updates, "install-journal"))).toBe(true);
+      expect(launchctlCalls()).toEqual([]);
+    } finally {
+      stand.kill("SIGKILL");
+    }
+  });
+
+  it("does not trust a journal from before a restart", () => {
+    // The same pid may belong to anything after a restart.
+    const stand = NodeChildProcess.spawn("/bin/sh", ["-c", "sleep 10; true", writeScript()]);
+    try {
+      leaveHalfSwapped({ phase: "swap", pid: stand.pid!, boot: "1" });
+      const result = runInstaller({ AMU_MODE: "recover", AMU_OPEN: "/usr/bin/true" });
+
+      expect(result.status).toBe(1);
+      expect(read(NodePath.join(app, "Contents/Resources/app.asar"))).toBe("old code");
+    } finally {
+      stand.kill("SIGKILL");
+    }
+  });
+
+  it("finishes the health check for an installer killed while waiting on it", async () => {
+    const scriptPath = writeScript();
+    const child = NodeChildProcess.spawn("/bin/bash", [scriptPath], {
+      env: installerEnv({ AMU_OPEN: "/usr/bin/true", AMU_HEALTH_TIMEOUT: "60" }, 999_999),
+    });
+    const journal = NodePath.join(updates, "install-journal");
+    const deadline = Date.now() + 10_000;
+    while (
+      !(NodeFS.existsSync(journal) && read(journal).startsWith("phase=verify")) &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.on("exit", resolve));
+    const resources = NodePath.join(app, "Contents/Resources");
+    expect(read(NodePath.join(resources, "app.asar"))).toBe("new code");
+
+    // The new Amu comes up when the watchdog opens it: the update stands.
+    const result = runInstaller({
+      AMU_MODE: "recover",
+      AMU_OPEN: writeLauncher(),
+      AMU_HEALTH_TIMEOUT: "10",
+    });
+    expect(result.status, read(NodePath.join(updates, "install.log"))).toBe(0);
+    expect(read(NodePath.join(resources, "app.asar"))).toBe("new code");
+    expect(plistValue(":CFBundleShortVersionString")).toBe("0.0.45");
+    expect(read(NodePath.join(updates, "backup-0.0.44/app.asar"))).toBe("old code");
+    expect(NodeFS.existsSync(journal)).toBe(false);
+  }, 30_000);
+
+  it("restores the old app when the killed installer's new Amu never comes up", async () => {
+    const scriptPath = writeScript();
+    const child = NodeChildProcess.spawn("/bin/bash", [scriptPath], {
+      env: installerEnv({ AMU_OPEN: "/usr/bin/true", AMU_HEALTH_TIMEOUT: "60" }, 999_999),
+    });
+    const journal = NodePath.join(updates, "install-journal");
+    const deadline = Date.now() + 10_000;
+    while (
+      !(NodeFS.existsSync(journal) && read(journal).startsWith("phase=verify")) &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.on("exit", resolve));
+
+    const result = runInstaller({
+      AMU_MODE: "recover",
+      AMU_OPEN: "/usr/bin/true",
+      AMU_HEALTH_TIMEOUT: "2",
+    });
+    expect(result.status).toBe(1);
+    expect(read(NodePath.join(app, "Contents/Resources/app.asar"))).toBe("old code");
+    expect(plistValue(":CFBundleShortVersionString")).toBe("0.0.44");
+    expect(plistValue(":ElectronAsarIntegrity:Resources/app.asar:hash")).toBe("0".repeat(64));
+  }, 30_000);
+
+  it("leaves without touching anything when there is no journal", () => {
+    const result = runInstaller({ AMU_MODE: "recover", AMU_OPEN: "/usr/bin/true" });
+
+    expect(result.status).toBe(0);
+    expect(read(NodePath.join(app, "Contents/Resources/app.asar"))).toBe("old code");
+    expect(launchctlCalls().at(-1)).toMatch(/^bootout /);
+  });
 
   it("refuses a file listed twice", () => {
     const result = runInstaller({ AMU_REPLACE: "app.asar app.asar" });

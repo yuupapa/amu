@@ -19,12 +19,12 @@ import {
   cancelPendingAutoRecord,
   AutoRecordUnreadableError,
   discardAutoRecord,
+  issueLunaTicket,
   lunaAutoRequest,
   readAutoRecord,
   runLunaAuto,
   type AutoTicket,
 } from "../lib/lunaAuto";
-import { randomUUID } from "../lib/utils";
 import { uiText } from "../uiText";
 
 /**
@@ -103,7 +103,8 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
   const [mode, setMode] = useState({ key: routeThreadKey, enabled: false });
   const [status, setStatus] = useState<Status | null>(null);
   const [manualRecoveryKey, setManualRecoveryKey] = useState<string | null>(null);
-  const pending = useRef<{ id: string; controller: AbortController } | null>(null);
+  /** The id is known once the server has issued it. */
+  const pending = useRef<{ id: string | null; controller: AbortController } | null>(null);
   const prepared = useRef<Prepared | null>(null);
   const dispatched = useRef<ModelSelection | null>(null);
 
@@ -111,7 +112,7 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
     const current = pending.current;
     if (!current) return;
     current.controller.abort();
-    void lunaAutoRequest({ id: current.id, action: "cancel" }).catch(() => {});
+    if (current.id) void lunaAutoRequest({ id: current.id, action: "cancel" }).catch(() => {});
   }, []);
 
   // Leaving the thread stops a judgement that is still running.
@@ -209,18 +210,21 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
       );
     };
     const threadRef = live.current.currentThreadRef();
-    // The time in the id lets the server refuse a stale or replayed request.
-    const id = `luna-${Date.now()}-${randomUUID()}`;
     const controller = new AbortController();
-    pending.current = { id, controller };
+    const current: { id: string | null; controller: AbortController } = { id: null, controller };
+    pending.current = current;
     setStatus({ key, busy: true, text: "Lunaがモデルを選んでいます。元の依頼は保持しています。" });
     const timeout = window.setTimeout(() => {
       controller.abort();
-      void lunaAutoRequest({ id, action: "cancel" }).catch(() => {});
+      if (current.id) void lunaAutoRequest({ id: current.id, action: "cancel" }).catch(() => {});
     }, SEND_TIMEOUT_MS);
 
     void (async () => {
       try {
+        // The server hands out the id, so it can refuse a stale or replayed
+        // request even after it restarts.
+        const id = await issueLunaTicket(controller.signal);
+        current.id = id;
         const decision = await runLunaAuto({
           thread: key,
           id,
@@ -282,7 +286,7 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
         }
       } finally {
         window.clearTimeout(timeout);
-        if (pending.current?.id === id) pending.current = null;
+        if (pending.current === current) pending.current = null;
       }
     })();
     return true;

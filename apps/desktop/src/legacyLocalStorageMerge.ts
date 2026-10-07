@@ -18,8 +18,6 @@ const NOT_IMPORTED_KEYS = new Set([
   // Resumes a permission setup V1 left mid-flow; V2 would redirect to it on boot.
   "t3code:snap-shot-setup-resume:v1",
 ]);
-/** Matches MAX_STASH_ENTRIES in apps/web/src/promptStashStore.ts. */
-const MAX_STASH_ENTRIES = 20;
 const DRAFT_RECORD_FIELDS = [
   "draftsByThreadKey",
   "draftThreadsByThreadKey",
@@ -40,7 +38,11 @@ function parseObject(raw: string): JsonObject | null {
   }
 }
 
-/** V2 entries first, then V1 entries V2 does not already have, up to the stash cap. */
+/**
+ * V2 entries first, then V1 entries V2 does not already have. Not cut to the
+ * store's 20-entry cap: the store reads a longer list as is and only evicts
+ * when a new prompt is stashed, so every imported prompt stays restorable.
+ */
 function mergePromptStash(current: JsonObject, legacy: JsonObject): JsonObject | null {
   const currentEntries = isObject(current.state) ? current.state.entries : null;
   const legacyEntries = isObject(legacy.state) ? legacy.state.entries : null;
@@ -51,7 +53,7 @@ function mergePromptStash(current: JsonObject, legacy: JsonObject): JsonObject |
   const state = isObject(current.state) ? current.state : {};
   return {
     ...current,
-    state: { ...state, entries: [...currentEntries, ...added].slice(0, MAX_STASH_ENTRIES) },
+    state: { ...state, entries: [...currentEntries, ...added] },
   };
 }
 

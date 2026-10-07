@@ -104,6 +104,14 @@ export async function lunaAutoRequest(body: unknown, signal?: AbortSignal): Prom
   return result.result;
 }
 
+/** A single-use id from the server, needed for each judgement. */
+export async function issueLunaTicket(signal?: AbortSignal): Promise<string> {
+  const id = await lunaAutoRequest({ action: "issue" }, signal);
+  if (typeof id !== "string" || !/^[a-zA-Z0-9-]{20,80}$/.test(id))
+    throw new Error("Lunaの受付番号を受け取れませんでした。元の依頼を残して手動送信に戻ります。");
+  return id;
+}
+
 /** Hold the thread lock through normal-send acknowledgment. Persist before either paid boundary. */
 export async function runLunaAuto(input: {
   thread: string;
