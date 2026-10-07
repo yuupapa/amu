@@ -10,6 +10,7 @@ import {
   type ResolvedSettingsScope,
   type SettingsScopeSearch,
 } from "./settingsScope";
+import { withJapaneseAliases } from "../../amu/outgoingText";
 
 export type SettingsPath =
   | "/settings/projects"
@@ -1078,6 +1079,10 @@ export function searchSettings(
         title,
         normalizeSearchText(SETTINGS_SECTION_LABELS[item.to]),
         ...(item.searchTerms ?? []).map(normalizeSearchText),
+        // Amu shows these labels in Japanese; let the Japanese find them too.
+        ...withJapaneseAliases([item.title, SETTINGS_SECTION_LABELS[item.to]])
+          .slice(2)
+          .map(normalizeSearchText),
       ];
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];
 

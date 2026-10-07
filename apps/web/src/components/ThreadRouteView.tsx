@@ -22,6 +22,7 @@ import {
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
+import { useSplitLayoutStore } from "../splitLayoutStore";
 
 /**
  * The single chat surface behind both `/draft/$draftId` and
@@ -36,8 +37,17 @@ import {
  * Rendered by the `_chat` layout rather than by the two leaf routes, since
  * an element only survives a route swap when the same parent renders it.
  */
-export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
+export function ThreadRouteView({
+  target,
+  paneId = null,
+}: {
+  target: ThreadRouteTarget;
+  /** Set when rendered as a split pane; only the focused pane owns the route. */
+  paneId?: string | null;
+}) {
   const navigate = useNavigate();
+  // Outside the split view this view is the single pane; drops aim at it by id.
+  const singlePaneId = useSplitLayoutStore((state) => state.layout.focusedPaneId);
   const draftId = target.kind === "draft" ? target.draftId : null;
   const draftSession = useComposerDraftStore((store) =>
     draftId === null ? null : store.getDraftSession(draftId),
@@ -123,6 +133,12 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
       if (cancelled) {
         return;
       }
+      if (isBackgroundPane(paneId)) {
+        useSplitLayoutStore
+          .getState()
+          .setPaneTarget(paneId!, { kind: "server", threadRef: canonicalThreadRef });
+        return;
+      }
       void navigate({
         to: "/$environmentId/$threadId",
         params: buildThreadRouteParams(canonicalThreadRef),
@@ -132,14 +148,18 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     return () => {
       cancelled = true;
     };
-  }, [canonicalThreadRef, navigate]);
+  }, [canonicalThreadRef, navigate, paneId]);
 
   useEffect(() => {
     if (target.kind !== "draft" || draftSession || canonicalThreadRef) {
       return;
     }
+    if (isBackgroundPane(paneId)) {
+      useSplitLayoutStore.getState().closePane(paneId!);
+      return;
+    }
     void navigate({ to: "/", replace: true });
-  }, [canonicalThreadRef, draftSession, navigate, target.kind]);
+  }, [canonicalThreadRef, draftSession, navigate, paneId, target.kind]);
 
   useEffect(() => {
     if (target.kind !== "server" || !bootstrapComplete) {
@@ -151,11 +171,15 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     if (renderState === "missing") {
       const { clearPendingFileDropsForThread } = useSidebarPendingFileDropStore.getState();
       clearPendingFileDropsForThread(target.threadRef);
+      if (isBackgroundPane(paneId)) {
+        useSplitLayoutStore.getState().closePane(paneId!);
+        return;
+      }
       if (environmentHasAnyThreads) {
         void navigate({ to: "/", replace: true });
       }
     }
-  }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, target]);
+  }, [bootstrapComplete, environmentHasAnyThreads, navigate, paneId, renderState, target]);
 
   useEffect(() => {
     if (target.kind !== "server" || !serverThreadStarted || !draftThread) {
@@ -189,9 +213,21 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     );
   }
 
+  if (paneId !== null) {
+    return <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">{view}</div>;
+  }
+
   return (
-    <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh">
+    <SidebarInset
+      className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh"
+      data-split-pane-id={singlePaneId}
+    >
       {view}
     </SidebarInset>
   );
+}
+
+/** A split pane other than the focused one, which must not touch the route. */
+function isBackgroundPane(paneId: string | null): boolean {
+  return paneId !== null && useSplitLayoutStore.getState().layout.focusedPaneId !== paneId;
 }

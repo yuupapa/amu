@@ -9,7 +9,7 @@ export const MAC_PERMISSION_SETTINGS_URLS = {
 export type MacPermission = keyof typeof MAC_PERMISSION_SETTINGS_URLS;
 
 export const MAC_PERMISSION_TITLES: Record<MacPermission, string> = {
-  "screen-recording": "Screen Recording",
-  accessibility: "Accessibility",
-  "full-disk-access": "Full Disk Access",
+  "screen-recording": "画面収録",
+  accessibility: "アクセシビリティ",
+  "full-disk-access": "フルディスクアクセス",
 };

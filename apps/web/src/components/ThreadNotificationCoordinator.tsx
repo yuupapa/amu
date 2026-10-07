@@ -2,6 +2,7 @@ import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import * as Option from "effect/Option";
 import {
   CircleAlertIcon,
@@ -21,8 +22,10 @@ import {
   setNotificationBadge,
   unlockNotificationAudio,
 } from "../threadNotifications";
+import { isThreadShownInSplitPane } from "../splitLayoutStore";
 import { resolveSidebarThreadStatus } from "./Sidebar.logic";
 import { toastManager } from "./ui/toast";
+import { translateOutgoingText } from "../amu/outgoingText";
 
 export function ThreadNotificationCoordinator() {
   const environmentIds = useEnvironmentIds();
@@ -173,7 +176,8 @@ function EnvironmentNotifications({
         inAppNotificationsEnabled &&
         document.visibilityState === "visible" &&
         document.hasFocus() &&
-        (activeEnvironmentId !== environmentId || activeThreadId !== thread.id)
+        (activeEnvironmentId !== environmentId || activeThreadId !== thread.id) &&
+        !isThreadShownInSplitPane(scopeThreadRef(environmentId, thread.id))
       ) {
         const toastId = toastManager.add({
           type: kind === "completion" ? "success" : status === "failed" ? "error" : "warning",
@@ -213,7 +217,7 @@ function EnvironmentNotifications({
       )
         continue;
       try {
-        const notification = new Notification(title, {
+        const notification = new Notification(translateOutgoingText(title), {
           body: thread.title,
           tag: `${environmentId}:${thread.id}`,
           silent: true,

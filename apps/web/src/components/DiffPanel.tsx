@@ -2,6 +2,7 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
 import type { FileDiffContentsLoader, FileDiffMetadata } from "@pierre/diffs";
 import { useParams } from "@tanstack/react-router";
+import { useChatPane } from "./ChatPaneContext";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -217,10 +218,13 @@ export default function DiffPanel({
   const [codeViewRevision, setCodeViewRevision] = useState(0);
   const [codeView, setCodeView] = useState<AnnotatableCodeViewHandle | null>(null);
 
-  const routeThreadRef = useParams({
+  const urlThreadRef = useParams({
     strict: false,
     select: (params) => resolveThreadRouteRef(params),
   });
+  // In the split view the route only names the focused pane's thread.
+  const chatPane = useChatPane();
+  const routeThreadRef = chatPane.paneId === null ? urlThreadRef : chatPane.threadRef;
   const activeThreadId = routeThreadRef?.threadId ?? null;
   const activeThread = useThreadShell(routeThreadRef);
   const activeThreadProjection = useThreadProjection(routeThreadRef)?.projection ?? null;

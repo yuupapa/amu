@@ -1,5 +1,6 @@
 import type { ConfirmDialogOptions, ContextMenuItem, LocalApi } from "@t3tools/contracts";
 
+import { translateMenuItems } from "./amu/outgoingText";
 import { requestConfirmDialog } from "./confirmDialog";
 import { dismissContextMenu, showContextMenuFallback } from "./contextMenuFallback";
 import { readBrowserClientSettings, writeBrowserClientSettings } from "./clientPersistenceStorage";
@@ -47,7 +48,11 @@ function createBrowserLocalApi(): LocalApi {
         position?: { x: number; y: number },
       ): Promise<T | null> => {
         if (window.desktopBridge) {
-          return window.desktopBridge.showContextMenu(items, position) as Promise<T | null>;
+          // Native menus are drawn outside the page, so translate them on the way out.
+          return window.desktopBridge.showContextMenu(
+            translateMenuItems(items),
+            position,
+          ) as Promise<T | null>;
         }
         return showContextMenuFallback(items, position);
       },

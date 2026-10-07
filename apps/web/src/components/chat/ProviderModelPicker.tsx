@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
@@ -31,11 +32,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
    * The instance currently selected in the composer. Drives the trigger
    * icon, label and the default-highlighted combobox row.
    */
+  autoSelected?: boolean;
+  onAutoSelect?: () => void;
   activeInstanceId: ProviderInstanceId;
   model: string;
   selectedModels?: ReadonlyArray<{ instanceId: ProviderInstanceId; model: string }>;
   onToggleModel?: (instanceId: ProviderInstanceId, model: string) => void;
   lockedProvider: ProviderDriverKind | null;
+  /** Why a locked driver cannot be picked now, by driver; else the default message. */
+  lockedProviderReasons?: ReadonlyMap<string, string>;
   lockedContinuationGroupKey?: string | null;
   /** Instance entries rendered in the sidebar + used to resolve display name. */
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
@@ -276,7 +281,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           </Tooltip>
           {selectedModel?.isUnavailable && !selectedEntries && props.triggerLabel === undefined ? (
             <Badge variant="outline" size="sm">
-              Unavailable
+              {uiText("Unavailable")}
             </Badge>
           ) : null}
         </span>
@@ -291,6 +296,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         padding="none"
       >
         <ModelPickerContent
+          {...(props.onAutoSelect
+            ? {
+                autoSelected: props.autoSelected === true,
+                onAutoSelect: () => {
+                  props.onAutoSelect?.();
+                  setIsMenuOpen(false);
+                },
+              }
+            : {})}
           activeInstanceId={activeInstanceId}
           model={props.model}
           {...(props.selectedModels !== undefined ? { selectedModels: props.selectedModels } : {})}
@@ -302,6 +316,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               }
             : {})}
           lockedProvider={props.lockedProvider}
+          {...(props.lockedProviderReasons
+            ? { lockedProviderReasons: props.lockedProviderReasons }
+            : {})}
           lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
           instanceEntries={props.instanceEntries}
           {...(props.keybindings ? { keybindings: props.keybindings } : {})}

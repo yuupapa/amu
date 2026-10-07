@@ -1507,6 +1507,9 @@ export interface ChatComposerHandle {
 // --------------------------------------------------------------------------
 
 export interface ChatComposerProps {
+  /** Amu: "Auto" lets Luna pick the model for the first request (docs/user/luna-auto.md). */
+  lunaAutoSelected?: boolean;
+  onLunaAutoChange?: (auto: boolean) => void;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   canOperateThread: boolean;
@@ -5384,36 +5387,39 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     size: composerControlsCollapsed ? "xs" : "sm",
     hidden: composerControlsHidden || restingHiddenBlockCount > 1,
   });
-  const restingBlockDefs = [
-    ...(providerTraitsPicker
-      ? [
-          {
-            id: "traits",
-            content: (
-              <>
-                <ComposerControlSeparator size={composerControlsCollapsed ? "xs" : "sm"} />
-                {restingProviderTraitsPicker}
-              </>
-            ),
-          },
-        ]
-      : []),
-    {
-      id: "mode",
-      content: (
-        <ComposerFooterModeControls
-          showInteractionModeToggle={planModeUiEnabled}
-          interactionMode={interactionMode}
-          runtimeMode={compatibleRuntimeMode}
-          runtimeModeOptions={compatibleRuntimeModeOptions}
-          size={composerControlsCollapsed ? "xs" : "sm"}
-          hidden={composerControlsHidden || restingHiddenBlockCount > 0}
-          onToggleInteractionMode={toggleInteractionMode}
-          onRuntimeModeChange={handleRuntimeModeChange}
-        />
-      ),
-    },
-  ];
+  // Luna picks the reasoning effort and keeps the access settings, so Auto hides both.
+  const restingBlockDefs = props.lunaAutoSelected
+    ? []
+    : [
+        ...(providerTraitsPicker
+          ? [
+              {
+                id: "traits",
+                content: (
+                  <>
+                    <ComposerControlSeparator size={composerControlsCollapsed ? "xs" : "sm"} />
+                    {restingProviderTraitsPicker}
+                  </>
+                ),
+              },
+            ]
+          : []),
+        {
+          id: "mode",
+          content: (
+            <ComposerFooterModeControls
+              showInteractionModeToggle={planModeUiEnabled}
+              interactionMode={interactionMode}
+              runtimeMode={compatibleRuntimeMode}
+              runtimeModeOptions={compatibleRuntimeModeOptions}
+              size={composerControlsCollapsed ? "xs" : "sm"}
+              hidden={composerControlsHidden || restingHiddenBlockCount > 0}
+              onToggleInteractionMode={toggleInteractionMode}
+              onRuntimeModeChange={handleRuntimeModeChange}
+            />
+          ),
+        },
+      ];
   const hiddenRestingBlockIds = restingBlockDefs
     .slice(restingBlockDefs.length - restingHiddenBlockCount)
     .map((def) => def.id);
@@ -5444,6 +5450,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         />
       ) : null}
       <ProviderModelPicker
+        {...(props.onLunaAutoChange
+          ? {
+              autoSelected: props.lunaAutoSelected,
+              onAutoSelect: () => {
+                setMultipleModelSelections(null);
+                props.onLunaAutoChange?.(true);
+              },
+              ...(props.lunaAutoSelected
+                ? { triggerLabel: "オート", triggerAriaLabel: "オート・モデル選択" }
+                : {}),
+            }
+          : {})}
         compact={false}
         isComposerOwned
         disabled={providerCatalogPending || isSendBusy}
@@ -5453,6 +5471,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 ? { selectedModels: multipleModelSelections }
                 : {}),
               onToggleModel: (instanceId: ProviderInstanceId, model: string) => {
+                props.onLunaAutoChange?.(false);
                 const current = multipleModelSelections ?? [selectedModelSelection];
                 const matchesModel = (selection: ModelSelection) => {
                   if (selection.instanceId !== instanceId) return false;
@@ -5526,6 +5545,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onOpenChange={setIsComposerModelPickerOpen}
         getModelDisabledReason={getModelDisabledReason}
         onInstanceModelChange={(instanceId, model) => {
+          props.onLunaAutoChange?.(false);
           setMultipleModelSelections(null);
           onProviderModelSelect(instanceId, model);
         }}

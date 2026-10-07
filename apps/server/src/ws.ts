@@ -167,6 +167,7 @@ import * as AcpRegistryRuntimeCoordinator from "./provider/acp/AcpRegistryRuntim
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProviderMaintenance from "./provider/providerMaintenance.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import { makeLunaPostUpdateCheck } from "./luna/LunaPostUpdateCheck.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -2276,7 +2277,15 @@ const layerWsRpc = (
             ),
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
-          providerMaintenanceRunner.updateProvider(input),
+          // Amu: after a CLI update, check that Luna's judge still starts; roll back if not.
+          providerMaintenanceRunner
+            .updateProvider(input)
+            .pipe(
+              Effect.provideService(
+                ProviderMaintenanceRunner.ProviderPostUpdateCheckRef,
+                makeLunaPostUpdateCheck(serverSettings.getSettings),
+              ),
+            ),
         [WS_METHODS.providerConsumeResetCredit]: (input) =>
           Effect.gen(function* () {
             if ("sourceId" in input) return yield* usageLimitSources.consumeResetCredit(input);

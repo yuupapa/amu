@@ -571,6 +571,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { Button, InlineButton } from "./ui/button";
+import { useLunaAuto } from "../amu/useLunaAuto";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -600,6 +601,11 @@ import {
   supportsServerUpdateThreadContinuation,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import {
+  SPLIT_PANE_DRAFT_HEADLINE_MIN_HEIGHT_PX,
+  SPLIT_PANE_INLINE_RIGHT_PANEL_MIN_WIDTH_PX,
+  useChatPane,
+} from "./ChatPaneContext";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   recallableComposerPrompt,
@@ -1931,7 +1937,23 @@ export default function ChatView(props: ChatViewProps) {
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
-  const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const chatPane = useChatPane();
+  // Window-level listeners read this so only the focused split pane reacts.
+  const paneFocusedRef = useRef(chatPane.isFocused);
+  paneFocusedRef.current = chatPane.isFocused;
+  // A short split pane has no room above the centered composer for the
+  // new-thread headline; it would run into the header.
+  const draftHeadlineHiddenForPaneHeight =
+    chatPane.isSplit &&
+    chatPane.heightPx !== null &&
+    chatPane.heightPx < SPLIT_PANE_DRAFT_HEADLINE_MIN_HEIGHT_PX;
+  const viewportUsesPlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  // A narrow split pane shows the right panel as a sheet, like a narrow window.
+  const shouldUsePlanSidebarSheet =
+    viewportUsesPlanSidebarSheet ||
+    (chatPane.isSplit &&
+      chatPane.widthPx !== null &&
+      chatPane.widthPx < SPLIT_PANE_INLINE_RIGHT_PANEL_MIN_WIDTH_PX);
   const isMobileViewport = useMediaQuery("max-sm");
   const [workspaceLayoutRef, workspaceLayoutWidth] = useElementWidth<HTMLDivElement>();
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
@@ -4581,7 +4603,14 @@ export default function ChatView(props: ChatViewProps) {
       );
     }
   }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
-  useEffect(() => subscribeSnapShotComposerFocus(focusComposer), [focusComposer]);
+  // Only the focused split pane takes the SnapShot focus request.
+  useEffect(
+    () =>
+      subscribeSnapShotComposerFocus(() => {
+        if (paneFocusedRef.current) focusComposer();
+      }),
+    [focusComposer],
+  );
   const scheduleComposerFocus = useCallback(() => {
     window.requestAnimationFrame(() => {
       focusComposer();
@@ -6223,7 +6252,7 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(
     () =>
       subscribePreviewAction((action) => {
-        if (action === "toggle-panel") togglePreviewPanel();
+        if (action === "toggle-panel" && paneFocusedRef.current) togglePreviewPanel();
       }),
     [togglePreviewPanel],
   );
@@ -6553,6 +6582,12 @@ export default function ChatView(props: ChatViewProps) {
         // DOM focus on body, so these keys must also be heard at document.
         const handleKeyDown = (event: KeyboardEvent) => {
           if (
+            !paneFocusedRef.current &&
+            !(event.target instanceof Node && scrollNode.contains(event.target))
+          ) {
+            return;
+          }
+          if (
             !(event.target instanceof Node) ||
             (!scrollNode.contains(event.target) &&
               event.target !== document.body &&
@@ -6798,7 +6833,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThreadKey]);
 
   useEffect(() => {
-    if (!activeThread?.id || terminalUiState.terminalOpen) return;
+    if (!activeThread?.id || terminalUiState.terminalOpen || !paneFocusedRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       focusComposer();
     });
@@ -6806,6 +6841,15 @@ export default function ChatView(props: ChatViewProps) {
       window.cancelAnimationFrame(frame);
     };
   }, [activeThread?.id, focusComposer, terminalUiState.terminalOpen]);
+
+  // Switching split panes without a click (shortcut, sidebar, menu) leaves DOM
+  // focus in the old pane; move it to this pane's composer.
+  useEffect(() => {
+    if (!chatPane.isSplit || !chatPane.isFocused || chatPane.focusRequestId === 0) return;
+    const frame = window.requestAnimationFrame(() => focusComposer());
+    return () => window.cancelAnimationFrame(frame);
+    // Only a new request moves focus; becoming focused by a click does not.
+  }, [chatPane.focusRequestId]);
 
   // Tabbing back into the app lands focus wherever it last was, often the right panel or the
   // body. Put it in the composer unless something that takes typing already holds it. The
@@ -6816,6 +6860,7 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThread?.id || terminalUiState.terminalOpen || isMobileViewport) return;
     let frame: number | null = null;
     const onWindowFocus = () => {
+      if (!paneFocusedRef.current) return;
       if (frame !== null) window.cancelAnimationFrame(frame);
       // The element that held focus receives it again after the window's own event, and the
       // composer ignores that same frame so a restored focus does not lift a scroll-collapsed
@@ -7871,10 +7916,12 @@ export default function ChatView(props: ChatViewProps) {
 
     if (!previous && current) {
       terminalUiOpenByThreadRef.current[activeThreadKey] = current;
-      setTerminalFocusRequestId((value) => value + 1);
+      if (paneFocusedRef.current) setTerminalFocusRequestId((value) => value + 1);
       return;
     } else if (previous && !current) {
       terminalUiOpenByThreadRef.current[activeThreadKey] = current;
+      // A split pane in the background must not pull focus from the one in use.
+      if (!paneFocusedRef.current) return;
       const frame = window.requestAnimationFrame(() => {
         focusComposer();
       });
@@ -7905,6 +7952,7 @@ export default function ChatView(props: ChatViewProps) {
 
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
+      if (!paneFocusedRef.current) return;
       if (preventRepeatedTerminalCloseShortcut(event, keybindings)) {
         event.stopPropagation();
         return;
@@ -8236,6 +8284,7 @@ export default function ChatView(props: ChatViewProps) {
   // Route it to the composer like a typed key, which also expands it.
   useEffect(() => {
     const keyHandler = (event: KeyboardEvent) => {
+      if (!paneFocusedRef.current) return;
       if (
         shouldRedirectInputToComposer(event) &&
         isPasteAsTextShortcut(event, isMacPlatform(navigator.platform))
@@ -8244,6 +8293,7 @@ export default function ChatView(props: ChatViewProps) {
       }
     };
     const handler = (event: ClipboardEvent) => {
+      if (!paneFocusedRef.current) return;
       if (!activeThreadId || isCommandPaletteOpen()) return;
       if (getTerminalFocusOwner() !== null) return;
       if (composerRef.current?.isModelPickerOpen()) return;
@@ -8621,6 +8671,34 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
+  // Amu: Auto (Luna) picks the model for the first request; see amu/useLunaAuto.tsx.
+  const lunaAuto = useLunaAuto({
+    routeThreadKey,
+    onPrimaryEnvironment: environmentId === primaryEnvironment?.environmentId,
+    started: activeMessageCount > 0 || activeRuntime !== null,
+    unavailable: isConnecting || activeEnvironmentUnavailable,
+    providers: providerInstanceEntries,
+    planModeEnabled: settings.planModeEnabled,
+    currentRouteThreadKey: () => currentRouteThreadKeyRef.current,
+    getSendContext: () => composerRef.current?.getSendContext(),
+    runtimeMode: () => runtimeMode,
+    showError: (message) => setThreadError(activeThread?.id ?? null, message),
+    restorePrompt: (prompt) => {
+      promptRef.current = prompt;
+      setComposerDraftPrompt(composerDraftTarget, prompt);
+      composerRef.current?.resetCursorState({ prompt });
+    },
+    currentPrompt: () => promptRef.current,
+    rememberPick: (selection) => {
+      if (!activeThread) return;
+      setComposerDraftModelSelection(
+        scopeThreadRef(activeThread.environmentId, activeThread.id),
+        selection,
+        { explicit: true, replaceOptions: true },
+      );
+    },
+  });
+
   const onSend = async (
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
@@ -8708,7 +8786,14 @@ export default function ChatView(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
+    if (
+      lunaAuto.startIfAuto(composerRef.current?.getSendContext(), directAnnotation, () =>
+        onSendRef.current(undefined, dispatchMode, submissionIntent),
+      )
+    ) {
+      return;
+    }
+    const sendCtx = lunaAuto.withDecision(composerRef.current?.getSendContext());
     if (!sendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
       return;
@@ -10000,6 +10085,7 @@ export default function ChatView(props: ChatViewProps) {
       );
       resetLocalDispatch();
     }
+    return turnStartSucceeded;
   };
 
   const onRespondToApproval = useCallback(
@@ -11106,7 +11192,11 @@ export default function ChatView(props: ChatViewProps) {
       className={cn(
         // Keep one viewport anchor inside the header's no-drag region. The
         // header can shrink behind the right panel without moving the controls.
-        "pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]",
+        "pointer-events-none z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]",
+        // A split pane anchors them to itself instead of the window corner.
+        chatPane.isSplit
+          ? "absolute top-0 right-3"
+          : "fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)]",
       )}
       data-workspace-titlebar-controls
     >
@@ -11197,7 +11287,12 @@ export default function ChatView(props: ChatViewProps) {
           {isElectron && rightPanelControlsAtRoot ? (
             <span
               aria-hidden
-              className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
+              className={cn(
+                "pointer-events-none h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]",
+                chatPane.isSplit
+                  ? "absolute top-0 right-3"
+                  : "fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)]",
+              )}
             />
           ) : null}
           {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
@@ -11407,7 +11502,7 @@ export default function ChatView(props: ChatViewProps) {
                   data-chat-composer-stack="true"
                   className="group/composer-stack pointer-events-auto relative z-10 mx-auto w-full max-w-(--chat-content-max-width)"
                 >
-                  {isDraftHeroState ? (
+                  {isDraftHeroState && !draftHeadlineHiddenForPaneHeight ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div
                         className="pb-4 group-has-data-[composer-shoulder-tab]/composer-stack:pb-0"
@@ -11462,8 +11557,11 @@ export default function ChatView(props: ChatViewProps) {
                               }
                             />
                           ) : null}
+                          {lunaAuto.statusElement}
                           {!composerMounted ? null : (
                             <ChatComposer
+                              lunaAutoSelected={lunaAuto.autoOn}
+                              {...(lunaAuto.offered ? { onLunaAutoChange: lunaAuto.setAuto } : {})}
                               canOperateThread={canOperateThread}
                               reportedModelSelection={reportedModelSelection}
                               multipleModelSelections={multipleModelSelections}
@@ -11498,7 +11596,9 @@ export default function ChatView(props: ChatViewProps) {
                               phase={phase}
                               canInterrupt={canInterruptRunningThread}
                               isConnecting={isConnecting}
-                              isSendBusy={isSendBusy || isSavingQueuedEdit || isResuming}
+                              isSendBusy={
+                                isSendBusy || isSavingQueuedEdit || isResuming || lunaAuto.judging
+                              }
                               canResume={resumableRunId !== null || hasHeldQueuedRuns}
                               isRevertingCheckpoint={isRevertingCheckpoint}
                               sendDisabledReason={

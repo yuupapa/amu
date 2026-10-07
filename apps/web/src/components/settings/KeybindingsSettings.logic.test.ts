@@ -74,8 +74,9 @@ describe("KeybindingsSettings.logic", () => {
     expect(composer?.rows.map((row) => row.command)).toEqual(
       expect.arrayContaining(["composer.host", "modelPicker.toggle"]),
     );
+    // Amu's split chat panes sit under Navigation; terminal splits stay under Terminal.
     expect(groupKeybindingRows(buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS, "split"))).toEqual(
-      [expect.objectContaining({ id: "terminal" })],
+      [expect.objectContaining({ id: "navigation" }), expect.objectContaining({ id: "terminal" })],
     );
   });
   it("orders Usage bindings and command choices like the page", () => {

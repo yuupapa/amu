@@ -5,6 +5,8 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
+import { forgetAmuForkMigrations, markUndeliveredAmuMessages } from "./amuForkMigrations.ts";
+import { refreshStaleV2Snapshot } from "./amuV2Snapshot.ts";
 import { runMigrations } from "./Migrations.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
@@ -22,6 +24,8 @@ const layerSetup = Layer.effectDiscard(
     // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
     // largest size until the last connection closes.
     yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
+    yield* forgetAmuForkMigrations;
+    yield* markUndeliveredAmuMessages;
     yield* runMigrations();
   }),
 );
@@ -51,6 +55,11 @@ export const layerMemory = Layer.provideMerge(
 export const layerConfig = Layer.unwrap(
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig.ServerConfig;
+    yield* refreshStaleV2Snapshot(dbPath).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not compare state.sqlite with statev2.sqlite", { error }),
+      ),
+    );
     yield* initializeV2Database(dbPath);
     return layerFromPath(dbPath);
   }),

@@ -1,7 +1,8 @@
+import { uiText, uiFormat } from "~/uiText";
 import { Toolbar } from "@base-ui/react/toolbar";
 import { type ProviderInstanceId } from "@t3tools/contracts";
 import { memo, useLayoutEffect, useRef, useState } from "react";
-import { SparklesIcon, StarIcon } from "lucide-react";
+import { SparklesIcon, StarIcon, WandSparklesIcon } from "lucide-react";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
@@ -64,6 +65,9 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
    * instances are never flagged — the user just made them).
    */
   newBadgeInstanceIds?: ReadonlySet<ProviderInstanceId>;
+  /** Render the Auto (Luna) rail entry under favorites; clicking it selects Auto directly. */
+  autoSelected?: boolean;
+  onAutoSelect?: () => void;
 }) {
   const handleSelect = (instanceId: ProviderInstanceId | "favorites") => {
     props.onSelectInstance(instanceId);
@@ -91,7 +95,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
     <Toolbar.Root
       className="w-11 shrink-0 overflow-hidden bg-muted/30"
       data-model-picker-sidebar="true"
-      aria-label="Providers"
+      aria-label={uiText("Providers")}
       orientation="vertical"
       onKeyDown={(event) => {
         if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -127,7 +131,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                         )}
                         onClick={() => handleSelect("favorites")}
                         type="button"
-                        aria-label="Favorites"
+                        aria-label={uiText("Favorites")}
                         aria-pressed={props.selectedInstanceId === "favorites"}
                       >
                         <StarIcon className="size-5 fill-current shrink-0" aria-hidden />
@@ -139,10 +143,41 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                     sideOffset={PICKER_TOOLTIP_SIDE_OFFSET}
                     align="center"
                   >
-                    Favorites
+                    {uiText("Favorites")}
                   </TooltipPopup>
                 </Tooltip>
               </div>
+              {props.onAutoSelect ? (
+                <div className="relative w-full" data-model-picker-auto="true">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Toolbar.Button
+                          className={cn(
+                            "relative isolate flex w-full cursor-pointer aspect-square items-center justify-center rounded-md transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none",
+                            props.autoSelected && "bg-primary/10 text-primary hover:bg-primary/15",
+                          )}
+                          onClick={props.onAutoSelect}
+                          type="button"
+                          aria-label="オート（Luna）"
+                          aria-pressed={props.autoSelected === true}
+                        >
+                          <WandSparklesIcon className="size-5 shrink-0" aria-hidden />
+                        </Toolbar.Button>
+                      }
+                    />
+                    <TooltipPopup
+                      side={PICKER_TOOLTIP_SIDE}
+                      sideOffset={PICKER_TOOLTIP_SIDE_OFFSET}
+                      align="center"
+                    >
+                      {props.autoSelected
+                        ? "オート（選択中）"
+                        : "オート：Lunaがモデルと思考の強さを選びます"}
+                    </TooltipPopup>
+                  </Tooltip>
+                </div>
+              ) : null}
               <div className="border-b border-border/70" aria-hidden="true" />
             </>
           ) : null}
@@ -192,7 +227,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   isUnavailable || isContextDisabled
                     ? tooltip
                     : showNewBadge
-                      ? `${entry.displayName}, new`
+                      ? uiFormat("{0}, new", entry.displayName)
                       : entry.displayName
                 }
               >

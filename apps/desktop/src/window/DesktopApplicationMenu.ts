@@ -67,8 +67,8 @@ const checkForUpdatesFromMenu = Effect.gen(function* () {
   if (updateState.status === "up-to-date") {
     yield* electronDialog.showMessageBox({
       type: "info",
-      title: "You're up to date!",
-      message: `T3 Code ${updateState.currentVersion} is currently the newest version available.`,
+      title: "最新バージョンです",
+      message: `Amu ${updateState.currentVersion} は現在利用できる最新バージョンです。`,
       buttons: ["OK"],
     });
   } else if (updateState.status === "error") {

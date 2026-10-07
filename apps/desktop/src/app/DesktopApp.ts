@@ -72,10 +72,19 @@ const { logInfo: logBootstrapInfo, logWarning: logBootstrapWarning } =
 const { logInfo: logStartupInfo, logError: logStartupError } =
   DesktopObservability.makeComponentLogger("desktop-startup");
 
-const resolveDesktopBackendPort = Effect.fn("resolveDesktopBackendPort")(function* (
+export const resolveDesktopBackendPort = Effect.fn("resolveDesktopBackendPort")(function* (
   configuredPort: Option.Option<number>,
 ) {
   if (Option.isSome(configuredPort)) {
+    // Amu pins its port: a second backend must not start beside a running one.
+    const net = yield* NetService.NetService;
+    if (!(yield* net.canListenOnHost(configuredPort.value, "127.0.0.1"))) {
+      return yield* new DesktopBackendPortUnavailableError({
+        startPort: configuredPort.value,
+        maxPort: configuredPort.value,
+        hosts: ["127.0.0.1"],
+      });
+    }
     return {
       port: configuredPort.value,
       selectedByScan: false,
@@ -134,7 +143,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
   if (!wasQuitting) {
     yield* electronDialog.showErrorBox(
-      "T3 Code failed to start",
+      "Amuを起動できませんでした",
       `Stage: ${stage}\n${message}${detail}`,
     );
   }

@@ -48,6 +48,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 
 import { previewBridge } from "./previewBridge";
 import { subscribePreviewAction } from "./previewActionBus";
+import { useChatPane } from "../ChatPaneContext";
 import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
@@ -857,8 +858,10 @@ export function PreviewView({
 
   // Subscribe only while visible; `toggle-panel` is owned by ChatView's
   // URL-aware handler regardless of whether the panel is currently mounted.
+  // In the split view only the focused pane's preview answers shortcuts.
+  const paneFocused = useChatPane().isFocused;
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !paneFocused) return;
     return subscribePreviewAction((action) => {
       switch (action) {
         case "refresh":

@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { createHashHistory, createBrowserHistory } from "@tanstack/react-router";
 
 import "./index.css";
+import { startPageTranslation } from "./amu/domTranslation";
+import { uiLanguage } from "./uiText";
 
 import { prepareProviderAuthDelivery } from "./providerAuthDelivery";
 import { isElectron } from "./env";
@@ -70,6 +72,11 @@ export const startup = Promise.all([
     // that fetched every chunk it asked for.
     if (reloadScheduled) return;
     if (!chunkLoadFailed) clearChunkReloadGuard();
+    // Amu: show the app in Japanese (see amu/domTranslation.ts).
+    if (uiLanguage === "ja") {
+      document.documentElement.lang = "ja";
+      startPageTranslation();
+    }
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <React.StrictMode>
         {ManagedAuthShell && clerkPublishableKey ? (

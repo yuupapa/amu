@@ -1,8 +1,11 @@
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
 
+import { uiFormat, uiText } from "~/uiText";
+
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 
-const DESKTOP_RELEASE_HISTORY_URL = "https://github.com/pingdotgg/t3code/releases";
+// Amu ships its own releases; the update feed reads the same repository.
+const DESKTOP_RELEASE_HISTORY_URL = "https://github.com/yuupapa/amu/releases";
 const DESKTOP_RELEASE_TAG_URL = `${DESKTOP_RELEASE_HISTORY_URL}/tag`;
 
 /**
@@ -57,51 +60,69 @@ export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null):
 
 export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState): string {
   if (!shouldShowArm64IntelBuildWarning(state)) {
-    return "This install is using the correct architecture.";
+    return uiText("This install is using the correct architecture.");
   }
 
   const action = resolveDesktopUpdateButtonAction(state);
   if (action === "download") {
-    return "This Mac has Apple Silicon, but T3 Code is still running the Intel build under Rosetta. Download the available update to switch to the native Apple Silicon build.";
+    return uiText(
+      "This Mac has Apple Silicon, but Amu is still running the Intel build under Rosetta. Download the available update to switch to the native Apple Silicon build.",
+    );
   }
   if (action === "install") {
-    return "This Mac has Apple Silicon, but T3 Code is still running the Intel build under Rosetta. Restart to install the downloaded Apple Silicon build.";
+    return uiText(
+      "This Mac has Apple Silicon, but Amu is still running the Intel build under Rosetta. Restart to install the downloaded Apple Silicon build.",
+    );
   }
-  return "This Mac has Apple Silicon, but T3 Code is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
+  return uiText(
+    "This Mac has Apple Silicon, but Amu is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.",
+  );
 }
 
 export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string {
   if (state.status === "available") {
-    return `Update ${state.availableVersion ?? "available"} ready to download`;
+    return state.availableVersion
+      ? uiFormat("Amu {0} is available. Click to download.", state.availableVersion)
+      : uiText("Update available");
   }
   if (state.status === "downloading") {
-    const progress =
-      typeof state.downloadPercent === "number" ? ` (${Math.floor(state.downloadPercent)}%)` : "";
-    return `Downloading update${progress}`;
+    return typeof state.downloadPercent === "number"
+      ? uiFormat("Downloading update ({0}%)", Math.floor(state.downloadPercent))
+      : uiText("Downloading update");
   }
   if (state.status === "downloaded") {
-    return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.`;
+    return uiFormat(
+      "Amu {0} is ready. Click to restart and update.",
+      state.downloadedVersion ?? state.availableVersion ?? "",
+    );
   }
   if (state.status === "error") {
     if (state.errorContext === "download" && state.availableVersion) {
-      return `Download failed for ${state.availableVersion}. Click to retry.`;
+      return uiFormat("Could not download Amu {0}. Click to try again.", state.availableVersion);
     }
     if (state.errorContext === "install" && state.downloadedVersion) {
-      return `Install failed for ${state.downloadedVersion}. Click to retry.`;
+      return uiFormat("Could not install Amu {0}. Click to try again.", state.downloadedVersion);
     }
     if (state.downloadedVersion) {
-      return `Update ${state.downloadedVersion} downloaded. Click to restart and install.`;
+      return uiFormat("Amu {0} is ready. Click to restart and update.", state.downloadedVersion);
     }
-    return state.message ?? "Update failed";
+    return state.message ?? uiText("Update failed");
   }
-  return "Up to date";
+  return uiText("Up to date");
 }
 
 export function getDesktopUpdateInstallConfirmationMessage(
   state: Pick<DesktopUpdateState, "availableVersion" | "downloadedVersion">,
 ): string {
   const version = state.downloadedVersion ?? state.availableVersion;
-  return `Install update${version ? ` ${version}` : ""} and restart T3 Code?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.`;
+  return version
+    ? uiFormat(
+        "Restart Amu to update to {0}?\n\nConversations and settings stay. A reply that is still running will stop.",
+        version,
+      )
+    : uiText(
+        "Restart Amu to update?\n\nConversations and settings stay. A reply that is still running will stop.",
+      );
 }
 
 export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): string | null {

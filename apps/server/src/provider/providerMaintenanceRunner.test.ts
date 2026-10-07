@@ -276,6 +276,141 @@ describe("providerMaintenanceRunner", () => {
     );
   });
 
+  it.effect("reinstalls the previous version when the post-update check fails", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    let setVersion: (version: string) => void = () => {};
+    return Effect.gen(function* () {
+      const { registry, providersRef } = yield* makeRegistry({
+        ...baseProvider,
+        version: "0.159.0",
+      });
+      setVersion = (version) =>
+        // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- The fake spawner calls back synchronously and must change the registry before the runner reads it.
+        Effect.runSync(
+          Ref.update(providersRef, (providers) => providers.map((p) => ({ ...p, version }))),
+        );
+      const updater = yield* makeTestRunner({
+        ...registry,
+        getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+          Effect.succeed(
+            makeProviderMaintenanceCapabilities({
+              provider,
+              packageName: "@openai/codex",
+              updateExecutable: "npm",
+              updateArgs: ["install", "-g", "@openai/codex@latest"],
+              updateLockKey: "npm-global:/opt/homebrew",
+            }),
+          ),
+      });
+      const result = yield* updater.updateProvider(CODEX_DRIVER).pipe(
+        Effect.provideService(ProviderMaintenanceRunner.ProviderPostUpdateCheckRef, () =>
+          Effect.succeed({
+            ok: false,
+            reason: "CLIがLunaの設定を受け付けませんでした。",
+          } as const),
+        ),
+      );
+      assert.deepStrictEqual(calls, [
+        ["install", "-g", "@openai/codex@latest"],
+        ["install", "-g", "@openai/codex@0.159.0"],
+      ]);
+      const state = result.providers[0]?.updateState;
+      assert.strictEqual(state?.status, "failed");
+      assert.include(state?.message ?? "", "元の版（0.159.0）に戻しました");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          layerNonWindowsPlatform,
+          layerLatestVersionHttpClient("0.160.0"),
+          layerMockSpawner((_command, args) => {
+            calls.push(args);
+            setVersion(args.includes("@openai/codex@0.159.0") ? "0.159.0" : "0.160.0");
+            return { stdout: "ok" };
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("reports manual recovery when the installer cannot pin the previous version", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    let setVersion: (version: string) => void = () => {};
+    return Effect.gen(function* () {
+      const { registry, providersRef } = yield* makeRegistry({
+        ...baseProvider,
+        version: "0.159.0",
+      });
+      setVersion = (version) =>
+        // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- The fake spawner calls back synchronously and must change the registry before the runner reads it.
+        Effect.runSync(
+          Ref.update(providersRef, (providers) => providers.map((p) => ({ ...p, version }))),
+        );
+      const updater = yield* makeTestRunner(registry);
+      const result = yield* updater.updateProvider(CODEX_DRIVER).pipe(
+        Effect.provideService(ProviderMaintenanceRunner.ProviderPostUpdateCheckRef, () =>
+          Effect.succeed({
+            ok: false,
+            reason: "CLIがLunaの設定を受け付けませんでした。",
+          } as const),
+        ),
+      );
+      assert.deepStrictEqual(calls, [["install", "-g", "@openai/codex@latest"]]);
+      const state = result.providers[0]?.updateState;
+      assert.strictEqual(state?.status, "failed");
+      assert.include(state?.message ?? "", "元の版 0.159.0 を入れ直してください");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          layerNonWindowsPlatform,
+          layerLatestVersionHttpClient("0.160.0"),
+          layerMockSpawner((_command, args) => {
+            calls.push(args);
+            setVersion(args.includes("@openai/codex@0.159.0") ? "0.159.0" : "0.160.0");
+            return { stdout: "ok" };
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("keeps the update when the post-update check passes", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    let setVersion: (version: string) => void = () => {};
+    return Effect.gen(function* () {
+      const { registry, providersRef } = yield* makeRegistry({
+        ...baseProvider,
+        version: "0.159.0",
+      });
+      setVersion = (version) =>
+        // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- The fake spawner calls back synchronously and must change the registry before the runner reads it.
+        Effect.runSync(
+          Ref.update(providersRef, (providers) => providers.map((p) => ({ ...p, version }))),
+        );
+      const updater = yield* makeTestRunner(registry);
+      const result = yield* updater
+        .updateProvider(CODEX_DRIVER)
+        .pipe(
+          Effect.provideService(ProviderMaintenanceRunner.ProviderPostUpdateCheckRef, () =>
+            Effect.succeed({ ok: true } as const),
+          ),
+        );
+      assert.strictEqual(calls.length, 1);
+      assert.strictEqual(result.providers[0]?.updateState?.status, "succeeded");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          layerNonWindowsPlatform,
+          layerLatestVersionHttpClient("0.160.0"),
+          layerMockSpawner((_command, args) => {
+            calls.push(args);
+            setVersion("0.160.0");
+            return { stdout: "ok" };
+          }),
+        ),
+      ),
+    );
+  });
+
   it.effect("reports unchanged when the updater exits 0 but the provider is gone", () => {
     return Effect.gen(function* () {
       const { registry, providersRef } = yield* makeRegistry(baseProvider);

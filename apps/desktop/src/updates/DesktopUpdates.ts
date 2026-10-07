@@ -28,6 +28,7 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as AmuReleaseUpdater from "./AmuReleaseUpdater.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
@@ -278,7 +279,14 @@ export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
   const pool = yield* DesktopBackendPool.DesktopBackendPool;
   const desktopState = yield* DesktopState.DesktopState;
-  const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
+  // Amu.app installs its own releases; other builds keep electron-updater.
+  const amuUpdater = Option.flatMap(
+    yield* Effect.serviceOption(AmuReleaseUpdater.AmuReleaseUpdater),
+    (service) => service.updater,
+  );
+  const electronUpdater = Option.isSome(amuUpdater)
+    ? amuUpdater.value
+    : yield* ElectronUpdater.ElectronUpdater;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -346,7 +354,10 @@ export const make = Effect.gen(function* () {
       : false;
 
   const hasUpdateFeedConfig = Ref.get(appUpdateYmlConfigRef).pipe(
-    Effect.map((appUpdateYmlConfig) => Option.isSome(appUpdateYmlConfig) || config.mockUpdates),
+    Effect.map(
+      (appUpdateYmlConfig) =>
+        Option.isSome(appUpdateYmlConfig) || config.mockUpdates || Option.isSome(amuUpdater),
+    ),
   );
 
   const resolveDisabledReason = Effect.gen(function* () {

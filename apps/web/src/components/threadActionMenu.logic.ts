@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
@@ -8,6 +9,8 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
  */
 export type ThreadActionMenuId =
   | "new-thread-on-branch"
+  | "open-split-right"
+  | "open-split-down"
   | "filter-by-project"
   | "project-settings"
   | "pin"
@@ -99,6 +102,11 @@ export interface ThreadActionMenuState {
     readonly titleRegeneration: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
+  /** Split view entries; omitted on surfaces that already show the thread. */
+  readonly splitView?: {
+    /** False when every pane is taken and the thread is not on screen yet. */
+    readonly canOpen: boolean;
+  };
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -129,6 +137,22 @@ export function buildThreadActionMenuItems(
             id: "new-thread-on-branch" as const,
             label: `New thread on ${state.branch}`,
             icon: "message-square-plus",
+          },
+        ]
+      : []),
+    ...(state.splitView
+      ? [
+          {
+            id: "open-split-right" as const,
+            label: uiText("Open to the right"),
+            icon: "columns-2",
+            disabled: !state.splitView.canOpen,
+          },
+          {
+            id: "open-split-down" as const,
+            label: uiText("Open below"),
+            icon: "rows-2",
+            disabled: !state.splitView.canOpen,
           },
         ]
       : []),

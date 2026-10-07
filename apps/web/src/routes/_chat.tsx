@@ -1,3 +1,4 @@
+import { uiText } from "~/uiText";
 import { AuthPreviewOperateScope } from "@t3tools/contracts";
 import { Outlet, createFileRoute, redirect, useParams } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
@@ -5,6 +6,8 @@ import { useEffect, useMemo } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { ThreadRouteView } from "../components/ThreadRouteView";
+import { SplitDropOverlay, SplitRouteSync, SplitWorkspace } from "../components/SplitWorkspace";
+import { selectIsSplit, useSplitLayoutStore } from "../splitLayoutStore";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -92,6 +95,19 @@ function ChatRouteGlobalShortcuts() {
           event.preventDefault();
           event.stopPropagation();
         }
+        return;
+      }
+
+      if (
+        command === "splitView.splitRight" ||
+        command === "splitView.splitDown" ||
+        command === "splitView.closePane" ||
+        command === "splitView.focusNext" ||
+        command === "splitView.focusPrevious"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        runSplitViewCommand(command);
         return;
       }
 
@@ -214,6 +230,34 @@ function ChatRouteGlobalShortcuts() {
   return null;
 }
 
+function runSplitViewCommand(
+  command:
+    | "splitView.splitRight"
+    | "splitView.splitDown"
+    | "splitView.closePane"
+    | "splitView.focusNext"
+    | "splitView.focusPrevious",
+) {
+  const store = useSplitLayoutStore.getState();
+  if (command === "splitView.closePane") {
+    store.closePane(store.layout.focusedPaneId);
+    return;
+  }
+  if (command === "splitView.focusNext" || command === "splitView.focusPrevious") {
+    store.focusAdjacentPane(command === "splitView.focusNext" ? 1 : -1);
+    return;
+  }
+  if (!store.splitFocusedPane(command === "splitView.splitRight" ? "right" : "bottom")) {
+    toastManager.add(
+      stackedThreadToast({
+        type: "info",
+        title: uiText("Up to 4 panes"),
+        description: uiText("Close a pane before opening another one."),
+      }),
+    );
+  }
+}
+
 function ChatRouteLayout() {
   // Both thread routes render here, not in their own leaf components, so the
   // draft-to-thread promotion keeps one ChatView mounted across the swap.
@@ -221,10 +265,23 @@ function ChatRouteLayout() {
     strict: false,
     select: (params) => resolveThreadRouteTarget(params),
   });
+  const isSplit = useSplitLayoutStore(selectIsSplit);
+  // Pages without a thread (pull requests, the index landing) still take the
+  // whole chat area; the split comes back with the next thread route.
   return (
     <>
       <ChatRouteGlobalShortcuts />
-      {threadTarget ? <ThreadRouteView target={threadTarget} /> : <Outlet />}
+      <SplitRouteSync routeTarget={threadTarget} />
+      <SplitDropOverlay />
+      {threadTarget ? (
+        isSplit ? (
+          <SplitWorkspace />
+        ) : (
+          <ThreadRouteView target={threadTarget} />
+        )
+      ) : (
+        <Outlet />
+      )}
     </>
   );
 }
