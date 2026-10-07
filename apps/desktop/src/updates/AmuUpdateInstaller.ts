@@ -43,7 +43,9 @@ WATCH_INTERVAL="\${AMU_WATCH_INTERVAL:-15}"
 APP_REAL="$(cd "$AMU_APP" 2>/dev/null && pwd -P)"
 SCRIPT="$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)/$(basename "$0")"
 JOURNAL="$AMU_UPDATES/install-journal"
-WATCH_LABEL="com.yuupapa.amu.update-watchdog"
+# One job per bundle and updates folder, so updating one Amu never unloads
+# the watchdog of another on the same Mac.
+WATCH_LABEL="com.yuupapa.amu.update-watchdog.$(md5 -q -s "$AMU_APP|$AMU_UPDATES" | cut -c1-12)"
 WATCH_PLIST="$AMU_UPDATES/update-watchdog.plist"
 WATCH_DOMAIN="gui/$(id -u)"
 
@@ -113,9 +115,25 @@ boot_time() { sysctl -n kern.boottime 2>/dev/null | sed -n 's/^[^0-9]*\\([0-9][0
 
 # The journal: which phase the swap is in, who is running it, and which
 # parts the old Amu did not have. Written whole, then renamed into place.
+# The command line is stored as ps shows it, so the owner check compares
+# like with like however the script path was spelled.
 write_journal() {
-  printf 'phase=%s\\npid=%s\\nboot=%s\\nabsent=%s\\n' "$1" "$$" "$(boot_time)" "$WAS_ABSENT" > "$JOURNAL.tmp" &&
+  printf 'phase=%s\\npid=%s\\nboot=%s\\ncommand=%s\\nabsent=%s\\n' "$1" "$$" "$(boot_time)" \
+    "$(own_command)" "$WAS_ABSENT" > "$JOURNAL.tmp" &&
     mv -f "$JOURNAL.tmp" "$JOURNAL"
+}
+own_command() { ps -p "$$" -o command= 2>/dev/null; }
+# The process that wrote the journal is still at work: same boot, alive, and
+# running the same command it recorded.
+journal_owner_alive() {
+  local owner command
+  owner="$(journal_field pid)"
+  case "$owner" in ""|*[!0-9]*) return 1 ;; esac
+  [ "$owner" != "$$" ] || return 1
+  [ "$(journal_field boot)" = "$(boot_time)" ] || return 1
+  kill -0 "$owner" 2>/dev/null || return 1
+  command="$(journal_field command)"
+  [ -n "$command" ] && [ "$(ps -p "$owner" -o command= 2>/dev/null)" = "$command" ]
 }
 journal_field() { sed -n "s/^$1=//p" "$JOURNAL" 2>/dev/null | head -n 1; }
 
@@ -138,8 +156,7 @@ start_watchdog() {
     done
     printf '</dict>\\n</dict></plist>\\n'
   } > "$WATCH_PLIST" || { log "could not write the update watchdog"; return 1; }
-  "$LAUNCHCTL" bootstrap "$WATCH_DOMAIN" "$WATCH_PLIST" >> "$AMU_LOG" 2>&1 ||
-    log "could not start the update watchdog; an interrupted update will need a manual restore"
+  "$LAUNCHCTL" bootstrap "$WATCH_DOMAIN" "$WATCH_PLIST" >> "$AMU_LOG" 2>&1
 }
 # Last step on every way out: unloading the job also ends a running recovery.
 stop_watchdog() {
@@ -175,6 +192,8 @@ restore() {
 fail() {
   log "update failed: $1; restoring Amu $AMU_OLD_VERSION"
   printf '%s\\n' "$AMU_VERSION: $1" > "$AMU_UPDATES/last-failure.txt"
+  # From here a recovery must keep restoring, never take the old Amu for the new.
+  write_journal rollback || log "could not record the rollback"
   stop_app
   wait_port_free 60
   if restore; then
@@ -216,13 +235,7 @@ verify_and_finish() {
 if [ "$MODE" = recover ]; then
   [ -f "$JOURNAL" ] || { stop_watchdog; exit 0; }
   PHASE="$(journal_field phase)"
-  OWNER="$(journal_field pid)"
-  case "$OWNER" in ""|*[!0-9]*) OWNER="" ;; esac
-  # The installer is still at work: same boot, and its process is alive.
-  if [ -n "$OWNER" ] && [ "$(journal_field boot)" = "$(boot_time)" ] && kill -0 "$OWNER" 2>/dev/null &&
-    ps -p "$OWNER" -o command= 2>/dev/null | grep -qF "$SCRIPT"; then
-    exit 0
-  fi
+  journal_owner_alive && exit 0
   WAS_ABSENT=""
   for item in $(journal_field absent); do
     case " $AMU_REPLACE " in *" $item "*) WAS_ABSENT="$WAS_ABSENT $item" ;; esac
@@ -233,6 +246,9 @@ if [ "$MODE" = recover ]; then
       # The installer may have died before it opened the new Amu.
       if [ -z "$(app_pids)" ]; then
         touch "$LAUNCH_MARK"
+        # As in the install: a state file written in the same second as the
+        # mark would not count as newer.
+        sleep 1
         launch
       fi
       verify_and_finish
@@ -285,7 +301,11 @@ fi
 # 2. Swap by renames inside the bundle, which cannot leave half a file. From
 # here the journal and the watchdog can finish the job if this process dies.
 write_journal swap || skip "could not write the update journal"
-start_watchdog
+if ! start_watchdog; then
+  rm -f "$JOURNAL"
+  stop_watchdog
+  skip "could not start the update watchdog"
+fi
 for item in $AMU_REPLACE; do
   if [ -e "$RES/$item" ]; then
     mv "$RES/$item" "$RES/.amu-old-$item" || fail "could not move $item aside"

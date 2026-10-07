@@ -110,6 +110,14 @@ function writeLauncher() {
 
 /** The bundle as an installer that died halfway through the swap left it. */
 function leaveHalfSwapped(journal: { phase: string; pid: number; boot?: string }) {
+  const command = NodeChildProcess.spawnSync("/bin/ps", [
+    "-p",
+    String(journal.pid),
+    "-o",
+    "command=",
+  ])
+    .stdout.toString()
+    .trim();
   const resources = NodePath.join(app, "Contents/Resources");
   NodeFS.renameSync(
     NodePath.join(resources, "app.asar"),
@@ -132,7 +140,7 @@ function leaveHalfSwapped(journal: { phase: string; pid: number; boot?: string }
   );
   NodeFS.writeFileSync(
     NodePath.join(updates, "install-journal"),
-    `phase=${journal.phase}\npid=${journal.pid}\nboot=${journal.boot ?? bootTime()}\nabsent=\n`,
+    `phase=${journal.phase}\npid=${journal.pid}\nboot=${journal.boot ?? bootTime()}\ncommand=${command}\nabsent=\n`,
   );
 }
 
@@ -360,7 +368,9 @@ describe.skipIf(!isMac)("Amu update installer", () => {
     expect(result.status, read(NodePath.join(updates, "install.log"))).toBe(0);
     const calls = launchctlCalls();
     expect(calls.some((call) => call.startsWith("bootstrap gui/"))).toBe(true);
-    expect(calls.at(-1)).toMatch(/^bootout gui\/\d+\/com\.yuupapa\.amu\.update-watchdog$/);
+    expect(calls.at(-1)).toMatch(
+      /^bootout gui\/\d+\/com\.yuupapa\.amu\.update-watchdog\.[0-9a-f]{12}$/,
+    );
     expect(NodeFS.existsSync(NodePath.join(updates, "install-journal"))).toBe(false);
     expect(NodeFS.existsSync(NodePath.join(updates, "update-watchdog.plist"))).toBe(false);
   });
@@ -509,6 +519,61 @@ describe.skipIf(!isMac)("Amu update installer", () => {
     expect(result.status).toBe(0);
     expect(read(NodePath.join(app, "Contents/Resources/app.asar"))).toBe("old code");
     expect(launchctlCalls().at(-1)).toMatch(/^bootout /);
+  });
+
+  it("leaves everything alone when the watchdog cannot be started", () => {
+    const failing = NodePath.join(root, "launchctl-fails.sh");
+    NodeFS.writeFileSync(
+      failing,
+      `#!/bin/sh\necho "$*" >> "${root}/launchctl.log"\ncase "$1" in bootstrap) exit 5 ;; esac\n`,
+      { mode: 0o755 },
+    );
+    const result = runInstaller({ AMU_OPEN: "/usr/bin/true", AMU_LAUNCHCTL: failing });
+
+    expect(result.status).toBe(1);
+    const resources = NodePath.join(app, "Contents/Resources");
+    expect(read(NodePath.join(resources, "app.asar"))).toBe("old code");
+    expect(plistValue(":CFBundleShortVersionString")).toBe("0.0.44");
+    expect(NodeFS.readdirSync(resources).filter((name) => name.startsWith(".amu-"))).toEqual([]);
+    expect(NodeFS.existsSync(NodePath.join(updates, "install-journal"))).toBe(false);
+    expect(read(NodePath.join(updates, "install.log"))).toContain(
+      "could not start the update watchdog",
+    );
+  });
+
+  it("names the watchdog after the bundle, so two installs never share one", () => {
+    runInstaller({ AMU_OPEN: writeLauncher(), AMU_HEALTH_TIMEOUT: "10" });
+    const first = launchctlCalls().at(-1);
+    NodeFS.rmSync(NodePath.join(root, "launchctl.log"));
+    runInstaller({
+      AMU_MODE: "recover",
+      AMU_OPEN: "/usr/bin/true",
+      AMU_UPDATES: NodePath.join(root, "elsewhere"),
+    });
+    expect(launchctlCalls().at(-1)).not.toBe(first);
+  });
+
+  it("keeps restoring after a rollback that was cut short, even when the old Amu runs", () => {
+    // The installer died while putting the old files back: app.asar is the
+    // old one again, app.asar.unpacked is still the new one.
+    leaveHalfSwapped({ phase: "rollback", pid: 999_999 });
+    const resources = NodePath.join(app, "Contents/Resources");
+    NodeFS.renameSync(
+      NodePath.join(resources, ".amu-old-app.asar"),
+      NodePath.join(resources, "app.asar"),
+    );
+    const result = runInstaller({
+      AMU_MODE: "recover",
+      AMU_OPEN: writeLauncher(),
+      AMU_HEALTH_TIMEOUT: "5",
+    });
+
+    expect(result.status).toBe(1);
+    expect(read(NodePath.join(resources, "app.asar"))).toBe("old code");
+    expect(read(NodePath.join(resources, "app.asar.unpacked/native.node"))).toBe("old native");
+    expect(plistValue(":CFBundleShortVersionString")).toBe("0.0.44");
+    expect(NodeFS.existsSync(NodePath.join(updates, "backup-0.0.44"))).toBe(false);
+    expect(read(NodePath.join(updates, "install.log"))).not.toContain("Amu 0.0.45 is running");
   });
 
   it("refuses a file listed twice", () => {

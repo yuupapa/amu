@@ -22,6 +22,7 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   "Generated image": "生成した画像",
   "Generating image": "画像を生成しています",
   "Image generation failed": "画像を生成できませんでした",
+  "Image generation stopped": "画像の生成を中止しました",
 
   // Chat and sidebar
   "Add a project, or start without one.": "プロジェクトを追加するか、プロジェクトなしで始めます。",

@@ -847,6 +847,17 @@ describe("CodexAdapterV2 image generation projection", () => {
     });
   });
 
+  it.each(["/tmp/private-photo.png", "/Users/example/.codex/generated_images/../../a.png"])(
+    "ignores a saved path outside generated_images: %s",
+    (path) => {
+      const projection = CodexAdapterV2.codexImageGenerationProjection(
+        { ...generation, savedPath: path },
+        true,
+      );
+      assert.isUndefined(projection.viewedImagePath);
+    },
+  );
+
   it("ignores a saved path that is not an image", () => {
     const projection = CodexAdapterV2.codexImageGenerationProjection(
       { ...generation, savedPath: "/Users/example/.ssh/id_ed25519" },
@@ -6355,6 +6366,90 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
+  const FAILED_IMAGE_SCENARIO = "codex-failed-mid-image";
+  const FAILED_IMAGE_NATIVE_THREAD = "native-codex-failed-image-thread";
+  const FAILED_IMAGE_NATIVE_TURN = "native-codex-failed-image-turn";
+  const FAILED_IMAGE_ITEM = "ig-codex-failed-image";
+  const FAILED_IMAGE_PROMPT = "Draw an apple; the turn fails first.";
+
+  const failedMidImageTranscript = makeCodexReplayTranscript({
+    scenario: FAILED_IMAGE_SCENARIO,
+    entries: [
+      ...codexReplayPreamble({
+        nativeThreadId: FAILED_IMAGE_NATIVE_THREAD,
+        nativeTurnId: FAILED_IMAGE_NATIVE_TURN,
+        prompt: FAILED_IMAGE_PROMPT,
+      }),
+      {
+        type: "emit_inbound",
+        label: "item/started/image",
+        frame: {
+          method: "item/started",
+          params: {
+            item: {
+              type: "imageGeneration",
+              id: FAILED_IMAGE_ITEM,
+              status: "generating",
+              result: "",
+            },
+            threadId: FAILED_IMAGE_NATIVE_THREAD,
+            turnId: FAILED_IMAGE_NATIVE_TURN,
+            startedAtMs: 1782622440500,
+          },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "turn/completed",
+        frame: {
+          method: "turn/completed",
+          params: {
+            threadId: FAILED_IMAGE_NATIVE_THREAD,
+            turn: {
+              ...makeCodexReplayTurn({ id: FAILED_IMAGE_NATIVE_TURN, status: "failed" }),
+              error: { message: "provider failed mid-image" },
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  it.effect("marks an image generation failed when its turn fails first", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeCodexReplayHarness(failedMidImageTranscript);
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-failed-mid-image"),
+            text: FAILED_IMAGE_PROMPT,
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "failed terminal");
+
+        const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
+        const statuses = harness.events.flatMap((event, index) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "dynamic_tool" &&
+          event.turnItem.nativeItemRef?.nativeId === FAILED_IMAGE_ITEM
+            ? [{ index, status: event.turnItem.status, title: event.turnItem.title }]
+            : [],
+        );
+        assert.deepStrictEqual(
+          statuses.map((entry) => entry.status),
+          ["running", "failed"],
+        );
+        assert.equal(statuses.at(-1)?.title, "Image generation failed");
+        assert.isBelow(statuses.at(-1)!.index, terminalIndex);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),
   );

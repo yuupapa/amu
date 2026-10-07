@@ -32,8 +32,10 @@ import {
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
-import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
-import { CODEX_GENERATED_IMAGE_TOOL_NAME } from "@t3tools/shared/toolOutput";
+import {
+  CODEX_GENERATED_IMAGE_TOOL_NAME,
+  isCodexGeneratedImagePath,
+} from "@t3tools/shared/toolOutput";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import type {
@@ -1260,13 +1262,7 @@ export function codexImageGenerationProjection(
   );
   const savedPath = item.savedPath?.trim();
   const viewedImagePath =
-    !failed &&
-    savedPath &&
-    savedPath.length <= 4096 &&
-    !/[\r\n]/.test(savedPath) &&
-    isWorkspaceImagePreviewPath(savedPath)
-      ? savedPath
-      : undefined;
+    !failed && savedPath && isCodexGeneratedImagePath(savedPath) ? savedPath : undefined;
   const prompt = item.revisedPrompt?.trim();
   return {
     status,
@@ -1855,6 +1851,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         const runningDynamicToolsByTurn = yield* Ref.make(
           new Map<string, Map<string, CodexDynamicToolItem>>(),
         );
+        // Amu: image generations still running, so a turn that ends without
+        // their completion marks them stopped instead of leaving them running.
+        const runningImageGenerationsByTurn = yield* Ref.make(
+          new Map<string, Map<string, CodexImageGenerationItem>>(),
+        );
         const interruptingNativeTurns = yield* Ref.make(new Set<string>());
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
         // Keep the run event stream open until descendant provider state is
@@ -2308,6 +2309,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           includePersistent: boolean,
         ) =>
           Effect.gen(function* () {
+            yield* terminalizeRunningImageGenerations(context, nativeTurnId, status, completedAt);
             const items = (yield* Ref.get(runningDynamicToolsByTurn)).get(nativeTurnId);
             if (items === undefined || items.size === 0) {
               return;
@@ -2355,6 +2357,66 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               }
               return updated;
             });
+          });
+
+        const terminalizeRunningImageGenerations = (
+          context: ActiveCodexTurnContext,
+          nativeTurnId: string,
+          status: "cancelled" | "interrupted" | "failed",
+          completedAt: DateTime.Utc,
+        ) =>
+          Effect.gen(function* () {
+            const items = (yield* Ref.get(runningImageGenerationsByTurn)).get(nativeTurnId);
+            if (items === undefined) return;
+            yield* Ref.update(runningImageGenerationsByTurn, (current) => {
+              const updated = new Map(current);
+              updated.delete(nativeTurnId);
+              return updated;
+            });
+            for (const tracked of items.values()) {
+              const artifacts = yield* buildImageGenerationArtifacts(context, tracked, false);
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: { ...artifacts.node, status, completedAt },
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: {
+                  ...artifacts.turnItem,
+                  status,
+                  title:
+                    status === "failed" ? "Image generation failed" : "Image generation stopped",
+                  completedAt,
+                  updatedAt: completedAt,
+                },
+              });
+            }
+          });
+
+        const trackRunningImageGeneration = (
+          nativeTurnId: string,
+          item: CodexImageGenerationItem,
+        ) =>
+          Ref.update(runningImageGenerationsByTurn, (current) => {
+            const updated = new Map(current);
+            const items = new Map(updated.get(nativeTurnId) ?? []);
+            items.set(item.id, item);
+            updated.set(nativeTurnId, items);
+            return updated;
+          });
+
+        const clearRunningImageGeneration = (nativeTurnId: string, nativeItemId: string) =>
+          Ref.update(runningImageGenerationsByTurn, (current) => {
+            const items = current.get(nativeTurnId);
+            if (items === undefined || !items.has(nativeItemId)) return current;
+            const remaining = new Map(items);
+            remaining.delete(nativeItemId);
+            const updated = new Map(current);
+            if (remaining.size === 0) updated.delete(nativeTurnId);
+            else updated.set(nativeTurnId, remaining);
+            return updated;
           });
 
         /**
@@ -4506,6 +4568,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
 
             if (payload.item.type === "imageGeneration") {
               const artifacts = yield* buildImageGenerationArtifacts(context, payload.item, false);
+              if (artifacts.turnItem.status === "running") {
+                yield* trackRunningImageGeneration(payload.turnId, payload.item);
+              }
               yield* emitProviderEvent({
                 type: "node.updated",
                 driver: CODEX_PROVIDER,
@@ -4689,6 +4754,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
 
             if (payload.item.type === "imageGeneration") {
+              yield* clearRunningImageGeneration(payload.turnId, payload.item.id);
               const artifacts = yield* buildImageGenerationArtifacts(context, payload.item, true);
               yield* emitProviderEvent({
                 type: "node.updated",

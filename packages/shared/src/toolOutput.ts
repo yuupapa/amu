@@ -193,6 +193,26 @@ export interface GeneratedImageReference {
   readonly prompt: string | null;
 }
 
+/**
+ * Whether a path names an image Codex saved: absolute, normalized (no `.` or
+ * `..` segments, no doubled separators) and inside a `generated_images`
+ * folder, which is where Codex writes them under its home.
+ */
+export function isCodexGeneratedImagePath(path: string): boolean {
+  if (path.length > 4096 || /[\r\n\0]/.test(path) || !isWorkspaceImagePreviewPath(path)) {
+    return false;
+  }
+  const windows = /^[A-Za-z]:\\/.test(path);
+  if (!windows && !path.startsWith("/")) return false;
+  const segments = (windows ? path.slice(3) : path.slice(1)).split(windows ? /[\\/]/ : "/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return false;
+  }
+  // The folder, then at least the file (Codex adds a per-thread folder too).
+  const folder = segments.lastIndexOf("generated_images");
+  return folder >= 0 && folder < segments.length - 1;
+}
+
 /** The image a completed Codex image generation saved, if this item is one. */
 export function generatedImageFromToolItem(item: {
   readonly toolName: string | null | undefined;
@@ -201,15 +221,7 @@ export function generatedImageFromToolItem(item: {
 }): GeneratedImageReference | undefined {
   if (item.toolName !== CODEX_GENERATED_IMAGE_TOOL_NAME) return undefined;
   const path = item.viewedImagePath?.trim();
-  if (
-    !path ||
-    path.length > 4096 ||
-    /[\r\n]/.test(path) ||
-    !(path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) ||
-    !isWorkspaceImagePreviewPath(path)
-  ) {
-    return undefined;
-  }
+  if (!path || !isCodexGeneratedImagePath(path)) return undefined;
   const prompt =
     Predicate.isObject(item.input) &&
     "prompt" in item.input &&

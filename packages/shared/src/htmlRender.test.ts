@@ -267,6 +267,21 @@ describe("generatedImageFromToolItem", () => {
     ["no saved file", { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME }],
     ["a relative path", { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME, viewedImagePath: "ig_1.png" }],
     [
+      "an image outside generated_images",
+      { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME, viewedImagePath: "/tmp/private-photo.png" },
+    ],
+    [
+      "a path that climbs out of generated_images",
+      {
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: "/Users/x/.codex/generated_images/../../Pictures/a.png",
+      },
+    ],
+    [
+      "a path that is only the folder",
+      { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME, viewedImagePath: "/Users/x/generated_images" },
+    ],
+    [
       "a file that is not an image",
       { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME, viewedImagePath: "/tmp/a.sh" },
     ],
