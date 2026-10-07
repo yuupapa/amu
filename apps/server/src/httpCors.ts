@@ -20,10 +20,10 @@ export function isLoopbackRemoteAddress(address: string): boolean {
 export function isLocalLunaAutoRequest(
   url: URL,
   headers: Readonly<Record<string, string | undefined>>,
-  /** The socket's peer; the Host header alone can be set to anything. */
-  remoteAddress?: string,
+  /** The socket's peer; the Host header alone can be set to anything. Unknown is refused. */
+  remoteAddress: string | undefined,
 ): boolean {
-  if (remoteAddress !== undefined && !isLoopbackRemoteAddress(remoteAddress)) return false;
+  if (remoteAddress === undefined || !isLoopbackRemoteAddress(remoteAddress)) return false;
   if (
     !["http:", "https:"].includes(url.protocol) ||
     !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||

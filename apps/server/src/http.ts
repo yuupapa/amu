@@ -459,121 +459,131 @@ export const layerAssetRoute = HttpRouter.add(
 );
 
 // Amu: Luna picks the model for the first request of a thread (docs/user/luna-auto.md).
-export const layerLunaAutoRoute = Layer.unwrap(
-  Effect.gen(function* () {
-    const providers = yield* ProviderRegistry;
-    const settings = yield* ServerSettingsService;
-    const serverConfig = yield* ServerConfig.ServerConfig;
-    const broker = new LunaDecisionBroker();
-    yield* Effect.addFinalizer(() => Effect.sync(() => broker.close()));
-    return HttpRouter.add(
-      "POST",
-      "/api/luna-auto",
-      Effect.gen(function* () {
-        yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const url = HttpServerRequest.toURL(request);
-        const remoteAddress = deriveAuthClientMetadata({ request }).ipAddress;
-        if (
-          Option.isNone(url) ||
-          !isLocalLunaAutoRequest(url.value, request.headers, remoteAddress)
-        )
-          return HttpServerResponse.jsonUnsafe(
-            { error: "オートはこのMacのローカルのAmuで利用してください。" },
-            { status: 403 },
-          );
-        const body = yield* request.text;
-        if (Buffer.byteLength(body) > 64_000)
-          return HttpServerResponse.jsonUnsafe(
-            { error: "入力サイズが上限を超えています。" },
-            { status: 400 },
-          );
-        const data = yield* Schema.decodeEffect(
-          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
-        )(body).pipe(Effect.orElseSucceed(() => null));
-        if (!data || typeof data.id !== "string" || !/^[a-zA-Z0-9-]{20,80}$/.test(data.id))
-          return HttpServerResponse.jsonUnsafe(
-            { error: "モデル選択の形式が不正です。" },
-            { status: 400 },
-          );
-        if (data.action === "cancel") {
-          broker.cancel(data.id);
-          return HttpServerResponse.jsonUnsafe({ cancelled: true });
-        }
-        if (
-          data.action !== "decide" ||
-          typeof data.prompt !== "string" ||
-          !data.prompt.trim() ||
-          data.prompt.length > 24_000 ||
-          !Array.isArray(data.models)
-        )
-          return HttpServerResponse.jsonUnsafe(
-            { error: "依頼文または利用可能モデルが不正です。" },
-            { status: 400 },
-          );
-        const snapshots = yield* providers.getProviders;
-        const currentSettings = yield* settings.getSettings;
-        const allowedModels = data.models;
-        const choices = autoChoices(
-          snapshots.map((p) => ({
-            ...p,
-            models: p.models.filter((model) =>
-              allowedModels.some(
-                (m: unknown) =>
-                  m !== null &&
-                  typeof m === "object" &&
-                  "instanceId" in m &&
-                  "model" in m &&
-                  m.instanceId === p.instanceId &&
-                  m.model === model.slug,
+export type LunaAutoRouteOptions = {
+  /** The connecting peer's address; the Host header alone can be set to anything. */
+  readonly peerAddress?: (request: HttpServerRequest.HttpServerRequest) => string | undefined;
+};
+const socketPeerAddress = (request: HttpServerRequest.HttpServerRequest) =>
+  deriveAuthClientMetadata({ request }).ipAddress;
+
+export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const providers = yield* ProviderRegistry;
+      const settings = yield* ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const broker = new LunaDecisionBroker();
+      yield* Effect.addFinalizer(() => Effect.sync(() => broker.close()));
+      return HttpRouter.add(
+        "POST",
+        "/api/luna-auto",
+        Effect.gen(function* () {
+          yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const url = HttpServerRequest.toURL(request);
+          const remoteAddress = (options.peerAddress ?? socketPeerAddress)(request);
+          if (
+            Option.isNone(url) ||
+            !isLocalLunaAutoRequest(url.value, request.headers, remoteAddress)
+          )
+            return HttpServerResponse.jsonUnsafe(
+              { error: "オートはこのMacのローカルのAmuで利用してください。" },
+              { status: 403 },
+            );
+          const body = yield* request.text;
+          if (Buffer.byteLength(body) > 64_000)
+            return HttpServerResponse.jsonUnsafe(
+              { error: "入力サイズが上限を超えています。" },
+              { status: 400 },
+            );
+          const data = yield* Schema.decodeEffect(
+            Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+          )(body).pipe(Effect.orElseSucceed(() => null));
+          if (!data || typeof data.id !== "string" || !/^[a-zA-Z0-9-]{20,80}$/.test(data.id))
+            return HttpServerResponse.jsonUnsafe(
+              { error: "モデル選択の形式が不正です。" },
+              { status: 400 },
+            );
+          if (data.action === "cancel") {
+            broker.cancel(data.id);
+            return HttpServerResponse.jsonUnsafe({ cancelled: true });
+          }
+          if (
+            data.action !== "decide" ||
+            typeof data.prompt !== "string" ||
+            !data.prompt.trim() ||
+            data.prompt.length > 24_000 ||
+            !Array.isArray(data.models)
+          )
+            return HttpServerResponse.jsonUnsafe(
+              { error: "依頼文または利用可能モデルが不正です。" },
+              { status: 400 },
+            );
+          const snapshots = yield* providers.getProviders;
+          const currentSettings = yield* settings.getSettings;
+          const allowedModels = data.models;
+          const choices = autoChoices(
+            snapshots.map((p) => ({
+              ...p,
+              models: p.models.filter((model) =>
+                allowedModels.some(
+                  (m: unknown) =>
+                    m !== null &&
+                    typeof m === "object" &&
+                    "instanceId" in m &&
+                    "model" in m &&
+                    m.instanceId === p.instanceId &&
+                    m.model === model.slug,
+                ),
               ),
-            ),
-          })),
-        );
-        const preflight = resolveLunaPreflight(
-          snapshots,
-          deriveProviderInstanceConfigMap(currentSettings),
-          choices,
-        );
-        if (!preflight.ok)
-          return HttpServerResponse.jsonUnsafe(
-            { error: preflight.error, code: preflight.code },
-            { status: 400 },
+            })),
           );
-        const { judge, instance, config } = preflight;
-        // 結パパ's routing table: which model fits which kind of request.
-        const policy = loadLunaRoutingPolicy(serverConfig.stateDir);
-        const routedChoices = applyLunaRoutingPolicy(choices, policy);
-        const id = data.id,
-          prompt = data.prompt;
-        // Keep the original rejection message; the default catcher replaces it with a generic UnknownError.
-        return yield* Effect.tryPromise({
-          try: () =>
-            broker.decide(id, {
-              prompt,
-              choices: routedChoices,
-              guidance: policy.guidance,
-              runtime: {
-                binary: expandHomePath(config.binaryPath),
-                home:
-                  judge.runtimePaths?.shadowHomePath ??
-                  judge.runtimePaths?.homePath ??
-                  expandHomePath(config.homePath),
-                environment: mergeProviderInstanceEnvironment(instance.environment),
-              },
-            }),
-          catch: (error) =>
-            error instanceof Error ? error.message : "Lunaの結果が不明です。自動再送はしません。",
-        }).pipe(
-          Effect.map((result) => HttpServerResponse.jsonUnsafe({ result })),
-          Effect.catch((message) =>
-            Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 400 })),
-          ),
-        );
-      }),
-    );
-  }),
-);
+          const preflight = resolveLunaPreflight(
+            snapshots,
+            deriveProviderInstanceConfigMap(currentSettings),
+            choices,
+          );
+          if (!preflight.ok)
+            return HttpServerResponse.jsonUnsafe(
+              { error: preflight.error, code: preflight.code },
+              { status: 400 },
+            );
+          const { judge, instance, config } = preflight;
+          // 結パパ's routing table: which model fits which kind of request.
+          const policy = loadLunaRoutingPolicy(serverConfig.stateDir);
+          const routedChoices = applyLunaRoutingPolicy(choices, policy);
+          const id = data.id,
+            prompt = data.prompt;
+          // Keep the original rejection message; the default catcher replaces it with a generic UnknownError.
+          return yield* Effect.tryPromise({
+            try: () =>
+              broker.decide(id, {
+                prompt,
+                choices: routedChoices,
+                guidance: policy.guidance,
+                runtime: {
+                  binary: expandHomePath(config.binaryPath),
+                  home:
+                    judge.runtimePaths?.shadowHomePath ??
+                    judge.runtimePaths?.homePath ??
+                    expandHomePath(config.homePath),
+                  environment: mergeProviderInstanceEnvironment(instance.environment),
+                },
+              }),
+            catch: (error) =>
+              error instanceof Error ? error.message : "Lunaの結果が不明です。自動再送はしません。",
+          }).pipe(
+            Effect.map((result) => HttpServerResponse.jsonUnsafe({ result })),
+            Effect.catch((message) =>
+              Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 400 })),
+            ),
+          );
+        }),
+      );
+    }),
+  );
+
+export const layerLunaAutoRoute = makeLunaAutoRouteLayer();
 
 export const layerAttachmentUploadRoute = HttpRouter.add(
   "POST",

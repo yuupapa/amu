@@ -18,7 +18,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { layerMemory as SqlitePersistenceMemory } from "../persistence/Sqlite.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import * as Settings from "../serverSettings.ts";
-import { layerLunaAutoRoute as lunaAutoRouteLayer } from "../http.ts";
+import { layerLunaAutoRoute as lunaAutoRouteLayer, makeLunaAutoRouteLayer } from "../http.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const token = "offline-local-route-dev-token-long-enough";
@@ -55,7 +55,8 @@ const providers = Layer.succeed(
     streamChanges: Stream.empty,
   }),
 );
-const routes = lunaAutoRouteLayer.pipe(
+const localPeer = { peerAddress: () => "127.0.0.1" };
+const routes = makeLunaAutoRouteLayer(localPeer).pipe(
   Layer.provide(providers),
   Layer.provide(Settings.layerTest()),
   Layer.provideMerge(auth),
@@ -141,7 +142,7 @@ const legacyJudge = decodeProvider({
   checkedAt: "2026-10-02T00:00:00Z",
   models: [{ slug: "gpt-6-luna", name: "Luna", isCustom: false, capabilities: null }],
 });
-const legacyRoutes = lunaAutoRouteLayer.pipe(
+const legacyRoutes = makeLunaAutoRouteLayer(localPeer).pipe(
   Layer.provide(Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([legacyJudge]) })),
   Layer.provide(
     Settings.layerTest({
@@ -234,5 +235,58 @@ describe("isLoopbackRemoteAddress", () => {
     const url = new URL("http://localhost:5233/api/luna-auto");
     expect(isLocalLunaAutoRequest(url, { "x-amu-auto": "1" }, "192.168.1.2")).toBe(false);
     expect(isLocalLunaAutoRequest(url, { "x-amu-auto": "1" }, "127.0.0.1")).toBe(true);
+    expect(isLocalLunaAutoRequest(url, { "x-amu-auto": "1" }, undefined)).toBe(false);
+    // The header rules still apply to a local peer.
+    const ip = "127.0.0.1";
+    const bearer = { "x-amu-auto": "1", authorization: "Bearer token" };
+    expect(isLocalLunaAutoRequest(url, { ...bearer, origin: "t3code://app" }, ip)).toBe(true);
+    expect(isLocalLunaAutoRequest(url, { ...bearer, origin: "t3code-dev://app" }, ip)).toBe(true);
+    expect(isLocalLunaAutoRequest(url, { ...bearer, origin: url.origin }, ip)).toBe(true);
+    expect(isLocalLunaAutoRequest(url, { ...bearer, origin: "t3code://evil" }, ip)).toBe(false);
+    expect(isLocalLunaAutoRequest(url, { origin: "t3code://app", "x-amu-auto": "1" }, ip)).toBe(
+      false,
+    );
+    expect(isLocalLunaAutoRequest(url, { authorization: "Bearer token" }, ip)).toBe(false);
   });
+});
+
+describe("Luna Auto route peer check", () => {
+  it.effect(
+    "refuses a request whose peer is unknown or another machine, whatever its headers",
+    () =>
+      Effect.gen(function* () {
+        for (const [layer, label] of [
+          [lunaAutoRouteLayer, "no socket"],
+          [makeLunaAutoRouteLayer({ peerAddress: () => "192.168.1.2" }), "LAN peer"],
+        ] as const) {
+          const web = HttpRouter.toWebHandler(
+            layer.pipe(
+              Layer.provide(providers),
+              Layer.provide(Settings.layerTest()),
+              Layer.provideMerge(auth),
+              Layer.provide(config),
+              Layer.provide(NodeServices.layer),
+            ),
+            { disableLogger: true },
+          );
+          const response = yield* Effect.promise(() =>
+            web.handler(
+              new Request("http://127.0.0.1:5233/api/luna-auto", {
+                method: "POST",
+                headers: {
+                  host: "127.0.0.1:5233",
+                  "content-type": "application/json",
+                  origin: "t3code://app",
+                  authorization: `Bearer ${token}`,
+                  "x-amu-auto": "1",
+                },
+                body: encodeJson({ id: "offline-local-route-000002", action: "cancel" }),
+              }),
+            ),
+          );
+          expect(response.status, label).toBe(403);
+          yield* Effect.promise(() => web.dispose());
+        }
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
