@@ -572,6 +572,7 @@ import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { Button, InlineButton } from "./ui/button";
 import { useLunaAuto } from "../amu/useLunaAuto";
+import { useSwitchNotice } from "../amu/useSwitchNotice";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -1802,6 +1803,13 @@ export default function ChatView(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
+  // Amu: the model picked in the composer, for the switch notice.
+  const composerPickedModelSelection = useComposerDraftStore((store) => {
+    const draft = store.getComposerDraft(composerDraftTarget);
+    return draft?.activeProvider
+      ? (draft.modelSelectionByProvider[draft.activeProvider] ?? null)
+      : null;
+  });
   const composerHasAttachments = useComposerDraftStore((store) => {
     const draft = store.getComposerDraft(composerDraftTarget);
     return (draft?.images.length ?? 0) > 0 || (draft?.files.length ?? 0) > 0;
@@ -8699,6 +8707,22 @@ export default function ChatView(props: ChatViewProps) {
     },
   });
 
+  // Amu: say before the next send that it hands the conversation to another AI.
+  const switchNotice = useSwitchNotice({
+    started: activeMessageCount > 0,
+    current: activeThread?.modelSelection ?? null,
+    picked: composerPickedModelSelection,
+    providers: providerInstanceEntries,
+    undo: (selection) => {
+      if (!activeThread) return;
+      setComposerDraftModelSelection(
+        scopeThreadRef(activeThread.environmentId, activeThread.id),
+        selection,
+        { explicit: true, replaceOptions: true },
+      );
+    },
+  });
+
   const onSend = async (
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
@@ -11529,6 +11553,8 @@ export default function ChatView(props: ChatViewProps) {
                         : undefined
                     }
                   >
+                    {lunaAuto.statusElement}
+                    {switchNotice}
                     <ComposerSurface.Shell
                       contextStrip={showComposerContextStrip || showComposerModelStrip}
                     >
@@ -11557,7 +11583,6 @@ export default function ChatView(props: ChatViewProps) {
                               }
                             />
                           ) : null}
-                          {lunaAuto.statusElement}
                           {!composerMounted ? null : (
                             <ChatComposer
                               lunaAutoSelected={lunaAuto.autoOn}

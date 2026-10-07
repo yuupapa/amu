@@ -1,4 +1,5 @@
 import { japaneseUiText } from "../uiText.ja";
+import { japaneseUiTextV2 } from "./uiText.v2.ja";
 import { rebrandUiText } from "../uiText";
 
 /**
@@ -53,13 +54,19 @@ function buildTables(dictionary: Readonly<Record<string, string>>) {
       let source = "^";
       let anchor = "";
       const order: number[] = [];
+      for (let index = 0; index < parts.length; index += 2) {
+        const part = parts[index] ?? "";
+        if (part.trim().length > anchor.length) anchor = part.trim();
+      }
+      // A short fixed part ("{0}d") would match ordinary words ("Add"), so
+      // such templates take numbers only.
+      const value = anchor.length < 4 ? "(\\d+(?:[.,]\\d+)?)" : "(.+?)";
       parts.forEach((part, index) => {
         if (index % 2 === 0) {
           source += escapeRegExp(part);
-          if (part.trim().length > anchor.length) anchor = part.trim();
         } else {
           order.push(Number(part));
-          source += "(.+?)";
+          source += value;
         }
       });
       source += "$";
@@ -82,7 +89,7 @@ function buildTables(dictionary: Readonly<Record<string, string>>) {
 
 let tables: ReturnType<typeof buildTables> | null = null;
 function getTables() {
-  tables ??= buildTables(japaneseUiText);
+  tables ??= buildTables({ ...japaneseUiTextV2, ...japaneseUiText });
   return tables;
 }
 

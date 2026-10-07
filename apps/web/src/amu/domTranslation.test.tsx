@@ -27,6 +27,16 @@ describe("translateUiCopy", () => {
     ).not.toBeNull();
   });
 
+  it("fills short time templates with numbers only", () => {
+    expect(translateUiCopy("16h ago")).toBe("16時間前");
+    expect(translateUiCopy("1d")).toBe("1日");
+    expect(translateUiCopy("Settled (3)")).toBe("完了済み（3）");
+    // Ordinary words that end like a template stay as they are.
+    expect(translateUiCopy("Rapid")).toBeNull();
+    expect(translateUiCopy("Bath")).toBeNull();
+    expect(translateUiCopy("Hm")).toBeNull();
+  });
+
   it("leaves unknown text alone", () => {
     expect(translateUiCopy("refactor the parser")).toBeNull();
   });
