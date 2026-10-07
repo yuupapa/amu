@@ -44,6 +44,8 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   Archived: "アーカイブ済み",
 
   "Context handoff": "引き継ぎ",
+  "Update Available: {0}": "更新があります：{0}",
+  "Check for updates": "更新を確認",
   "Provider error": "プロバイダーのエラー",
 
   // Settings
