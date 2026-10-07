@@ -265,7 +265,6 @@ describe("generatedImageFromToolItem", () => {
   it.each([
     "C:\\Users\\example\\.codex\\generated_images\\thread\\a.png",
     "C:/Users/example/.codex/generated_images/thread/a.png",
-    "\\\\server\\share\\generated_images\\thread\\a.png",
   ])("accepts the Windows path %s", (windowsPath) => {
     expect(
       generatedImageFromToolItem({
@@ -309,6 +308,20 @@ describe("generatedImageFromToolItem", () => {
       {
         toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
         viewedImagePath: "/C:/x/generated_images/a.png",
+      },
+    ],
+    [
+      "a network path",
+      {
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: "\\\\generated_images\\share\\private.png",
+      },
+    ],
+    [
+      "a path with a trailing space",
+      {
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: "/tmp/generated_images/a.png ",
       },
     ],
     [

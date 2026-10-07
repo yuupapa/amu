@@ -198,6 +198,9 @@ export interface GeneratedImageReference {
  * `..` segments, no doubled separators) and inside a `generated_images`
  * folder, which is where Codex writes them under its home.
  *
+ * Network (UNC) paths are refused, so showing an image never makes the host
+ * connect to another machine.
+ *
  * Clients load the picture through the Markdown image resolver, which decodes
  * `%` escapes and drops `?`/`#` suffixes; a path with those characters could
  * name another file once decoded, so it is refused rather than reinterpreted.
@@ -215,10 +218,6 @@ export function isCodexGeneratedImagePath(path: string): boolean {
   let separator: RegExp;
   if (/^[A-Za-z]:[\\/]/.test(path)) {
     rest = path.slice(3);
-    separator = /[\\/]/;
-  } else if (path.startsWith("\\\\")) {
-    // UNC: \\server\share\...
-    rest = path.slice(2);
     separator = /[\\/]/;
   } else if (path.startsWith("/") && !/^\/[A-Za-z]:/.test(path)) {
     // A leading "/C:" is read as a Windows drive by the resolver.
@@ -243,7 +242,8 @@ export function generatedImageFromToolItem(item: {
   readonly input?: unknown;
 }): GeneratedImageReference | undefined {
   if (item.toolName !== CODEX_GENERATED_IMAGE_TOOL_NAME) return undefined;
-  const path = item.viewedImagePath?.trim();
+  // Checked as stored: the path checked must be the path loaded.
+  const path = item.viewedImagePath;
   if (!path || !isCodexGeneratedImagePath(path)) return undefined;
   const prompt =
     Predicate.isObject(item.input) &&

@@ -1260,7 +1260,8 @@ export function codexImageGenerationProjection(
         ? "completed"
         : "inProgress",
   );
-  const savedPath = item.savedPath?.trim();
+  // Checked as Codex reported it; trimming first could check another path.
+  const savedPath = item.savedPath;
   const viewedImagePath =
     !failed && savedPath && isCodexGeneratedImagePath(savedPath) ? savedPath : undefined;
   const prompt = item.revisedPrompt?.trim();

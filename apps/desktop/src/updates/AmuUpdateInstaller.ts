@@ -198,13 +198,14 @@ restore() {
 }
 fail() {
   log "update failed: $1; restoring Amu $AMU_OLD_VERSION"
-  printf '%s\\n' "$AMU_VERSION: $1" > "$AMU_UPDATES/last-failure.txt"
   # From here a recovery must keep restoring, never take the old Amu for the
   # new. Until that is on disk nothing is restored; the watchdog tries again.
   if ! write_journal rollback; then
     log "could not record the rollback; the watchdog will retry it"
     exit 1
   fi
+  # Read by the next Amu as "the update was undone", so only once it will be.
+  printf '%s\\n' "$AMU_VERSION: $1" > "$AMU_UPDATES/last-failure.txt"
   stop_app
   wait_port_free 60
   if restore; then
@@ -272,11 +273,22 @@ log "installing Amu $AMU_VERSION over $AMU_OLD_VERSION"
 if ! wait_pid_exit "$AMU_PID" 120; then log "Amu did not quit; update skipped"; exit 1; fi
 if ! wait_port_free 60; then log "port $AMU_PORT is still in use; update skipped"; launch; exit 1; fi
 
-# Leftovers of an earlier run. Amu was just running, so the live files work,
-# and a journal left behind describes a state that no longer applies.
-# A leftover that cannot be removed would swallow the live folder on rename.
+# An unfinished earlier update comes first: its journal and the old files it
+# would restore must survive. Make sure its watchdog is there (a restart
+# drops it), without unloading one that may be restoring right now.
+if [ -f "$JOURNAL" ]; then
+  log "update skipped: an earlier update is unfinished ($(journal_field phase) phase)"
+  if ! "$LAUNCHCTL" print "$WATCH_DOMAIN/$WATCH_LABEL" >/dev/null 2>&1; then
+    start_watchdog || log "could not start the update watchdog"
+  fi
+  launch
+  exit 1
+fi
+# Leftovers of an earlier, finished run. Amu was just running, so the live
+# files work. A leftover that cannot be removed would swallow the live folder
+# on rename.
 stop_watchdog
-rm -f "$JOURNAL" "$JOURNAL.tmp"
+rm -f "$JOURNAL.tmp"
 WAS_ABSENT=""
 for item in $AMU_REPLACE; do
   # Only the app code must already be there; a part new in this version is added.

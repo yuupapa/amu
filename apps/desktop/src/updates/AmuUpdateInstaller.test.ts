@@ -595,6 +595,35 @@ describe.skipIf(!isMac)("Amu update installer", () => {
     expect(launchctlCalls().some((call) => call.startsWith("bootout"))).toBe(false);
   });
 
+  it("leaves an unfinished update to its watchdog instead of starting another", () => {
+    leaveHalfSwapped({ phase: "rollback", pid: 999_999 });
+    const result = runInstaller({ AMU_OPEN: "/usr/bin/true" });
+
+    expect(result.status).toBe(1);
+    const resources = NodePath.join(app, "Contents/Resources");
+    expect(read(NodePath.join(resources, ".amu-old-app.asar"))).toBe("old code");
+    expect(NodeFS.existsSync(NodePath.join(app, "Contents/.amu-old-Info.plist"))).toBe(true);
+    expect(read(NodePath.join(updates, "install-journal"))).toContain("phase=rollback");
+    expect(launchctlCalls().some((call) => call.startsWith("bootout"))).toBe(false);
+    expect(read(NodePath.join(updates, "install.log"))).toContain(
+      "an earlier update is unfinished",
+    );
+  });
+
+  it("reports the update undone only once the rollback is recorded", () => {
+    leaveHalfSwapped({ phase: "swap", pid: 999_999 });
+    const scriptPath = writeScript();
+    NodeFS.chmodSync(updates, 0o555);
+    try {
+      NodeChildProcess.spawnSync("/bin/bash", [scriptPath], {
+        env: installerEnv({ AMU_MODE: "recover", AMU_OPEN: "/usr/bin/true" }, 999_999),
+      });
+    } finally {
+      NodeFS.chmodSync(updates, 0o755);
+    }
+    expect(NodeFS.existsSync(NodePath.join(updates, "last-failure.txt"))).toBe(false);
+  });
+
   it("refuses a file listed twice", () => {
     const result = runInstaller({ AMU_REPLACE: "app.asar app.asar" });
 
