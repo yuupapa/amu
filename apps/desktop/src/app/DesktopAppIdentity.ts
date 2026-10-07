@@ -124,6 +124,7 @@ export const make = Effect.gen(function* () {
     yield* electronApp.setAboutPanelOptions({
       applicationName: environment.displayName,
       applicationVersion: environment.appVersion,
+      copyright: "Based on T3 Code. Copyright T3 Tools. MIT license.",
       version: Option.getOrElse(commitHash, () => "unknown"),
     });
 

@@ -4130,4 +4130,55 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "{0} characters · {1} messages included · {2} left out":
     "{0} 文字・含めた発言 {1} 件・省いた発言 {2} 件",
   "Could not load what was handed over": "引き継ぎ内容を読み込めませんでした",
+  "Amu {0} is available. Click to download.": "Amu {0} が出ました。クリックでダウンロードします",
+  "Downloading update ({0}%)": "更新をダウンロード中（{0}%）",
+  "Downloading update": "更新をダウンロード中",
+  "Amu {0} is ready. Click to restart and update.":
+    "Amu {0} の準備ができました。クリックで再起動して更新します",
+  "Could not download Amu {0}. Click to try again.":
+    "Amu {0} をダウンロードできませんでした。クリックでやり直します",
+  "Could not install Amu {0}. Click to try again.":
+    "Amu {0} に更新できませんでした。クリックでやり直します",
+  "Update failed": "更新に失敗しました",
+  "Restart Amu to update to {0}?\n\nConversations and settings stay. A reply that is still running will stop.":
+    "Amu を再起動して {0} に更新しますか？\n\n会話と設定はそのまま残ります。返答の途中のものは止まります。",
+  "Restart Amu to update?\n\nConversations and settings stay. A reply that is still running will stop.":
+    "Amu を再起動して更新しますか？\n\n会話と設定はそのまま残ります。返答の途中のものは止まります。",
+  "This install is using the correct architecture.": "この Mac に合った版が入っています。",
+  "This Mac has Apple Silicon, but Amu is still running the Intel build under Rosetta. Download the available update to switch to the native Apple Silicon build.":
+    "この Mac は Apple シリコンですが、Amu は Intel 版を Rosetta で動かしています。更新をダウンロードすると Apple シリコン版に切り替わります。",
+  "This Mac has Apple Silicon, but Amu is still running the Intel build under Rosetta. Restart to install the downloaded Apple Silicon build.":
+    "この Mac は Apple シリコンですが、Amu は Intel 版を Rosetta で動かしています。再起動すると、ダウンロードした Apple シリコン版が入ります。",
+  "This Mac has Apple Silicon, but Amu is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.":
+    "この Mac は Apple シリコンですが、Amu は Intel 版を Rosetta で動かしています。次の更新で Apple シリコン版に切り替わります。",
+  "Amu {0} is available": "Amu {0} が出ました",
+  "Download it now? Conversations and settings stay as they are.":
+    "ダウンロードしますか？会話と設定はそのまま残ります。",
+  "What's new": "変更内容",
+  "Downloading Amu {0}": "Amu {0} をダウンロード中",
+  "Downloading Amu {0} ({1}%)": "Amu {0} をダウンロード中（{1}%）",
+  "You can keep working while it downloads.": "ダウンロード中も作業を続けられます。",
+  "Amu {0} is ready": "Amu {0} の準備ができました",
+  "Restart Amu to finish. If the new version does not start, Amu goes back to this one.":
+    "再起動すると更新が終わります。新しいバージョンが起動しなかったときは、今のバージョンに戻ります。",
+  "Restart and update": "再起動して更新",
+  "Could not download Amu {0}": "Amu {0} をダウンロードできませんでした",
+  "Check the connection and try again.": "接続を確かめて、もう一度試してください。",
+  "Could not update to Amu {0}": "Amu {0} に更新できませんでした",
+  "Amu is still on the current version.": "Amu は今のバージョンのままです。",
+  "Could not reach GitHub to check for Amu updates.":
+    "GitHub に接続できず、Amu の更新を確かめられませんでした。",
+  "Could not download the update. Check the connection and try again.":
+    "更新をダウンロードできませんでした。接続を確かめて、もう一度試してください。",
+  "Could not start the update installer.": "更新を始められませんでした。",
+  "The downloaded update is damaged. Try again.":
+    "ダウンロードした更新が壊れていました。もう一度試してください。",
+  "The downloaded update does not match its release.":
+    "ダウンロードした更新が、リリースの内容と一致しませんでした。",
+  "The update server stopped responding. Try again later.":
+    "更新サーバーから応答がありません。しばらくしてから試してください。",
+  "The update information could not be read.": "更新の情報を読み取れませんでした。",
+  "The update did not finish": "更新を完了できませんでした",
+  "The new version of Amu did not start, so Amu went back to this version.":
+    "新しいバージョンの Amu が起動しなかったため、今のバージョンに戻しました。会話と設定はそのままです。",
 };

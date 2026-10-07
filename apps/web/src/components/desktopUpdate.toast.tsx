@@ -6,6 +6,7 @@ import {
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateReleaseUrl,
 } from "./desktopUpdate.logic";
+import { amuUpdateNoticeShowsVersion } from "./AmuAppUpdateNotification.logic";
 import { toastManager } from "./ui/toast";
 
 type DesktopUpdateShell = Pick<DesktopBridge, "openExternal">;
@@ -51,7 +52,10 @@ export function showDesktopUpdateDownloadedToast(
   shell: DesktopUpdateShell,
   state: DesktopUpdateState,
 ): void {
-  const releaseUrl = getDesktopUpdateReleaseUrl(getDesktopUpdateDownloadedVersion(state));
+  const version = getDesktopUpdateDownloadedVersion(state);
+  // The Amu update notice already says this version is ready.
+  if (amuUpdateNoticeShowsVersion(version)) return;
+  const releaseUrl = getDesktopUpdateReleaseUrl(version);
   toastManager.add({
     type: "success",
     title: uiText("Update downloaded"),

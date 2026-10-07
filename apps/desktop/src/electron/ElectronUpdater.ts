@@ -15,9 +15,12 @@ export class ElectronUpdaterCheckForUpdatesError extends Schema.TaggedError<Elec
   {
     channel: Schema.NullOr(Schema.String),
     cause: Schema.Defect(),
+    /** A message written for the user; replaces the generic one when present. */
+    detail: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
+    if (this.detail !== undefined) return this.detail;
     return `Electron updater failed to check for updates on channel ${this.channel ?? "default"}.`;
   }
 }
@@ -27,9 +30,12 @@ export class ElectronUpdaterDownloadUpdateError extends Schema.TaggedError<Elect
   {
     channel: Schema.NullOr(Schema.String),
     cause: Schema.Defect(),
+    /** A message written for the user; replaces the generic one when present. */
+    detail: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
+    if (this.detail !== undefined) return this.detail;
     return `Electron updater failed to download the update on channel ${this.channel ?? "default"}.`;
   }
 }
@@ -41,9 +47,12 @@ export class ElectronUpdaterQuitAndInstallError extends Schema.TaggedError<Elect
     isSilent: Schema.Boolean,
     isForceRunAfter: Schema.Boolean,
     cause: Schema.Defect(),
+    /** A message written for the user; replaces the generic one when present. */
+    detail: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
+    if (this.detail !== undefined) return this.detail;
     return `Electron updater failed to quit and install the update on channel ${this.channel ?? "default"} (silent: ${this.isSilent}, force run after: ${this.isForceRunAfter}).`;
   }
 }

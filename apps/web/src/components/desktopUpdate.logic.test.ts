@@ -54,7 +54,7 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(state)).toBe("download");
-    expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to retry");
+    expect(getDesktopUpdateButtonTooltip(state)).toContain("クリックでやり直します");
   });
 
   it("keeps install action available after an install error", () => {
@@ -68,7 +68,7 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(state)).toBe("install");
-    expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to retry");
+    expect(getDesktopUpdateButtonTooltip(state)).toContain("クリックでやり直します");
   });
 
   it("keeps install action available after a background updater error", () => {
@@ -82,7 +82,7 @@ describe("desktop update button state", () => {
       canRetry: true,
     };
     expect(resolveDesktopUpdateButtonAction(state)).toBe("install");
-    expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to restart and install");
+    expect(getDesktopUpdateButtonTooltip(state)).toContain("クリックで再起動して更新します");
   });
 
   it("prefers a newly available release over a stale downloaded version", () => {
@@ -182,13 +182,13 @@ describe("getDesktopUpdateActionError", () => {
 describe("desktop update UI helpers", () => {
   it("builds the stable release URL for a downloaded version", () => {
     expect(getDesktopUpdateReleaseUrl("0.0.30")).toBe(
-      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
+      "https://github.com/yuupapa/amu/releases/tag/v0.0.30",
     );
   });
 
   it("builds the nightly release URL without dropping its version suffix", () => {
     expect(getDesktopUpdateReleaseUrl("0.0.30-nightly.20260728.931")).toBe(
-      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30-nightly.20260728.931",
+      "https://github.com/yuupapa/amu/releases/tag/v0.0.30-nightly.20260728.931",
     );
   });
 
@@ -198,9 +198,7 @@ describe("desktop update UI helpers", () => {
   });
 
   it("builds the release history URL", () => {
-    expect(getDesktopUpdateReleaseHistoryUrl()).toBe(
-      "https://github.com/pingdotgg/t3code/releases",
-    );
+    expect(getDesktopUpdateReleaseHistoryUrl()).toBe("https://github.com/yuupapa/amu/releases");
   });
 
   it("toasts only for actionable updater errors", () => {
@@ -236,8 +234,8 @@ describe("desktop update UI helpers", () => {
     };
 
     expect(shouldShowArm64IntelBuildWarning(state)).toBe(true);
-    expect(getArm64IntelBuildWarningDescription(state)).toContain("Apple Silicon");
-    expect(getArm64IntelBuildWarningDescription(state)).toContain("Intel build");
+    expect(getArm64IntelBuildWarningDescription(state)).toContain("Apple シリコン");
+    expect(getArm64IntelBuildWarningDescription(state)).toContain("Intel 版");
   });
 
   it("changes the warning copy when a native build update is ready to download", () => {
@@ -250,7 +248,7 @@ describe("desktop update UI helpers", () => {
       availableVersion: "1.1.0",
     };
 
-    expect(getArm64IntelBuildWarningDescription(state)).toContain("Download the available update");
+    expect(getArm64IntelBuildWarningDescription(state)).toContain("更新をダウンロードすると");
   });
 
   it("includes the downloaded version in the install confirmation copy", () => {
@@ -259,7 +257,7 @@ describe("desktop update UI helpers", () => {
         availableVersion: "1.1.0",
         downloadedVersion: "1.1.1",
       }),
-    ).toContain("Install update 1.1.1 and restart T3 Code?");
+    ).toContain("Amu を再起動して 1.1.1 に更新しますか？");
   });
 
   it("falls back to generic install confirmation copy when no version is available", () => {
@@ -268,7 +266,7 @@ describe("desktop update UI helpers", () => {
         availableVersion: null,
         downloadedVersion: null,
       }),
-    ).toContain("Install update and restart T3 Code?");
+    ).toContain("Amu を再起動して更新しますか？");
   });
 
   it("keeps the same install confirmation copy across desktop platforms", () => {
@@ -278,7 +276,7 @@ describe("desktop update UI helpers", () => {
         downloadedVersion: "1.1.0",
       }),
     ).toBe(
-      "Install update 1.1.0 and restart T3 Code?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.",
+      "Amu を再起動して 1.1.0 に更新しますか？\n\n会話と設定はそのまま残ります。返答の途中のものは止まります。",
     );
   });
 });
@@ -341,9 +339,9 @@ describe("canCheckForUpdate", () => {
 
 describe("getDesktopUpdateButtonTooltip", () => {
   it("returns 'Up to date' for non-actionable states", () => {
-    expect(getDesktopUpdateButtonTooltip({ ...baseState, status: "idle" })).toBe("Up to date");
+    expect(getDesktopUpdateButtonTooltip({ ...baseState, status: "idle" })).toBe("最新版です");
     expect(getDesktopUpdateButtonTooltip({ ...baseState, status: "up-to-date" })).toBe(
-      "Up to date",
+      "最新版です",
     );
   });
 });

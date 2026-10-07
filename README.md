@@ -31,6 +31,18 @@ pnpm dist:desktop:dmg:arm64
 
 開発中は `pnpm dev:desktop` で起動できます。
 
+## 更新とリリース
+
+Amu は起動の 15 秒後と 4 分ごとに、GitHub（yuupapa/amu）の最新リリースを確かめます。新しい版があれば画面の右上でお知らせし、ダウンロードと再起動で更新できます。入れ替えるのはアプリのコード（app.asar）だけで、会話・設定・`amu-local.json` はそのままです。新しい版が起動しなかったときは、自動で前の版に戻ります。
+
+リリースを作るときは、`apps/desktop/package.json` などのバージョンを上げてコミット・push してから、次を実行します（Apple Silicon の Mac で、`gh` に書き込みできるアカウントでログインしておく）。
+
+```bash
+node scripts/amu-release.mjs --notes-file notes.md --publish
+```
+
+`--publish` を外すとビルドだけをして、`release/amu-<版>/` に置きます。
+
 ## ライセンスと元のプロジェクト
 
 元のT3 CodeのREADMEは [docs/upstream-README.md](docs/upstream-README.md) にあります。ライセンスはT3 Codeと同じMITです。[LICENSE](LICENSE) には元の著作権表示（T3 Tools Inc.）をそのまま残しました。「T3」「T3 Code」はT3 Tools Inc.の名称で、Amuは同社と関係がありません。
