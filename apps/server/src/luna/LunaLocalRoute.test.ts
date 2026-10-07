@@ -199,7 +199,7 @@ it.effect(
                   "x-amu-auto": "1",
                 },
                 body: encodeJson({
-                  id: "offline-legacy-route-00001",
+                  id: "luna-1760000000000-legacy-route-0001",
                   action: "decide",
                   prompt: "架空の依頼",
                   models: [{ instanceId: "codex", model: "gpt-6-luna" }],

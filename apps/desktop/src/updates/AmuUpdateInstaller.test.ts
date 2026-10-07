@@ -154,6 +154,27 @@ describe.skipIf(!isMac)("Amu update installer", () => {
     expect(NodeFS.readdirSync(resources).filter((name) => name.startsWith(".amu-"))).toEqual([]);
   });
 
+  it("restores the old app when the new backend never reports its port", () => {
+    const launcher = NodePath.join(root, "launch.sh");
+    NodeFS.writeFileSync(launcher, '#!/bin/sh\n"$1/Contents/MacOS/Amu" 20 >/dev/null 2>&1 &\n', {
+      mode: 0o755,
+    });
+    const stateDir = NodePath.join(root, "state");
+    NodeFS.mkdirSync(stateDir, { recursive: true });
+    // A file from before the update does not count.
+    NodeFS.writeFileSync(NodePath.join(stateDir, "server-runtime.json"), '{"port":5233}');
+    const result = runInstaller({
+      AMU_OPEN: launcher,
+      AMU_HEALTH_TIMEOUT: "4",
+      AMU_STATE_DIR: stateDir,
+    });
+
+    expect(result.status).toBe(1);
+    const resources = NodePath.join(app, "Contents/Resources");
+    expect(read(NodePath.join(resources, "app.asar"))).toBe("old code");
+    expect(read(NodePath.join(updates, "last-failure.txt"))).toContain("did not start");
+  });
+
   it("adds a part the installed Amu does not have yet", () => {
     const launcher = NodePath.join(root, "launch.sh");
     NodeFS.writeFileSync(launcher, '#!/bin/sh\n"$1/Contents/MacOS/Amu" 20 >/dev/null 2>&1 &\n', {

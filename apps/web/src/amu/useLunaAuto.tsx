@@ -209,7 +209,8 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
       );
     };
     const threadRef = live.current.currentThreadRef();
-    const id = randomUUID();
+    // The time in the id lets the server refuse a stale or replayed request.
+    const id = `luna-${Date.now()}-${randomUUID()}`;
     const controller = new AbortController();
     pending.current = { id, controller };
     setStatus({ key, busy: true, text: "Lunaがモデルを選んでいます。元の依頼は保持しています。" });

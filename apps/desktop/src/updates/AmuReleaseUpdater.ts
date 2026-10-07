@@ -115,6 +115,8 @@ export interface AmuReleaseUpdaterOptions {
   readonly electronVersion: string;
   readonly executablePath: string;
   readonly port: string | undefined;
+  /** The server's state folder, so the installer can find the new backend's port. */
+  readonly stateDir?: string | undefined;
   readonly quitApp: () => void;
 }
 
@@ -247,6 +249,7 @@ export function makeAmuReleaseUpdater(
           asarIntegrityHash: ready.asarIntegrityHash,
           replace: ready.manifest.replace,
           port: options.port,
+          stateDir: options.stateDir,
         }),
         // Test hooks: how to reopen Amu and how long to wait for it.
         ...(process.env.AMU_INSTALL_OPEN ? { AMU_OPEN: process.env.AMU_INSTALL_OPEN } : {}),
@@ -350,6 +353,7 @@ export const layer = Layer.effect(
           electronVersion: process.versions.electron ?? "",
           executablePath: process.execPath,
           port: process.env.T3CODE_PORT,
+          stateDir: environment.stateDir,
           quitApp: () => Electron.app.quit(),
         }),
       ),

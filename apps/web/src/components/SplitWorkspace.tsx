@@ -511,7 +511,12 @@ export function SplitDropOverlay() {
         className="pointer-events-none fixed z-50 max-w-64 rounded-md border bg-popover px-2.5 py-1.5 text-popover-foreground shadow-lg"
         style={dragCardPosition(point)}
       >
-        <div className="truncate text-xs font-medium">{shell?.title ?? ""}</div>
+        <div
+          className="truncate text-xs font-medium"
+          translate={shell?.title === "New thread" ? undefined : "no"}
+        >
+          {shell?.title ?? ""}
+        </div>
         <div className={cn("text-2xs", blocked ? "text-destructive" : "text-muted-foreground")}>
           {hint}
         </div>

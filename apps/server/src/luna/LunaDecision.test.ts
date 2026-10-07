@@ -1,7 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - offline executable fixture uses temporary files only; the real-CLI check needs a kill timer.
 import { describe, expect, it, vi } from "vite-plus/test";
 import * as NodeChildProcess from "node:child_process";
-import { acceptJudgeEvent, checkJudgeCli, judgeArgs, LunaDecisionBroker } from "./LunaDecision.ts";
+import {
+  acceptJudgeEvent,
+  checkJudgeCli,
+  judgeArgs,
+  LUNA_REQUEST_TTL_MS,
+  LunaDecisionBroker,
+} from "./LunaDecision.ts";
 import type { AutoChoice } from "@t3tools/shared/lunaAuto";
 import catalog from "./lunaJudgeCatalog.json" with { type: "json" };
 import * as NodeFSP from "node:fs/promises";
@@ -24,6 +30,9 @@ const input = {
   choices,
   runtime: { binary: "/fixture-only", home: "", environment: {} },
 };
+const NOW = Date.UTC(2026, 9, 8);
+const lunaId = (suffix: string, at = NOW) => `luna-${at}-${suffix}-0000-0000`;
+const id = lunaId("fixed");
 describe("decision-only Luna broker", () => {
   it("runs the real transport against an offline CLI fixture, validates final JSON and strips API credentials", async () => {
     const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "amu-luna-fixture-"));
@@ -65,25 +74,25 @@ describe("decision-only Luna broker", () => {
   });
   it("returns the validated fixture without retrying an existing request", async () => {
     const judge = vi.fn(async () => decision),
-      broker = new LunaDecisionBroker(judge);
-    expect(await broker.decide("id", input)).toEqual(decision);
-    await expect(broker.decide("id", input)).rejects.toThrow("開始済み");
+      broker = new LunaDecisionBroker(judge, () => NOW);
+    expect(await broker.decide(id, input)).toEqual(decision);
+    await expect(broker.decide(id, input)).rejects.toThrow("開始済み");
     expect(judge).toHaveBeenCalledOnce();
     broker.close();
   });
   it("rejects invalid output and never substitutes another model", async () => {
     const judge = vi.fn(async () => ({ ...decision, model: "other" })),
-      broker = new LunaDecisionBroker(judge);
-    await expect(broker.decide("id", input)).rejects.toThrow();
-    await expect(broker.decide("id", input)).rejects.toThrow();
+      broker = new LunaDecisionBroker(judge, () => NOW);
+    await expect(broker.decide(id, input)).rejects.toThrow();
+    await expect(broker.decide(id, input)).rejects.toThrow();
     expect(judge).toHaveBeenCalledOnce();
     broker.close();
   });
   it("records cancellation even if the decide request has not reached the server", async () => {
     const judge = vi.fn(async () => decision),
-      broker = new LunaDecisionBroker(judge);
-    broker.cancel("id");
-    await expect(broker.decide("id", input)).rejects.toThrow();
+      broker = new LunaDecisionBroker(judge, () => NOW);
+    broker.cancel(id);
+    await expect(broker.decide(id, input)).rejects.toThrow();
     expect(judge).not.toHaveBeenCalled();
     broker.close();
   });
@@ -95,9 +104,9 @@ describe("decision-only Luna broker", () => {
             release = resolve;
           }),
       ),
-      broker = new LunaDecisionBroker(judge);
-    const pending = broker.decide("id", input);
-    broker.cancel("id");
+      broker = new LunaDecisionBroker(judge, () => NOW);
+    const pending = broker.decide(id, input);
+    broker.cancel(id);
     release(decision);
     await expect(pending).rejects.toThrow("取り消");
     expect(judge).toHaveBeenCalledOnce();
@@ -241,15 +250,31 @@ describe.skipIf(installedCodex.status !== 0)(
 );
 
 describe("Luna broker bookkeeping", () => {
-  it("keeps working after many judgements and early cancels, and never judges an id twice", async () => {
+  it("never judges an id twice, and fails closed when flooded until old ids age out", async () => {
+    let now = NOW;
     const judge = vi.fn(async () => decision);
-    const broker = new LunaDecisionBroker(judge);
-    for (let index = 0; index < 5_000; index++) broker.cancel(`cancelled-before-start-${index}`);
-    for (let index = 0; index < 600; index++) {
-      await expect(broker.decide(`finished-${index}`, input)).resolves.toEqual(decision);
-    }
-    await expect(broker.decide("finished-599", input)).rejects.toThrow("開始済み");
-    await expect(broker.decide("a-new-request", input)).resolves.toEqual(decision);
-    expect(judge).toHaveBeenCalledTimes(601);
+    const broker = new LunaDecisionBroker(judge, () => now);
+    const repeated = lunaId("repeated");
+    await expect(broker.decide(repeated, input)).resolves.toEqual(decision);
+    await expect(broker.decide(repeated, input)).rejects.toThrow("開始済み");
+    for (let index = 0; index < 5_000; index++) broker.cancel(lunaId(`cancelled-${index}`));
+    await expect(broker.decide(lunaId("during-flood"), input)).rejects.toThrow("混み合って");
+    now += LUNA_REQUEST_TTL_MS + 1;
+    await expect(broker.decide(lunaId("after", now), input)).resolves.toEqual(decision);
+    expect(judge).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses an old or malformed id even after it was forgotten", async () => {
+    let now = Date.UTC(2026, 9, 8);
+    const judge = vi.fn(async () => decision);
+    const broker = new LunaDecisionBroker(judge, () => now);
+    const early = lunaId("early", now);
+    broker.cancel(early);
+    now += LUNA_REQUEST_TTL_MS + 1;
+    for (let index = 0; index < 600; index++) broker.cancel(lunaId(`later-${index}`, now));
+    await expect(broker.decide(early, input)).rejects.toThrow("期限切れ");
+    await expect(broker.decide("not-a-luna-id-at-all-000000", input)).rejects.toThrow("期限切れ");
+    await expect(broker.decide(lunaId("fresh", now), input)).resolves.toEqual(decision);
+    expect(judge).toHaveBeenCalledTimes(1);
   });
 });

@@ -48,14 +48,34 @@ app_pids() {
 port_busy() { [ -n "\${AMU_PORT:-}" ] && lsof -nP -iTCP:"$AMU_PORT" -sTCP:LISTEN >/dev/null 2>&1; }
 port_held_by_app() {
   local pid
-  for pid in $(lsof -nP -iTCP:"$AMU_PORT" -sTCP:LISTEN -t 2>/dev/null); do
+  for pid in $(lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null); do
     in_bundle "$(ps -p "$pid" -o comm= 2>/dev/null)" && return 0
   done
   return 1
 }
+# The backend answers HTTP at all (any status), not just holds the port.
+answers() {
+  local code
+  code="$(curl -s -o /dev/null -m 3 -w '%{http_code}' "http://127.0.0.1:$1/" 2>/dev/null)"
+  [ -n "$code" ] && [ "$code" != "000" ]
+}
+LAUNCH_MARK="$AMU_UPDATES/.launched"
+STATE_FILE="\${AMU_STATE_DIR:-}/server-runtime.json"
+# Without a pinned port, the port the new backend wrote after this launch.
+runtime_port() {
+  [ -n "\${AMU_STATE_DIR:-}" ] && [ "$STATE_FILE" -nt "$LAUNCH_MARK" ] || return 0
+  sed -n 's/.*"port":\\([0-9][0-9]*\\).*/\\1/p' "$STATE_FILE"
+}
 healthy() {
   [ -n "$(app_pids)" ] || return 1
-  [ -z "\${AMU_PORT:-}" ] || port_held_by_app
+  local port="\${AMU_PORT:-}"
+  [ -n "$port" ] || port="$(runtime_port)"
+  if [ -z "$port" ]; then
+    # Nothing to check beyond the process only when no state folder is known.
+    [ -z "\${AMU_STATE_DIR:-}" ]
+    return
+  fi
+  port_held_by_app "$port" && answers "$port"
 }
 wait_pid_exit() { local i=0; while kill -0 "$1" 2>/dev/null; do i=$((i + 1)); [ "$i" -ge "$2" ] && return 1; sleep 1; done; return 0; }
 wait_port_free() { local i=0; while port_busy; do i=$((i + 1)); [ "$i" -ge "$1" ] && return 1; sleep 1; done; return 0; }
@@ -140,8 +160,10 @@ fi
 "$PB" -c "Set :CFBundleVersion $AMU_VERSION" "$PLIST" || fail "could not update the version"
 for item in $AMU_REPLACE; do xattr -dr com.apple.quarantine "$RES/$item" 2>/dev/null; done
 
-# 3. Open the new Amu. Healthy once it runs and, when it pins a port, its own
-# backend holds that port.
+# 3. Open the new Amu. Healthy once it runs and its own backend holds its
+# port and answers there.
+touch "$LAUNCH_MARK"
+sleep 1
 launch
 i=0
 until healthy; do
@@ -178,6 +200,8 @@ export interface AmuInstallInput {
   readonly asarIntegrityHash: string;
   readonly replace: ReadonlyArray<(typeof AMU_REPLACEABLE_RESOURCES)[number]>;
   readonly port: string | undefined;
+  /** The server's state folder, where the backend writes server-runtime.json. */
+  readonly stateDir?: string | undefined;
 }
 
 export function amuInstallEnvironment(input: AmuInstallInput): Record<string, string> {
@@ -192,6 +216,7 @@ export function amuInstallEnvironment(input: AmuInstallInput): Record<string, st
     AMU_ASAR_HASH: input.asarIntegrityHash,
     AMU_REPLACE: input.replace.join(" "),
     ...(input.port ? { AMU_PORT: input.port } : {}),
+    ...(input.stateDir ? { AMU_STATE_DIR: input.stateDir } : {}),
   };
 }
 
