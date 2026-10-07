@@ -52,9 +52,14 @@ import {
   browserApiCorsAllowedMethods,
   isLocalLunaAutoRequest,
 } from "./httpCors.ts";
-import { autoChoices } from "@t3tools/shared/lunaAuto";
-import { LunaDecisionBroker } from "./luna/LunaDecision.ts";
-import { resolveLunaPreflight } from "./luna/LunaPreflight.ts";
+import { autoChoices, LUNA_JUDGE_NAMES } from "@t3tools/shared/lunaAuto";
+import { findCursorAgent, LunaDecisionBroker, type JudgeTarget } from "./luna/LunaDecision.ts";
+import {
+  lunaPreflightBlocked,
+  resolveClaudeJudge,
+  resolveCursorJudge,
+  resolveLunaPreflight,
+} from "./luna/LunaPreflight.ts";
 import { applyLunaRoutingPolicy, loadLunaRoutingPolicy } from "./luna/LunaRoutingPolicy.ts";
 import { deriveAuthClientMetadata } from "./auth/utils.ts";
 import { expandHomePath } from "./pathExpansion.ts";
@@ -540,20 +545,65 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
               ),
             })),
           );
-          const preflight = resolveLunaPreflight(
-            snapshots,
-            deriveProviderInstanceConfigMap(currentSettings),
-            choices,
-          );
-          if (!preflight.ok)
-            return HttpServerResponse.jsonUnsafe(
-              { error: preflight.error, code: preflight.code },
+          const configMap = deriveProviderInstanceConfigMap(currentSettings);
+          const blocked = (result: { error: string; code: string }) =>
+            HttpServerResponse.jsonUnsafe(
+              { error: result.error, code: result.code },
               { status: 400 },
             );
-          const { judge, instance, config } = preflight;
+          if (!choices.length) return blocked(lunaPreflightBlocked("choices_unavailable"));
           // 結パパ's routing table: which model fits which kind of request.
           const policy = loadLunaRoutingPolicy(serverConfig.stateDir);
           const routedChoices = applyLunaRoutingPolicy(choices, policy);
+          // Every connected AI that can judge, in the policy's order (Haiku, Luna, Composer).
+          const codex = resolveLunaPreflight(snapshots, configMap, choices);
+          const judges: JudgeTarget[] = [];
+          for (const kind of policy.judges) {
+            const name = LUNA_JUDGE_NAMES[kind];
+            if (kind === "codex" && codex.ok) {
+              judges.push({
+                kind,
+                name,
+                runtime: {
+                  binary: expandHomePath(codex.config.binaryPath),
+                  home:
+                    codex.judge.runtimePaths?.shadowHomePath ??
+                    codex.judge.runtimePaths?.homePath ??
+                    expandHomePath(codex.config.homePath),
+                  environment: mergeProviderInstanceEnvironment(codex.instance.environment),
+                },
+              });
+            } else if (kind === "claude") {
+              const claude = resolveClaudeJudge(snapshots, configMap);
+              if (claude.ok)
+                judges.push({
+                  kind,
+                  name,
+                  runtime: {
+                    binary: expandHomePath(claude.config.binaryPath),
+                    home:
+                      claude.provider.runtimePaths?.homePath ??
+                      (claude.config.homePath ? expandHomePath(claude.config.homePath) : ""),
+                    environment: mergeProviderInstanceEnvironment(claude.instance.environment),
+                  },
+                });
+            } else if (kind === "cursor") {
+              const cursor = resolveCursorJudge(snapshots, configMap);
+              if (!cursor.ok) continue;
+              const environment = mergeProviderInstanceEnvironment(cursor.instance.environment);
+              const binary = findCursorAgent(
+                cursor.config.binaryPath ? expandHomePath(cursor.config.binaryPath) : undefined,
+                environment,
+              );
+              if (binary) judges.push({ kind, name, runtime: { binary, home: "", environment } });
+            }
+          }
+          if (!judges.length)
+            return blocked(
+              codex.ok || !policy.judges.includes("codex")
+                ? lunaPreflightBlocked("no_judge")
+                : codex,
+            );
           const id = data.id,
             prompt = data.prompt;
           // Keep the original rejection message; the default catcher replaces it with a generic UnknownError.
@@ -563,19 +613,14 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
                 prompt,
                 choices: routedChoices,
                 guidance: policy.guidance,
-                runtime: {
-                  binary: expandHomePath(config.binaryPath),
-                  home:
-                    judge.runtimePaths?.shadowHomePath ??
-                    judge.runtimePaths?.homePath ??
-                    expandHomePath(config.homePath),
-                  environment: mergeProviderInstanceEnvironment(instance.environment),
-                },
+                judges,
               }),
             catch: (error) =>
               error instanceof Error ? error.message : "Lunaの結果が不明です。自動再送はしません。",
           }).pipe(
-            Effect.map((result) => HttpServerResponse.jsonUnsafe({ result })),
+            Effect.map((verdict) =>
+              HttpServerResponse.jsonUnsafe({ result: verdict.decision, judge: verdict.judge }),
+            ),
             Effect.catch((message) =>
               Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 400 })),
             ),

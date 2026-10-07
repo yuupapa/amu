@@ -2,14 +2,15 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import type { AutoChoice } from "@t3tools/shared/lunaAuto";
+import { LUNA_JUDGE_ORDER, type AutoChoice, type LunaJudgeKind } from "@t3tools/shared/lunaAuto";
 
 /**
  * 結パパ's policy for which model Auto should pick (2026-10-08). Luna gets the
  * table as guidance, and models outside it are not offered at all. A
  * `luna-routing.json` in the server's state folder replaces the defaults:
  *
- *   { "preferred": ["claude-opus-5-5", …], "fallback": ["grok-4.7"], "guidance": "…" }
+ *   { "preferred": ["claude-opus-5-5", …], "fallback": ["grok-4.7"], "guidance": "…",
+ *     "judges": ["claude", "codex", "cursor"] }
  */
 export type LunaRoutingPolicy = {
   /** Models Luna chooses from. */
@@ -18,6 +19,8 @@ export type LunaRoutingPolicy = {
   readonly fallback: ReadonlyArray<string>;
   /** Appended to Luna's instructions. */
   readonly guidance: string;
+  /** Which AIs judge, first one first (see LUNA_JUDGE_ORDER). */
+  readonly judges: ReadonlyArray<LunaJudgeKind>;
 };
 
 export const DEFAULT_LUNA_ROUTING_POLICY: LunaRoutingPolicy = {
@@ -42,6 +45,7 @@ export const DEFAULT_LUNA_ROUTING_POLICY: LunaRoutingPolicy = {
     "- 複雑な設計・原因の調査・高い正確さが要る仕事: claude-opus-5-5 → gpt-6.1-sol",
     "- 上のどれも一覧に無いときだけ grok-4.7 を選ぶ。",
   ].join("\n"),
+  judges: LUNA_JUDGE_ORDER,
 };
 
 function readPolicyFile(stateDir: string): LunaRoutingPolicy | null {
@@ -58,7 +62,15 @@ function readPolicyFile(stateDir: string): LunaRoutingPolicy | null {
   const fallback = list(record.fallback) ?? [];
   const guidance = typeof record.guidance === "string" ? record.guidance : "";
   if (preferred === null || preferred.length === 0) return null;
-  return { preferred, fallback, guidance };
+  const judges = (list(record.judges) ?? []).filter((kind): kind is LunaJudgeKind =>
+    (LUNA_JUDGE_ORDER as ReadonlyArray<string>).includes(kind),
+  );
+  return {
+    preferred,
+    fallback,
+    guidance,
+    judges: judges.length > 0 ? [...new Set(judges)] : LUNA_JUDGE_ORDER,
+  };
 }
 
 export function loadLunaRoutingPolicy(stateDir: string): LunaRoutingPolicy {

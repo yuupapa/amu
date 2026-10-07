@@ -173,7 +173,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                     >
                       {props.autoSelected
                         ? "オート（選択中）"
-                        : "オート：Lunaがモデルと思考の強さを選びます"}
+                        : "オート：つながっているAIがモデルと思考の強さを選びます"}
                     </TooltipPopup>
                   </Tooltip>
                 </div>

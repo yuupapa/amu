@@ -1,6 +1,21 @@
 import type { ServerProvider } from "@t3tools/contracts";
 
 export const LUNA_JUDGE_MODEL = "gpt-6-luna";
+export const LUNA_CLAUDE_JUDGE_MODEL = "claude-haiku-5-5";
+export const LUNA_CURSOR_JUDGE_MODEL = "composer-2.5";
+
+/**
+ * Who may judge for Auto, in the default order (結パパ, 2026-10-08): the first
+ * connected one judges, and when it fails the next one tries. Each judges
+ * under its subscription login only.
+ */
+export type LunaJudgeKind = "claude" | "codex" | "cursor";
+export const LUNA_JUDGE_ORDER: ReadonlyArray<LunaJudgeKind> = ["claude", "codex", "cursor"];
+export const LUNA_JUDGE_NAMES: Readonly<Record<LunaJudgeKind, string>> = {
+  claude: "Haiku",
+  codex: "Luna",
+  cursor: "Composer",
+};
 export type AutoChoice = {
   instanceId: string;
   model: string;
@@ -47,7 +62,7 @@ export function validateAutoDecision(
   choices: ReadonlyArray<AutoChoice>,
 ): AutoDecision {
   if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("Lunaの判定形式が不正です。");
+    throw new Error("オートの判定形式が不正です。");
   const v = value as Record<string, unknown>;
   const model = v.model,
     effort = v.effort;
@@ -64,7 +79,7 @@ export function validateAutoDecision(
     )
   )
     throw new Error(
-      "Lunaのモデル・思考の強さ・理由を確認できません。手動で選んで送信してください。",
+      "オートが選んだモデル・思考の強さ・理由を確認できません。手動で選んで送信してください。",
     );
   return { model: v.model, effort: v.effort, reason: v.reason.trim() };
 }

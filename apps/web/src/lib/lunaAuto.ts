@@ -75,6 +75,26 @@ export async function cancelPendingAutoRecord(thread: string): Promise<void> {
 }
 
 export async function lunaAutoRequest(body: unknown, signal?: AbortSignal): Promise<unknown> {
+  return (await lunaAutoCall(body, signal)).result;
+}
+
+/** A judgement, with the name of the AI that made it (Haiku, Luna or Composer). */
+export async function lunaAutoDecide(
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<{ result: unknown; judge: string | null }> {
+  const answer = await lunaAutoCall(body, signal);
+  const judge =
+    typeof answer.judge === "string" && /^[A-Za-z0-9 .-]{1,40}$/.test(answer.judge)
+      ? answer.judge
+      : null;
+  return { result: answer.result, judge };
+}
+
+async function lunaAutoCall(
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<{ result?: unknown; judge?: unknown }> {
   const url = resolvePrimaryEnvironmentHttpUrl("/api/luna-auto");
   const target = new URL(url);
   if (
@@ -96,19 +116,20 @@ export async function lunaAutoRequest(body: unknown, signal?: AbortSignal): Prom
   });
   const result = (await response.json()) as {
     result?: unknown;
+    judge?: unknown;
     error?: string;
     cancelled?: boolean;
   };
   if (!response.ok || result.error)
-    throw new Error(result.error ?? "Lunaの結果が不明です。自動再送はしません。");
-  return result.result;
+    throw new Error(result.error ?? "オートの結果が不明です。自動再送はしません。");
+  return result;
 }
 
 /** A single-use id from the server, needed for each judgement. */
 export async function issueLunaTicket(signal?: AbortSignal): Promise<string> {
   const id = await lunaAutoRequest({ action: "issue" }, signal);
   if (typeof id !== "string" || !/^[a-zA-Z0-9-]{20,80}$/.test(id))
-    throw new Error("Lunaの受付番号を受け取れませんでした。元の依頼を残して手動送信に戻ります。");
+    throw new Error("オートの受付番号を受け取れませんでした。元の依頼を残して手動送信に戻ります。");
   return id;
 }
 

@@ -20,6 +20,7 @@ import {
   AutoRecordUnreadableError,
   discardAutoRecord,
   issueLunaTicket,
+  lunaAutoDecide,
   lunaAutoRequest,
   readAutoRecord,
   runLunaAuto,
@@ -28,8 +29,8 @@ import {
 import { uiText } from "../uiText";
 
 /**
- * Amu's "Auto": for the first request of a thread, Luna (gpt-6-luna) picks the
- * model and reasoning effort, then the normal send path runs with that pick.
+ * Amu's "Auto": for the first request of a thread, a connected AI (Haiku, then
+ * Luna, then Composer; see LUNA_JUDGE_ORDER) picks the model and reasoning effort, then the normal send path runs with that pick.
  * ChatView calls `startIfAuto` at the top of its send handler and reads the
  * send context through `withDecision`; everything else lives here so the
  * upstream send path stays as it is. See docs/user/luna-auto.md.
@@ -73,7 +74,8 @@ export type LunaAutoInputs = {
 type Prepared = { decision: AutoDecision; choice: AutoChoice; ticket: AutoTicket };
 type Status = { key: string; text: string; busy: boolean };
 
-const SEND_TIMEOUT_MS = 50_000;
+// Up to three judges may try in turn (45 s, 45 s and 60 s on the server).
+const SEND_TIMEOUT_MS = 160_000;
 
 function hasNonPromptContent(ctx: SendContext): boolean {
   return (
@@ -213,7 +215,11 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
     const controller = new AbortController();
     const current: { id: string | null; controller: AbortController } = { id: null, controller };
     pending.current = current;
-    setStatus({ key, busy: true, text: "Lunaがモデルを選んでいます。元の依頼は保持しています。" });
+    setStatus({
+      key,
+      busy: true,
+      text: "オートがモデルを選んでいます。元の依頼は保持しています。",
+    });
     const timeout = window.setTimeout(() => {
       controller.abort();
       if (current.id) void lunaAutoRequest({ id: current.id, action: "cancel" }).catch(() => {});
@@ -225,14 +231,15 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
         // request even after it restarts.
         const id = await issueLunaTicket(controller.signal);
         current.id = id;
+        let judge: string | null = null;
         const decision = await runLunaAuto({
           thread: key,
           id,
           signal: controller.signal,
           choices,
           unchanged,
-          decide: () =>
-            lunaAutoRequest(
+          decide: async () => {
+            const answer = await lunaAutoDecide(
               {
                 id,
                 action: "decide",
@@ -240,7 +247,10 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
                 models: choices.map((c) => ({ instanceId: c.instanceId, model: c.model })),
               },
               controller.signal,
-            ),
+            );
+            judge = answer.judge;
+            return answer.result;
+          },
           send: async (decision, choice, ticket) => {
             prepared.current = { decision, choice, ticket };
             dispatched.current = null;
@@ -268,7 +278,7 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
           setStatus({
             key,
             busy: false,
-            text: `オート：${picked?.name ?? decision.model}・${
+            text: `オート${judge ? `（${judge}が判定）` : ""}：${picked?.name ?? decision.model}・${
               effortLabel ? uiText(effortLabel) : decision.effort
             } — ${decision.reason.replace(/[。．.]+$/u, "")}`,
           });
@@ -317,7 +327,7 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
     setStatus({
       key: live.current.routeThreadKey,
       busy: false,
-      text: "Lunaが選んだモデルで送信しています。",
+      text: "オートが選んだモデルで送信しています。",
     });
     const selection = createModelSelection(
       provider.instanceId as never,
@@ -355,7 +365,7 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
     status?.key === routeThreadKey
       ? status.text
       : (recoveryText ??
-        (autoOn ? "オート：送信すると、Lunaがモデルと思考の強さを選びます。" : null));
+        (autoOn ? "オート：送信すると、つながっているAIがモデルと思考の強さを選びます。" : null));
 
   const statusElement: ReactNode = statusText ? (
     <div className="mx-auto mb-2 flex max-w-3xl items-center gap-2 px-1 text-xs text-muted-foreground">

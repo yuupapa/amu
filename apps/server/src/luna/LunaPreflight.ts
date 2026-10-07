@@ -1,5 +1,8 @@
 import {
+  ClaudeSettings,
   CodexSettings,
+  CursorSettings,
+  type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -7,6 +10,8 @@ import { LUNA_JUDGE_MODEL, type AutoChoice } from "@t3tools/shared/lunaAuto";
 import * as Schema from "effect/Schema";
 
 const decodeLunaPreflightConfig = Schema.decodeUnknownSync(CodexSettings);
+const decodeClaudeConfig = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeCursorConfig = Schema.decodeUnknownSync(CursorSettings);
 export const lunaPreflightMessages = {
   codex_missing: "Codex接続が見つかりません。Amuのプロバイダー設定で接続を確認してください。",
   codex_disabled: "Codex接続が無効です。Amuのプロバイダー設定で有効状態を確認してください。",
@@ -28,10 +33,12 @@ export const lunaPreflightMessages = {
     "このCodex接続はAmu管理のサブスク認証です。現在のAutoは既存Codex CLIのサブスク認証だけに対応しています。認証の再設定やAPI課金への切り替えは行いません。",
   choices_unavailable:
     "依頼を渡せるモデル候補がありません。利用可能モデルと選択状態を確認してください。",
+  no_judge:
+    "オートの判定に使えるAI（Claude・Codex・Cursor のサブスク接続）が見つかりません。プロバイダー設定の接続状態を確認してください。",
 } as const;
 
 export type LunaPreflightCode = keyof typeof lunaPreflightMessages;
-const lunaPreflightBlocked = (code: LunaPreflightCode) => ({
+export const lunaPreflightBlocked = (code: LunaPreflightCode) => ({
   ok: false as const,
   code,
   error: `${lunaPreflightMessages[code]} 依頼は保持しています。手動送信に戻してください。`,
@@ -70,4 +77,75 @@ export function resolveLunaPreflight(
   if (config.setupMode === "managed") return lunaPreflightBlocked("managed_auth_unsupported");
   if (!choices.length) return lunaPreflightBlocked("choices_unavailable");
   return { ok: true as const, judge, instance, config };
+}
+
+/** Why Haiku or Composer cannot judge here; Auto then asks the next judge. */
+export type OtherJudgeSkip =
+  | "missing"
+  | "not_ready"
+  | "not_subscription"
+  | "config_invalid"
+  | "custom_endpoint";
+
+type OtherJudgeResult<Config> =
+  | { ok: true; provider: ServerProvider; instance: ProviderInstanceConfig; config: Config }
+  | { ok: false; skip: OtherJudgeSkip };
+
+function readyProviders(providers: ReadonlyArray<ServerProvider>, driver: string) {
+  return providers.filter(
+    (p) =>
+      p.driver === driver && p.enabled && p.status === "ready" && p.auth.status === "authenticated",
+  );
+}
+
+/**
+ * Claude judges with Haiku under a Claude subscription login. API keys,
+ * Bedrock and logins whose kind is not reported are skipped, so Auto never
+ * moves to paid API use.
+ */
+export function resolveClaudeJudge(
+  providers: ReadonlyArray<ServerProvider>,
+  configs: ProviderInstanceConfigMap,
+): OtherJudgeResult<ClaudeSettings> {
+  if (!providers.some((p) => p.driver === "claudeAgent")) return { ok: false, skip: "missing" };
+  const ready = readyProviders(providers, "claudeAgent");
+  if (!ready.length) return { ok: false, skip: "not_ready" };
+  const subscription = ready.find(
+    (p) => typeof p.auth.type === "string" && !["apiKey", "bedrock"].includes(p.auth.type),
+  );
+  if (!subscription) return { ok: false, skip: "not_subscription" };
+  const instance = configs[subscription.instanceId];
+  if (!instance || instance.driver !== "claudeAgent") return { ok: false, skip: "config_invalid" };
+  try {
+    return {
+      ok: true,
+      provider: subscription,
+      instance,
+      config: decodeClaudeConfig(instance.config ?? {}),
+    };
+  } catch {
+    return { ok: false, skip: "config_invalid" };
+  }
+}
+
+/** Cursor judges with Composer under the Cursor account login, not an API key. */
+export function resolveCursorJudge(
+  providers: ReadonlyArray<ServerProvider>,
+  configs: ProviderInstanceConfigMap,
+): OtherJudgeResult<CursorSettings> {
+  if (!providers.some((p) => p.driver === "cursor")) return { ok: false, skip: "missing" };
+  const ready = readyProviders(providers, "cursor");
+  if (!ready.length) return { ok: false, skip: "not_ready" };
+  const account = ready.find((p) => p.auth.type === "browser");
+  if (!account) return { ok: false, skip: "not_subscription" };
+  const instance = configs[account.instanceId];
+  if (!instance || instance.driver !== "cursor") return { ok: false, skip: "config_invalid" };
+  let config: CursorSettings;
+  try {
+    config = decodeCursorConfig(instance.config ?? {});
+  } catch {
+    return { ok: false, skip: "config_invalid" };
+  }
+  if (config.apiEndpoint) return { ok: false, skip: "custom_endpoint" };
+  return { ok: true, provider: account, instance, config };
 }

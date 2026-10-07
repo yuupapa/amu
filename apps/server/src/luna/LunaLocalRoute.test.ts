@@ -182,9 +182,8 @@ it.effect(
         Effect.sync(() => ({
           web: HttpRouter.toWebHandler(legacyRoutes, { disableLogger: true }),
           judge: vi.spyOn(LunaDecisionBroker.prototype, "decide").mockResolvedValue({
-            model: "gpt-6-luna",
-            effort: "default",
-            reason: "簡単な質問のため",
+            decision: { model: "gpt-6-luna", effort: "default", reason: "簡単な質問のため" },
+            judge: "Luna",
           }),
         })),
         ({ web, judge }) =>
@@ -228,10 +227,15 @@ it.effect(
               requestContext,
             );
             expect(response.status).toBe(200);
-            expect(await response.json()).toMatchObject({ result: { model: "gpt-6-luna" } });
+            expect(await response.json()).toMatchObject({
+              result: { model: "gpt-6-luna" },
+              judge: "Luna",
+            });
             expect(judge).toHaveBeenCalledOnce();
-            expect(judge.mock.calls[0]?.[1].runtime.binary).toBe("/offline-codex");
-            expect(judge.mock.calls[0]?.[1].runtime.home).toBe("/offline-existing-home");
+            const [codex] = judge.mock.calls[0]?.[1].judges ?? [];
+            expect(codex?.kind).toBe("codex");
+            expect(codex?.runtime.binary).toBe("/offline-codex");
+            expect(codex?.runtime.home).toBe("/offline-existing-home");
           }),
         ({ web, judge }) =>
           Effect.promise(async () => {

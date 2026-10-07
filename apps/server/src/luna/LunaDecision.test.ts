@@ -30,6 +30,12 @@ const input = {
   choices,
   runtime: { binary: "/fixture-only", home: "", environment: {} },
 };
+const brokerInput = {
+  prompt: input.prompt,
+  choices,
+  judges: [{ kind: "codex" as const, name: "Luna", runtime: input.runtime }],
+};
+const verdict = { decision, judge: "Luna" };
 const NOW = 1_000;
 describe("decision-only Luna broker", () => {
   it("runs the real transport against an offline CLI fixture, validates final JSON and strips API credentials", async () => {
@@ -74,8 +80,8 @@ describe("decision-only Luna broker", () => {
     const judge = vi.fn(async () => decision),
       broker = new LunaDecisionBroker(judge, () => NOW);
     const id = broker.issue();
-    expect(await broker.decide(id, input)).toEqual(decision);
-    await expect(broker.decide(id, input)).rejects.toThrow("開始済み");
+    expect(await broker.decide(id, brokerInput)).toEqual(verdict);
+    await expect(broker.decide(id, brokerInput)).rejects.toThrow("開始済み");
     expect(judge).toHaveBeenCalledOnce();
     broker.close();
   });
@@ -83,8 +89,8 @@ describe("decision-only Luna broker", () => {
     const judge = vi.fn(async () => ({ ...decision, model: "other" })),
       broker = new LunaDecisionBroker(judge, () => NOW);
     const id = broker.issue();
-    await expect(broker.decide(id, input)).rejects.toThrow();
-    await expect(broker.decide(id, input)).rejects.toThrow();
+    await expect(broker.decide(id, brokerInput)).rejects.toThrow();
+    await expect(broker.decide(id, brokerInput)).rejects.toThrow();
     expect(judge).toHaveBeenCalledOnce();
     broker.close();
   });
@@ -93,7 +99,7 @@ describe("decision-only Luna broker", () => {
       broker = new LunaDecisionBroker(judge, () => NOW);
     const id = broker.issue();
     expect(broker.cancel(id)).toBe(true);
-    await expect(broker.decide(id, input)).rejects.toThrow();
+    await expect(broker.decide(id, brokerInput)).rejects.toThrow();
     expect(judge).not.toHaveBeenCalled();
     broker.close();
   });
@@ -107,7 +113,7 @@ describe("decision-only Luna broker", () => {
       ),
       broker = new LunaDecisionBroker(judge, () => NOW);
     const id = broker.issue();
-    const pending = broker.decide(id, input);
+    const pending = broker.decide(id, brokerInput);
     expect(broker.cancel(id)).toBe(true);
     release(decision);
     await expect(pending).rejects.toThrow("取り消");
@@ -255,7 +261,7 @@ describe("Luna broker bookkeeping", () => {
   it("refuses an id it did not issue", async () => {
     const judge = vi.fn(async () => decision);
     const broker = new LunaDecisionBroker(judge, () => NOW);
-    await expect(broker.decide("luna-made-up-by-the-client-0000", input)).rejects.toThrow(
+    await expect(broker.decide("luna-made-up-by-the-client-0000", brokerInput)).rejects.toThrow(
       "期限切れ",
     );
     expect(broker.cancel("luna-made-up-by-the-client-0000")).toBe(false);
@@ -268,7 +274,7 @@ describe("Luna broker bookkeeping", () => {
     const id = before.issue();
     before.close();
     const after = new LunaDecisionBroker(judge, () => NOW);
-    await expect(after.decide(id, input)).rejects.toThrow("期限切れ");
+    await expect(after.decide(id, brokerInput)).rejects.toThrow("期限切れ");
     expect(judge).not.toHaveBeenCalled();
   });
 
@@ -277,10 +283,10 @@ describe("Luna broker bookkeeping", () => {
     const judge = vi.fn(async () => decision);
     const broker = new LunaDecisionBroker(judge, () => now);
     const id = broker.issue();
-    await expect(broker.decide(id, input)).resolves.toEqual(decision);
-    await expect(broker.decide(id, input)).rejects.toThrow("開始済み");
+    await expect(broker.decide(id, brokerInput)).resolves.toEqual(verdict);
+    await expect(broker.decide(id, brokerInput)).rejects.toThrow("開始済み");
     now += LUNA_TICKET_TTL_MS + 1;
-    await expect(broker.decide(id, input)).rejects.toThrow("開始済み");
+    await expect(broker.decide(id, brokerInput)).rejects.toThrow("開始済み");
     expect(judge).toHaveBeenCalledOnce();
   });
 
@@ -290,7 +296,7 @@ describe("Luna broker bookkeeping", () => {
     const broker = new LunaDecisionBroker(judge, () => now);
     const id = broker.issue();
     now += LUNA_TICKET_TTL_MS + 1;
-    await expect(broker.decide(id, input)).rejects.toThrow("期限切れ");
+    await expect(broker.decide(id, brokerInput)).rejects.toThrow("期限切れ");
     expect(judge).not.toHaveBeenCalled();
   });
 
@@ -301,9 +307,9 @@ describe("Luna broker bookkeeping", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(4_000_000_000_000);
-      await expect(broker.decide(id, input)).resolves.toEqual(decision);
+      await expect(broker.decide(id, brokerInput)).resolves.toEqual(verdict);
       vi.setSystemTime(1_000_000_000_000);
-      await expect(broker.decide(id, input)).rejects.toThrow("開始済み");
+      await expect(broker.decide(id, brokerInput)).rejects.toThrow("開始済み");
     } finally {
       vi.useRealTimers();
     }
@@ -315,8 +321,8 @@ describe("Luna broker bookkeeping", () => {
     const broker = new LunaDecisionBroker(judge, () => NOW);
     const first = broker.issue();
     for (let index = 0; index < 5_000; index++) broker.issue();
-    await expect(broker.decide(first, input)).rejects.toThrow("期限切れ");
-    await expect(broker.decide(broker.issue(), input)).resolves.toEqual(decision);
+    await expect(broker.decide(first, brokerInput)).rejects.toThrow("期限切れ");
+    await expect(broker.decide(broker.issue(), brokerInput)).resolves.toEqual(verdict);
   });
 
   it("hands out a different id every time", () => {
