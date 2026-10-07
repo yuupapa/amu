@@ -162,6 +162,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    * between the default Codex and a custom Codex Personal).
    */
   lockedProvider: ProviderDriverKind | null;
+  /** Why a locked driver cannot be picked now, by driver; else the default message. */
+  lockedProviderReasons?: ReadonlyMap<string, string>;
   lockedContinuationGroupKey?: string | null;
   /**
    * All configured provider instances in display order. Used to render
@@ -833,6 +835,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               ? {
                   disabledInstanceIds: lockedDisabledInstanceIds,
                   getDisabledInstanceTooltip: (entry: ProviderInstanceEntry) =>
+                    props.lockedProviderReasons?.get(entry.driverKind) ??
                     uiFormat(
                       "{0} is unavailable in this thread. Start a new thread to switch providers.",
                       entry.displayName,

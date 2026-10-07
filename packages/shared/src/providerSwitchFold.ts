@@ -13,6 +13,12 @@ import {
 // same events with this one function, so all of them show the same state
 // (§8.2, P11).
 
+/**
+ * Appended to session.lastError for clients that cannot show the switch
+ * choices (§8.6). Clients that can show them hide the error that ends with it.
+ */
+export const PROVIDER_SWITCH_OLD_CLIENT_HINT = "（選択肢は Amu の最新版で表示されます）";
+
 export type ProviderSwitchEvent = Extract<
   OrchestrationEvent,
   {

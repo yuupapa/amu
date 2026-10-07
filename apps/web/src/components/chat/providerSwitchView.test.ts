@@ -15,12 +15,14 @@ import {
   canOfferHandoffTo,
   conversationOwner,
   handoffDividers,
+  handoffLockReason,
   makeLatestRequestGate,
   predictsHandoff,
   switchBannerModel,
   switchContinuationHints,
   switchRevertBlock,
   userMessageDeliveryLabel,
+  visibleSessionError,
   type SwitchProvider,
 } from "./providerSwitchView";
 
@@ -254,6 +256,34 @@ describe("canOfferHandoffTo", () => {
     expect(
       canOfferHandoffTo({ ...input, settings: { enabled: false, allowedDrivers: [] } as never }),
     ).toBe(false);
+  });
+});
+
+describe("handoffLockReason", () => {
+  const idle = { enabled: true, threadBusy: false, waitsOnUser: false, switchPending: false };
+
+  it("says why a switch must wait, most specific first", () => {
+    expect(handoffLockReason(idle)).toBeNull();
+    expect(handoffLockReason({ ...idle, threadBusy: true })).toContain("応答中");
+    expect(handoffLockReason({ ...idle, threadBusy: true, waitsOnUser: true })).toContain("返答");
+    expect(
+      handoffLockReason({ ...idle, threadBusy: true, waitsOnUser: true, switchPending: true }),
+    ).toContain("乗り換え中");
+  });
+
+  it("leaves the old lock message when the feature is off", () => {
+    expect(handoffLockReason({ ...idle, enabled: false, threadBusy: true })).toBeNull();
+  });
+});
+
+describe("visibleSessionError", () => {
+  it("hides the copy written for older clients and keeps other errors", () => {
+    expect(
+      visibleSessionError("claude is not signed in（選択肢は Amu の最新版で表示されます）"),
+    ).toBeNull();
+    expect(visibleSessionError("Turn failed")).toBe("Turn failed");
+    expect(visibleSessionError(null)).toBeNull();
+    expect(visibleSessionError(undefined)).toBeNull();
   });
 });
 

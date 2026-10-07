@@ -265,15 +265,18 @@ import {
   canOfferHandoffTo,
   conversationOwner,
   handoffDividers,
+  handoffLockReason,
   predictsHandoff,
   switchBannerModel,
   makeLatestRequestGate,
   switchContinuationHints,
   switchPartyLabel,
   switchRevertBlock,
+  visibleSessionError,
 } from "./chat/providerSwitchView";
 
 const EMPTY_DRIVER_SET: ReadonlySet<string> = new Set();
+const EMPTY_LOCK_REASONS: ReadonlyMap<string, string> = new Map();
 const HANDOFF_EXPLAINED_KEY = "amu.crossProviderHandoff.explained";
 /** Whether the "not handed over" note was shown once already (§8.5). */
 function readHandoffExplained(): boolean {
@@ -2092,7 +2095,7 @@ export default function ChatView(props: ChatViewProps) {
   const isServerThread = activeServerThread !== null;
   const activeThread = activeServerThread ?? localDraftThread;
   const threadError = isServerThread
-    ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
+    ? (localServerError ?? visibleSessionError(activeServerThread?.session?.lastError))
     : localDraftError;
   // Dismissals can only mask the shown error, never clear it: a server thread
   // keeps its error in session.lastError, so clearing the local shadow would
@@ -2789,10 +2792,10 @@ export default function ChatView(props: ChatViewProps) {
     const requests = derivePendingRequests(activeThread?.activities ?? EMPTY_ACTIVITIES);
     return requests.approvals.length > 0 || requests.userInputs.length > 0;
   }, [activeThread?.activities]);
+  const handoffThreadBusy = activeSessionStatus === "running" || activeSessionStatus === "starting";
   const handoffTargetDrivers = useMemo<ReadonlySet<string>>(() => {
     if (lockedProvider === null) return EMPTY_DRIVER_SET;
-    const busy =
-      activeSessionStatus === "running" || activeSessionStatus === "starting" || handoffWaitsOnUser;
+    const busy = handoffThreadBusy || handoffWaitsOnUser;
     const drivers = new Set<string>();
     for (const provider of providerStatuses) {
       if (
@@ -2809,7 +2812,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     return drivers;
   }, [
-    activeSessionStatus,
+    handoffThreadBusy,
     handoffWaitsOnUser,
     lockedProvider,
     providerStatuses,
@@ -2817,6 +2820,40 @@ export default function ChatView(props: ChatViewProps) {
     switchPendingForThread,
   ]);
   const selectionLockedProvider = handoffTargetDrivers.size > 0 ? null : lockedProvider;
+  // While the thread is working, the drivers a switch could go to say why
+  // they are locked, instead of the "start a new thread" message (§8.1).
+  const handoffLockedReasons = useMemo<ReadonlyMap<string, string>>(() => {
+    if (selectionLockedProvider === null) return EMPTY_LOCK_REASONS;
+    const reason = handoffLockReason({
+      enabled: settings.crossProviderHandoff.enabled,
+      threadBusy: handoffThreadBusy,
+      waitsOnUser: handoffWaitsOnUser,
+      switchPending: switchPendingForThread,
+    });
+    if (reason === null) return EMPTY_LOCK_REASONS;
+    const reasons = new Map<string, string>();
+    for (const provider of providerStatuses) {
+      if (
+        canOfferHandoffTo({
+          settings: settings.crossProviderHandoff,
+          ownerDriver: selectionLockedProvider,
+          targetDriver: provider.driver,
+          threadBusy: false,
+          switchPending: false,
+        })
+      ) {
+        reasons.set(provider.driver, reason);
+      }
+    }
+    return reasons;
+  }, [
+    handoffThreadBusy,
+    handoffWaitsOnUser,
+    providerStatuses,
+    selectionLockedProvider,
+    settings.crossProviderHandoff,
+    switchPendingForThread,
+  ]);
   // Set once onProviderModelSelect exists; the switch notice's cancel uses it.
   const onProviderModelSelectRef = useRef<
     | ((
@@ -11151,7 +11188,7 @@ export default function ChatView(props: ChatViewProps) {
                               isRevertingCheckpoint
                                 ? "Rewinding conversation"
                                 : switchPendingForThread
-                                  ? "Switching models"
+                                  ? uiText("Switching models")
                                   : feedbackUploading
                                     ? "Sending feedback"
                                     : threadDetailLoading
@@ -11189,6 +11226,7 @@ export default function ChatView(props: ChatViewProps) {
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
                             lockedProvider={selectionLockedProvider}
+                            lockedProviderReasons={handoffLockedReasons}
                             providerStatuses={providerStatuses as ServerProvider[]}
                             providerCatalogKnown={serverConfig !== null}
                             activeProjectDefaultModelSelection={activeProjectDefaultModelSelection}

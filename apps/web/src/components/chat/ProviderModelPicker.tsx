@@ -39,6 +39,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   selectedModels?: ReadonlyArray<{ instanceId: ProviderInstanceId; model: string }>;
   onToggleModel?: (instanceId: ProviderInstanceId, model: string) => void;
   lockedProvider: ProviderDriverKind | null;
+  /** Why a locked driver cannot be picked now, by driver; else the default message. */
+  lockedProviderReasons?: ReadonlyMap<string, string>;
   lockedContinuationGroupKey?: string | null;
   /** Instance entries rendered in the sidebar + used to resolve display name. */
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
@@ -309,6 +311,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               }
             : {})}
           lockedProvider={props.lockedProvider}
+          {...(props.lockedProviderReasons
+            ? { lockedProviderReasons: props.lockedProviderReasons }
+            : {})}
           lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
           instanceEntries={props.instanceEntries}
           {...(props.keybindings ? { keybindings: props.keybindings } : {})}

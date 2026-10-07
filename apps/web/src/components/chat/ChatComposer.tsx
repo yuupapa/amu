@@ -1398,6 +1398,8 @@ export interface ChatComposerProps {
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
+  /** Why a locked driver cannot be picked now, by driver (cross-provider switches). */
+  lockedProviderReasons?: ReadonlyMap<string, string>;
   providerStatuses: ServerProvider[];
   /** False until the environment's server config has arrived at least once. */
   providerCatalogKnown: boolean;
@@ -1528,6 +1530,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     runtimeMode,
     interactionMode: requestedInteractionMode,
     lockedProvider,
+    lockedProviderReasons,
     providerStatuses,
     providerCatalogKnown,
     activeProjectDefaultModelSelection,
@@ -5100,6 +5103,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             : selectedModelForPickerWithCustomFallback
         }
         lockedProvider={lockedProvider}
+        {...(lockedProviderReasons ? { lockedProviderReasons } : {})}
         lockedContinuationGroupKey={lockedContinuationGroupKey}
         instanceEntries={providerInstanceEntries}
         keybindings={keybindings}

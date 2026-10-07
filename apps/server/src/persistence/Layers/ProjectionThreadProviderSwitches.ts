@@ -40,6 +40,10 @@ const AssignmentRecordRequest = Schema.Struct(
   Struct.omit(ProjectionTurnAssignment.fields, ["changedMidTurn"]),
 );
 
+// A tool's start and progress repeat the summary its completion carries, so
+// the packet log keeps one line per tool call (§6.2).
+const TOOL_PROGRESS_KINDS = ["tool.started", "tool.updated"];
+
 const decodeContextLabels = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
@@ -435,6 +439,7 @@ const makeProjectionThreadProviderSwitchRepository = Effect.gen(function* () {
           FROM projection_thread_activities a
           JOIN recent_turns r ON r.turn_id = a.turn_id
           WHERE a.thread_id = ${threadId} AND a.tone = 'tool'
+            AND a.kind NOT IN ${sql.in(TOOL_PROGRESS_KINDS)}
         )
         ORDER BY at DESC, id DESC
         LIMIT ${L.logEntries}
@@ -491,6 +496,7 @@ const makeProjectionThreadProviderSwitchRepository = Effect.gen(function* () {
           (
             SELECT COUNT(*) FROM projection_thread_activities
             WHERE thread_id = ${threadId} AND tone = 'tool'
+              AND kind NOT IN ${sql.in(TOOL_PROGRESS_KINDS)}
           ) AS "tool"
       `;
 

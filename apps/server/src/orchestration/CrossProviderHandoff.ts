@@ -56,7 +56,10 @@ export interface HandoffSource {
     readonly interactionMode: string;
     readonly fromDriver: string;
     readonly fromModel: string;
+    /** Turns since the previous delivered switch, or since the start without one. */
     readonly fromTurnCount: number;
+    /** Whether fromTurnCount counts from a delivered switch. */
+    readonly countedFromSwitch?: boolean;
   };
   /** The thread's first delivered user message, fetched separately. */
   readonly firstUserMessage: HandoffUserMessage | null;
@@ -199,7 +202,7 @@ function renderEnv(env: HandoffSource["env"]): string {
     `- 作業フォルダ: ${value(env.cwd)}`,
     `- ブランチ: ${value(env.branch)} / worktree: ${value(env.worktreePath)}`,
     `- 実行モード: ${escapeHandoffText(env.runtimeMode)} / 対話モード: ${escapeHandoffText(env.interactionMode)}`,
-    `- 引き継ぎ元: ${escapeHandoffText(env.fromDriver)} / ${escapeHandoffText(env.fromModel)}（${env.fromTurnCount} ターン担当）`,
+    `- 引き継ぎ元: ${escapeHandoffText(env.fromDriver)} / ${escapeHandoffText(env.fromModel)}（${env.countedFromSwitch === true ? "前回の乗り換えから" : "会話の始めから"} ${env.fromTurnCount} ターン）`,
   ].join("\n");
 }
 

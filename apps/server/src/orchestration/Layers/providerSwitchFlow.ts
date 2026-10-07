@@ -22,6 +22,7 @@ import {
   decideProviderContinuation,
   isProviderHandoffAllowed,
 } from "@t3tools/shared/providerContinuation";
+import { PROVIDER_SWITCH_OLD_CLIENT_HINT } from "@t3tools/shared/providerSwitchFold";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -48,8 +49,6 @@ import { expandTurnInputText } from "../turnInputText.ts";
 
 export const PENDING_SWITCH_REJECTION =
   "乗り換えの途中です。完了を待つか、表示中の選択肢から選んでください（選択肢が出ないときは、Amu の最新版で開いてください）。";
-// Older clients show only the session error and cannot offer the choices (§8.6).
-const OLD_CLIENT_HINT = "（選択肢は Amu の最新版で表示されます）";
 const NOT_ALLOWED_DETAIL = "このモデルへの乗り換えはまだ対応していません。";
 // Only these adapters stamp session generations yet (§7.5, §10). After a
 // switch, events without one are dropped, so no other driver can take over.
@@ -131,7 +130,33 @@ export interface ProviderSwitchTrigger {
   readonly toSelection: ModelSelection;
 }
 
-const describeCause = (cause: Cause.Cause<unknown>) => Cause.pretty(cause);
+const STACK_LINE = /^\s+at\s/u;
+const DETAIL_MAX_CHARS = 500;
+
+/** Error text for the user: no stack frames, and short enough for a banner. */
+const conciseDetail = (text: string) => {
+  const kept = text
+    .split("\n")
+    .filter((line) => line.trim().length > 0 && !STACK_LINE.test(line))
+    .join("\n")
+    .trim();
+  return kept.length > DETAIL_MAX_CHARS ? `${kept.slice(0, DETAIL_MAX_CHARS)}…` : kept;
+};
+
+/**
+ * What the user reads about a failure (§8.2): the failed step's own detail,
+ * else the error's message. Logs keep the full Cause.pretty.
+ */
+const describeCause = (cause: Cause.Cause<unknown>) => {
+  const failure = cause.reasons.find(Cause.isFailReason)?.error;
+  if (Schema.is(ProviderSwitchStepError)(failure) && failure.detail.trim().length > 0) {
+    return conciseDetail(failure.detail);
+  }
+  if (failure instanceof Error && failure.message.trim().length > 0) {
+    return conciseDetail(failure.message);
+  }
+  return conciseDetail(Cause.pretty(cause));
+};
 
 export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
   const commandId = (tag: string) =>
@@ -172,7 +197,7 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
           Effect.catchCause((cause) =>
             Effect.logWarning("provider switch rerun failed", {
               threadId,
-              cause: describeCause(cause),
+              cause: Cause.pretty(cause),
             }),
           ),
           Effect.flatMap(() => rerunUntilSettled),
@@ -404,9 +429,14 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
         "await-user",
       );
       yield* deps
-        .markSessionFailed({ threadId, detail: `${detail}${OLD_CLIENT_HINT}` })
+        .markSessionFailed({ threadId, detail: `${detail}${PROVIDER_SWITCH_OLD_CLIENT_HINT}` })
         .pipe(Effect.catchCause(() => Effect.void));
     });
+
+  const hasSwitchHistory = (threadId: ThreadId) =>
+    deps.switches
+      .getStateByThreadId({ threadId })
+      .pipe(Effect.map((row) => Option.isSome(row) && row.value.state.hasHistory));
 
   /** A message saved pending must settle, even if the feature was turned off since. */
   const isTracked = (messageId: MessageId) =>
@@ -432,7 +462,15 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
     };
   }) {
     const enabled = (yield* deps.getSettings).enabled;
-    if (!enabled && !(yield* isTracked(input.messageId))) return;
+    // A thread that ever switched labels each answer (§8.4), so it keeps
+    // recording with the feature off.
+    if (
+      !enabled &&
+      !(yield* isTracked(input.messageId)) &&
+      !(yield* hasSwitchHistory(input.threadId))
+    ) {
+      return;
+    }
     const { result } = input;
     if (
       result.providerInstanceId === undefined ||
@@ -642,12 +680,22 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
         threadId,
         triggerMessageId: trigger.message.id,
       });
+      // Counted from the previous delivered switch: which model answered each
+      // turn since is not checked, so the packet says what was counted.
+      const previousBoundary = yield* deps.switches
+        .getStateByThreadId({ threadId })
+        .pipe(
+          Effect.map((row) =>
+            Option.isSome(row) ? (row.value.state.lastDelivered?.boundaryTurnCount ?? null) : null,
+          ),
+        );
       const source = assembleHandoffSource({
         rows,
         cwd: yield* deps.resolveCwd(input.thread),
         fromDriver: pending.from.driver,
         fromModel: pending.from.model,
-        fromTurnCount: pending.boundaryTurnCount,
+        fromTurnCount: Math.max(0, pending.boundaryTurnCount - (previousBoundary ?? 0)),
+        countedFromSwitch: previousBoundary !== null,
         changes: yield* deps.readChanges(threadId),
       });
       const built = buildHandoffPacket({
@@ -1033,8 +1081,8 @@ export function makeProviderSwitchFlow(deps: ProviderSwitchFlowDeps) {
                 Effect.logError("provider switch recovery and its wait both failed", {
                   threadId: input.threadId,
                   switchId: pending.switchId,
-                  cause: describeCause(cause),
-                  waitCause: describeCause(waitCause),
+                  cause: Cause.pretty(cause),
+                  waitCause: Cause.pretty(waitCause),
                 }),
               ),
               Effect.as("handled" as const),

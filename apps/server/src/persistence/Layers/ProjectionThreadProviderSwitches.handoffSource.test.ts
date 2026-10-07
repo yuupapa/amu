@@ -379,6 +379,33 @@ layer("readHandoffSource", (it) => {
     }),
   );
 
+  it.effect("keeps one log line per tool call: its completion, not its start or progress", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = "thread-tool-progress";
+      yield* insertThread(threadId);
+      yield* insertTurn({ threadId, turnId: "turn-tools", count: 1 });
+      // The last start has no completion, as in an interrupted turn.
+      const kinds = ["tool.started", "tool.updated", "tool.completed", "tool.started"] as const;
+      for (const [index, kind] of kinds.entries()) {
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+          ) VALUES (
+            ${`act-progress-${index}`}, ${threadId}, 'turn-tools', 'tool', ${kind},
+            ${`Command run (${kind})`}, '{}', ${at(index)}
+          )
+        `;
+      }
+      const rows = yield* read(threadId);
+      assert.deepEqual(
+        rows.log.map((row) => row.text),
+        ["Command run (tool.completed)"],
+      );
+      assert.strictEqual(rows.omittedToolEntries, 0);
+    }),
+  );
+
   it.effect("numbers user turns from the assignment record, not a mispaired pending row", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

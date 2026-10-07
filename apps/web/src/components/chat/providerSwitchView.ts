@@ -7,6 +7,7 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import { isProviderHandoffAllowed } from "@t3tools/shared/providerContinuation";
+import { PROVIDER_SWITCH_OLD_CLIENT_HINT } from "@t3tools/shared/providerSwitchFold";
 
 import { getTriggerDisplayModelName } from "./providerIconUtils";
 
@@ -190,6 +191,34 @@ export function canOfferHandoffTo(input: {
       allowedDrivers: input.settings.allowedDrivers,
     })
   );
+}
+
+/**
+ * Why the picker offers no switch now, when only the thread's state stands in
+ * the way (§8.1). Null when the feature is off: the old lock message applies.
+ */
+export function handoffLockReason(input: {
+  readonly enabled: boolean;
+  readonly threadBusy: boolean;
+  readonly waitsOnUser: boolean;
+  readonly switchPending: boolean;
+}): string | null {
+  if (!input.enabled) return null;
+  if (input.switchPending) return "モデルの乗り換え中です。終わってから選んでください。";
+  if (input.waitsOnUser) {
+    return "質問か承認への返答を待っています。返答してから選んでください。";
+  }
+  if (input.threadBusy) return "応答中は乗り換えられません。応答が終わってから選んでください。";
+  return null;
+}
+
+/**
+ * session.lastError as this client shows it. The server writes the switch
+ * failure there for older clients (§8.6); this client shows the switch banner.
+ */
+export function visibleSessionError(lastError: string | null | undefined): string | null {
+  if (lastError === null || lastError === undefined) return null;
+  return lastError.endsWith(PROVIDER_SWITCH_OLD_CLIENT_HINT) ? null : lastError;
 }
 
 /** What the composer shows while a switch is unresolved (§8.2). */

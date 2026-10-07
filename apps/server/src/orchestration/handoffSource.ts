@@ -42,8 +42,10 @@ export function assembleHandoffSource(input: {
   readonly cwd: string | null;
   readonly fromDriver: string;
   readonly fromModel: string;
-  /** boundaryTurnCount of the switch. */
+  /** Turns since the previous delivered switch, or since the start without one. */
   readonly fromTurnCount: number;
+  /** Whether a delivered switch came before (fromTurnCount counts from it). */
+  readonly countedFromSwitch?: boolean;
   /** Final diff from the turn-0 baseline to the latest checkpoint; null when unavailable. */
   readonly changes: ReadonlyArray<HandoffChangedFile> | null;
 }): HandoffSource {
@@ -59,6 +61,7 @@ export function assembleHandoffSource(input: {
       fromDriver: input.fromDriver,
       fromModel: input.fromModel,
       fromTurnCount: input.fromTurnCount,
+      countedFromSwitch: input.countedFromSwitch === true,
     },
     firstUserMessage: rows.firstUser === null ? null : toUserMessage(rows.firstUser),
     userMessages: rows.users.map(toUserMessage),
