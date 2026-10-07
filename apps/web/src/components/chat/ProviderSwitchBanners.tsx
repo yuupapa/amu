@@ -57,7 +57,7 @@ export function switchStatusBannerItem(
               disabled={busy}
               onClick={() => actions.abort(model.switchId, false)}
             >
-              {uiText("Stop the switch")}
+              {uiText("Cancel this message")}
             </Button>
             <Button
               size="xs"
@@ -65,7 +65,7 @@ export function switchStatusBannerItem(
               disabled={busy}
               onClick={() => actions.abort(model.switchId, true)}
             >
-              {uiFormat("Return to {0}", model.fromLabel)}
+              {uiFormat("Cancel and go back to {0}", model.fromLabel)}
             </Button>
           </>
         ),
