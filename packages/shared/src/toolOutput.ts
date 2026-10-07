@@ -197,14 +197,37 @@ export interface GeneratedImageReference {
  * Whether a path names an image Codex saved: absolute, normalized (no `.` or
  * `..` segments, no doubled separators) and inside a `generated_images`
  * folder, which is where Codex writes them under its home.
+ *
+ * Clients load the picture through the Markdown image resolver, which decodes
+ * `%` escapes and drops `?`/`#` suffixes; a path with those characters could
+ * name another file once decoded, so it is refused rather than reinterpreted.
  */
 export function isCodexGeneratedImagePath(path: string): boolean {
-  if (path.length > 4096 || /[\r\n\0]/.test(path) || !isWorkspaceImagePreviewPath(path)) {
+  if (
+    path.length > 4096 ||
+    path !== path.trim() ||
+    /[\r\n\0%?#<>]/.test(path) ||
+    !isWorkspaceImagePreviewPath(path)
+  ) {
     return false;
   }
-  const windows = /^[A-Za-z]:\\/.test(path);
-  if (!windows && !path.startsWith("/")) return false;
-  const segments = (windows ? path.slice(3) : path.slice(1)).split(windows ? /[\\/]/ : "/");
+  let rest: string;
+  let separator: RegExp;
+  if (/^[A-Za-z]:[\\/]/.test(path)) {
+    rest = path.slice(3);
+    separator = /[\\/]/;
+  } else if (path.startsWith("\\\\")) {
+    // UNC: \\server\share\...
+    rest = path.slice(2);
+    separator = /[\\/]/;
+  } else if (path.startsWith("/") && !/^\/[A-Za-z]:/.test(path)) {
+    // A leading "/C:" is read as a Windows drive by the resolver.
+    rest = path.slice(1);
+    separator = /\//;
+  } else {
+    return false;
+  }
+  const segments = rest.split(separator);
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
     return false;
   }

@@ -576,6 +576,25 @@ describe.skipIf(!isMac)("Amu update installer", () => {
     expect(read(NodePath.join(updates, "install.log"))).not.toContain("Amu 0.0.45 is running");
   });
 
+  it("restores nothing until it can record the rollback, and keeps the watchdog", () => {
+    leaveHalfSwapped({ phase: "swap", pid: 999_999 });
+    const scriptPath = writeScript();
+    // The journal cannot be rewritten: the updates folder is read-only.
+    NodeFS.chmodSync(updates, 0o555);
+    try {
+      const result = NodeChildProcess.spawnSync("/bin/bash", [scriptPath], {
+        env: installerEnv({ AMU_MODE: "recover", AMU_OPEN: "/usr/bin/true" }, 999_999),
+      });
+      expect(result.status).toBe(1);
+    } finally {
+      NodeFS.chmodSync(updates, 0o755);
+    }
+    const resources = NodePath.join(app, "Contents/Resources");
+    expect(read(NodePath.join(resources, ".amu-old-app.asar"))).toBe("old code");
+    expect(read(NodePath.join(updates, "install-journal"))).toContain("phase=swap");
+    expect(launchctlCalls().some((call) => call.startsWith("bootout"))).toBe(false);
+  });
+
   it("refuses a file listed twice", () => {
     const result = runInstaller({ AMU_REPLACE: "app.asar app.asar" });
 

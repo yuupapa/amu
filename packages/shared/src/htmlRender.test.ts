@@ -263,6 +263,19 @@ describe("generatedImageFromToolItem", () => {
   });
 
   it.each([
+    "C:\\Users\\example\\.codex\\generated_images\\thread\\a.png",
+    "C:/Users/example/.codex/generated_images/thread/a.png",
+    "\\\\server\\share\\generated_images\\thread\\a.png",
+  ])("accepts the Windows path %s", (windowsPath) => {
+    expect(
+      generatedImageFromToolItem({
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: windowsPath,
+      }),
+    ).toEqual({ path: windowsPath, prompt: null });
+  });
+
+  it.each([
     ["another tool", { toolName: "image_generation", viewedImagePath: path }],
     ["no saved file", { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME }],
     ["a relative path", { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME, viewedImagePath: "ig_1.png" }],
@@ -275,6 +288,27 @@ describe("generatedImageFromToolItem", () => {
       {
         toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
         viewedImagePath: "/Users/x/.codex/generated_images/../../Pictures/a.png",
+      },
+    ],
+    [
+      "an escape that decodes to another folder",
+      {
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: "/tmp/generated_images/%2e%2e/private.png",
+      },
+    ],
+    [
+      "a query or fragment the resolver would drop",
+      {
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: "/tmp/generated_images/a.png?x",
+      },
+    ],
+    [
+      "a drive letter after a slash",
+      {
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: "/C:/x/generated_images/a.png",
       },
     ],
     [

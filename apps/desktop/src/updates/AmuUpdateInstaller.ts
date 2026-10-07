@@ -118,22 +118,29 @@ boot_time() { sysctl -n kern.boottime 2>/dev/null | sed -n 's/^[^0-9]*\\([0-9][0
 # The command line is stored as ps shows it, so the owner check compares
 # like with like however the script path was spelled.
 write_journal() {
+  local command
+  command="$(own_command)"
+  # Without it a recovery could not tell this process is alive.
+  [ -n "$command" ] || return 1
   printf 'phase=%s\\npid=%s\\nboot=%s\\ncommand=%s\\nabsent=%s\\n' "$1" "$$" "$(boot_time)" \
-    "$(own_command)" "$WAS_ABSENT" > "$JOURNAL.tmp" &&
+    "$command" "$WAS_ABSENT" > "$JOURNAL.tmp" &&
     mv -f "$JOURNAL.tmp" "$JOURNAL"
 }
 own_command() { ps -p "$$" -o command= 2>/dev/null; }
 # The process that wrote the journal is still at work: same boot, alive, and
 # running the same command it recorded.
 journal_owner_alive() {
-  local owner command
+  local owner command current
   owner="$(journal_field pid)"
   case "$owner" in ""|*[!0-9]*) return 1 ;; esac
   [ "$owner" != "$$" ] || return 1
   [ "$(journal_field boot)" = "$(boot_time)" ] || return 1
   kill -0 "$owner" 2>/dev/null || return 1
   command="$(journal_field command)"
-  [ -n "$command" ] && [ "$(ps -p "$owner" -o command= 2>/dev/null)" = "$command" ]
+  current="$(ps -p "$owner" -o command= 2>/dev/null)"
+  # A process that exists but cannot be looked up counts as alive; the
+  # watchdog asks again in a few seconds.
+  [ -z "$current" ] || [ "$current" = "$command" ]
 }
 journal_field() { sed -n "s/^$1=//p" "$JOURNAL" 2>/dev/null | head -n 1; }
 
@@ -192,8 +199,12 @@ restore() {
 fail() {
   log "update failed: $1; restoring Amu $AMU_OLD_VERSION"
   printf '%s\\n' "$AMU_VERSION: $1" > "$AMU_UPDATES/last-failure.txt"
-  # From here a recovery must keep restoring, never take the old Amu for the new.
-  write_journal rollback || log "could not record the rollback"
+  # From here a recovery must keep restoring, never take the old Amu for the
+  # new. Until that is on disk nothing is restored; the watchdog tries again.
+  if ! write_journal rollback; then
+    log "could not record the rollback; the watchdog will retry it"
+    exit 1
+  fi
   stop_app
   wait_port_free 60
   if restore; then
