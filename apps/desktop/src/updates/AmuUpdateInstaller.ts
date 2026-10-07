@@ -162,7 +162,8 @@ start_watchdog() {
       printf '<key>%s</key><string>%s</string>\\n' "$name" "$(xml "\${!name}")"
     done
     printf '</dict>\\n</dict></plist>\\n'
-  } > "$WATCH_PLIST" || { log "could not write the update watchdog"; return 1; }
+  } > "$WATCH_PLIST.tmp" && mv -f "$WATCH_PLIST.tmp" "$WATCH_PLIST" ||
+    { log "could not write the update watchdog"; return 1; }
   "$LAUNCHCTL" bootstrap "$WATCH_DOMAIN" "$WATCH_PLIST" >> "$AMU_LOG" 2>&1
 }
 # Last step on every way out: unloading the job also ends a running recovery.
@@ -281,15 +282,17 @@ if ! wait_port_free 60; then log "port $AMU_PORT is still in use; update skipped
 if [ -f "$JOURNAL" ]; then
   log "update skipped: an earlier update is unfinished ($(journal_field phase) phase)"
   # Reload the earlier job file as it was: it holds that update's parts and
-  # versions, which this update's may not match.
-  if ! "$LAUNCHCTL" print "$WATCH_DOMAIN/$WATCH_LABEL" >/dev/null 2>&1; then
-    if [ -f "$WATCH_PLIST" ]; then
-      "$LAUNCHCTL" bootstrap "$WATCH_DOMAIN" "$WATCH_PLIST" >> "$AMU_LOG" 2>&1 ||
-        log "could not start the earlier update's watchdog"
-    else
-      log "the earlier update's watchdog is gone; restore by hand from $RES/.amu-old-*"
-    fi
+  # versions, which this update's may not match. The watchdog opens Amu once
+  # it has finished, so Amu is not opened here on a bundle it may be restoring.
+  if "$LAUNCHCTL" print "$WATCH_DOMAIN/$WATCH_LABEL" >/dev/null 2>&1; then
+    exit 1
   fi
+  if [ -f "$WATCH_PLIST" ] &&
+    "$LAUNCHCTL" bootstrap "$WATCH_DOMAIN" "$WATCH_PLIST" >> "$AMU_LOG" 2>&1; then
+    exit 1
+  fi
+  # Nobody can finish it: open Amu as it is, so it is not left closed.
+  log "the earlier update's watchdog could not be started; restore by hand from $RES/.amu-old-*"
   launch
   exit 1
 fi

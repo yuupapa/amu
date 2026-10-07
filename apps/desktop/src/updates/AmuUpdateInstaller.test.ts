@@ -100,6 +100,13 @@ const bootTime = () =>
     .toString()
     .match(/sec = (\d+)/)![1]!;
 
+/** An `open` stand-in that only records that it was called. */
+function writeRecordingOpen(marker: string) {
+  const path = NodePath.join(root, "open-record.sh");
+  NodeFS.writeFileSync(path, `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+  return path;
+}
+
 function writeLauncher() {
   const launcher = NodePath.join(root, "launch.sh");
   NodeFS.writeFileSync(launcher, '#!/bin/sh\n"$1/Contents/MacOS/Amu" 20 >/dev/null 2>&1 &\n', {
@@ -597,7 +604,10 @@ describe.skipIf(!isMac)("Amu update installer", () => {
 
   it("leaves an unfinished update to its watchdog instead of starting another", () => {
     leaveHalfSwapped({ phase: "rollback", pid: 999_999 });
-    const result = runInstaller({ AMU_OPEN: "/usr/bin/true" });
+    const opened = NodePath.join(root, "opened");
+    const result = runInstaller({ AMU_OPEN: writeRecordingOpen(opened) });
+    // The watchdog opens Amu once it has restored the bundle.
+    expect(NodeFS.existsSync(opened)).toBe(false);
 
     expect(result.status).toBe(1);
     const resources = NodePath.join(app, "Contents/Resources");
@@ -645,6 +655,22 @@ describe.skipIf(!isMac)("Amu update installer", () => {
     expect(read(NodePath.join(updates, "install-journal"))).toContain("phase=rollback");
     expect(NodeFS.existsSync(NodePath.join(updates, "last-failure.txt"))).toBe(false);
     expect(launchctlCalls().some((call) => call.startsWith("bootout"))).toBe(false);
+  });
+
+  it("opens Amu as it is when no watchdog can finish an unfinished update", () => {
+    leaveHalfSwapped({ phase: "rollback", pid: 999_999 });
+    const notLoaded = NodePath.join(root, "launchctl-not-loaded.sh");
+    NodeFS.writeFileSync(
+      notLoaded,
+      `#!/bin/sh\necho "$*" >> "${root}/launchctl.log"\ncase "$1" in print) exit 113 ;; esac\n`,
+      { mode: 0o755 },
+    );
+    const opened = NodePath.join(root, "opened");
+    const result = runInstaller({ AMU_OPEN: writeRecordingOpen(opened), AMU_LAUNCHCTL: notLoaded });
+
+    expect(result.status).toBe(1);
+    expect(NodeFS.existsSync(opened)).toBe(true);
+    expect(read(NodePath.join(updates, "install.log"))).toContain("restore by hand");
   });
 
   it("reports the update undone only once the rollback is recorded", () => {
