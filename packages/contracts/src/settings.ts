@@ -1121,7 +1121,9 @@ const CrossProviderHandoffBudgetChars = Schema.Int.check(
 );
 
 export const CrossProviderHandoffSettings = Schema.Struct({
-  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // On for everyone; the composer's notice confirms each switch before the
+  // next send. Setting it to false in settings.json still turns it off.
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   packetBudgetChars: CrossProviderHandoffBudgetChars.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CROSS_PROVIDER_HANDOFF_BUDGET_CHARS)),
   ),

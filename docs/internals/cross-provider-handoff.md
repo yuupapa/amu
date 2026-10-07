@@ -327,7 +327,7 @@ decider が判断に使う読み取りモデル（in-memory の read model）に
 
 ### 7.1 機能フラグと許可リスト
 
-`serverSettings.crossProviderHandoff = { enabled, packetBudgetChars, allowedDrivers: ["claudeAgent", "codex"] }`。既定は `enabled: false` です。フラグを off にしても、進行中の操作は最後まで進めるか、失敗として閉じます。新しい乗り換えだけを受け付けなくします。
+`serverSettings.crossProviderHandoff = { enabled, packetBudgetChars, allowedDrivers: ["claudeAgent", "codex"] }`。既定は `enabled: true` です（2026-10-07、0.0.47 から。結パパの判で「常にオン、切り替えの確認は入力欄の上の予告の帯で行う」。設定画面の切り替えは置かない。settings.json に `false` を書けば止められる）。フラグを off にしても、進行中の操作は最後まで進めるか、失敗として閉じます。新しい乗り換えだけを受け付けなくします。
 
 ### 7.2 `ensureSessionForThread`
 

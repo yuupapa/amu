@@ -7,9 +7,9 @@ const decodeSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodePatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 
 describe("crossProviderHandoff settings", () => {
-  it("is off by default and allows Claude and Codex", () => {
+  it("is on by default and allows Claude and Codex", () => {
     expect(decodeSettings({}).crossProviderHandoff).toEqual({
-      enabled: false,
+      enabled: true,
       packetBudgetChars: 60_000,
       allowedDrivers: ["claudeAgent", "codex"],
     });
@@ -17,9 +17,9 @@ describe("crossProviderHandoff settings", () => {
 
   it("fills missing fields of a partial stored value", () => {
     expect(
-      decodeSettings({ crossProviderHandoff: { enabled: true } }).crossProviderHandoff,
+      decodeSettings({ crossProviderHandoff: { enabled: false } }).crossProviderHandoff,
     ).toEqual({
-      enabled: true,
+      enabled: false,
       packetBudgetChars: 60_000,
       allowedDrivers: ["claudeAgent", "codex"],
     });

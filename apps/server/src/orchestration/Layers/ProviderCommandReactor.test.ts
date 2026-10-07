@@ -582,7 +582,8 @@ describe("ProviderCommandReactor", () => {
                     : {}),
                 },
               }
-            : {},
+            : // The feature is on by default; these tests cover the off path.
+              { crossProviderHandoff: { enabled: false } },
         ),
       ),
       Layer.provideMerge(SqlitePersistenceMemory),
