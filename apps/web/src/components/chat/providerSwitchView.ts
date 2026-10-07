@@ -1,6 +1,7 @@
 import type {
   CrossProviderHandoffSettings,
   MessageId,
+  OrchestrationMessage,
   OrchestrationThread,
   ProviderInstanceId,
   ServerProvider,
@@ -303,19 +304,72 @@ export function handoffDividers(
   return dividers;
 }
 
+const UNKNOWN_ANSWERER = "担当モデル不明";
+
 /**
- * The answering model of a turn, from its record (§8.4). Threads that never
- * switched show nothing; switched threads say when the record is missing.
+ * How a user message bears on who answered the next turn: one that reached a
+ * provider started it, one that may have reached one (unknown-discarded)
+ * leaves the answerer unknown, and one refused before sending started nothing.
  */
-export function answeringModelLabel(
-  thread: Pick<OrchestrationThread, "providerSwitch" | "turnAssignments">,
-  turnId: TurnId | null,
+const userMessageStart = (
+  message: Pick<OrchestrationMessage, "role" | "deliveryState">,
+): "started" | "maybe" | "none" | null => {
+  if (message.role !== "user") return null;
+  switch (message.deliveryState) {
+    case undefined:
+    case "delivered":
+    case "pending":
+      return "started";
+    case "unknown-discarded":
+      return "maybe";
+    default:
+      return "none";
+  }
+};
+
+/**
+ * The answering model of each turn (§8.4), from its record. Threads that never
+ * switched show nothing. A turn with no record that no user message started
+ * (the provider's own turn, such as a background task finishing) ran in the
+ * session that answered the turn before it, so it takes that turn's model.
+ * Otherwise a missing record says so.
+ */
+export function answeringModels(
+  thread: Pick<OrchestrationThread, "providerSwitch" | "turnAssignments"> & {
+    readonly messages: ReadonlyArray<
+      Pick<OrchestrationMessage, "role" | "turnId" | "deliveryState">
+    >;
+  },
   providers: ReadonlyArray<SwitchProvider>,
-): string | null {
-  if (thread.providerSwitch?.hasHistory !== true) return null;
-  const assignment =
-    turnId === null ? undefined : thread.turnAssignments?.find((entry) => entry.turnId === turnId);
-  return assignment === undefined ? "担当モデル不明" : switchPartyLabel(assignment, providers);
+): (turnId: TurnId | null) => string | null {
+  if (thread.providerSwitch?.hasHistory !== true) return () => null;
+  const recorded = new Map<string, string>();
+  for (const entry of thread.turnAssignments ?? []) {
+    if (!recorded.has(entry.turnId)) recorded.set(entry.turnId, switchPartyLabel(entry, providers));
+  }
+  const labels = new Map<string, string>();
+  let previous: string | null = null;
+  let userStarted = false;
+  for (const message of thread.messages) {
+    const start = userMessageStart(message);
+    if (start === "started") userStarted = true;
+    // A reply to it may still arrive, from a model no record names.
+    if (start === "maybe") previous = null;
+    if (start !== null) continue;
+    if (message.role !== "assistant" || message.turnId === null || message.turnId === undefined) {
+      continue;
+    }
+    if (labels.has(message.turnId)) continue;
+    const own = recorded.get(message.turnId);
+    const label: string = own ?? (!userStarted && previous !== null ? previous : UNKNOWN_ANSWERER);
+    labels.set(message.turnId, label);
+    previous = label === UNKNOWN_ANSWERER ? null : label;
+    userStarted = false;
+  }
+  return (turnId) =>
+    turnId === null
+      ? UNKNOWN_ANSWERER
+      : (labels.get(turnId) ?? recorded.get(turnId) ?? UNKNOWN_ANSWERER);
 }
 
 /** What the new model does not receive (§6.8), shown the first time (decision 3). */

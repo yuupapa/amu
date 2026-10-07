@@ -1861,3 +1861,47 @@ serverの型チェックと`git diff --check`は通過しました。webは申�
 こちらでも server 型チェック、`git diff --check`、実関数を使った文言の境界確認が通過しました。テストスイートは再実行していません。
 
 **この差分はコミットしてよいと判断します。** コード・ファイルは変更していません。
+
+## コードレビュー: 三観の判への対応（担当モデル名の常時表示・プロバイダーが始めたターン、2026-10-07）
+
+### 第1巡（Codex 原文）
+
+判定：**Red**
+
+**Blocker：なし**
+
+**Major：1件**
+
+- [providerSwitchView.ts:310](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/chat/providerSwitchView.ts:310)：**受付不明の乗り換えの返事に、旧モデル名を表示します。**  
+  Codex→Claude の送信が受付不明になり、「送らずに閉じる」を選んだ後、実際には動いていた Claude の返事が届く経路です。`unknown-discarded` を無視するため、担当記録のない Claude のターンが直前の Codex を引き継ぎます。実関数でも、discard 前の「担当モデル不明」が discard 後に「Codex」へ変わることを確認しました。  
+  **直し方：** `unknown-discarded` は拒否済みの発言と区別し、担当の推定を遮断してください。次の明示的な担当記録までは不明を維持し、「discard 後に返事が届く」テストを追加してください。
+
+**Minor：2件**
+
+- [MessagesTimeline.tsx:2570](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/chat/MessagesTimeline.tsx:2570)：**コピーへのキーボードフォーカスで時刻が表示されなくなります。**  
+  以前は親の `focus-within` でメタ情報全体が表示されました。今回の時刻用 span は、兄弟のコピーにフォーカスしても `focus-within` になりません。  
+  **直し方：** メタ情報の親を名前付き group にし、両方の span に親の `group-focus-within` を適用してください。マウスを乗せずコピーへフォーカスした場合を確認するテストが必要です。
+
+- [ChatView.tsx:10424](/Users/uedatakehito/Documents/Codex/2026-10-01/task/t3code/apps/web/src/components/ChatView.tsx:10424)：**本文のストリーミング差分ごとに、共通 context の参照まで変わります。**  
+  `messages` は本文更新でも新しい配列になります。そのたびに `handoffView` が再生成され、`TimelineRowCtx` を読む表示済みの行にも更新が伝わります。担当表の計算は線形ですが、本文と無関係な行の再描画が増えています。実際の遅延量は未計測です。  
+  **直し方：** 本文だけの更新では担当表・`handoffView` の参照を維持し、role・turnId・deliveryState・担当記録の変化に応じて更新してください。
+
+`git diff --check` は通過。web 型チェックは報告済みの既存1件のみでした。関数の境界確認は実行しましたが、テストスイートと実画面の確認は行っていません。コード・ファイルは変更していません。
+
+### 第2巡（Codex 原文）
+
+判定：**Green**
+
+- **Blocker：なし**
+- **Major：なし**
+- **Minor：なし**
+
+前回の3件は解消しています。
+
+- `unknown-discarded` の後は担当不明を維持し、明示的な担当記録が現れると正しく引き継ぎを再開します。
+- 親の `group-focus-within/assistant-meta` により、コピーへのフォーカスで時刻も表示される指定になっています。
+- 本文だけの更新では JSON キーが変わらず、軽量配列・担当表・`handoffView` の参照が保たれます。
+
+実関数で受付不明・同一ターンの複数メッセージ・ページ先頭・memo の参照維持を確認しました。`git diff --check` は通過し、web 型チェックは既存の1件のみです。テストスイートの再実行と実画面での CSS 確認は行っていません。
+
+**この範囲はコミットしてよいと判断します。** コード・ファイルは変更していません。

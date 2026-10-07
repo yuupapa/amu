@@ -70,6 +70,7 @@ import {
   type ThreadId,
   type ThreadLinkedPullRequest,
   type TurnId,
+  type OrchestrationMessage,
   type KeybindingCommand,
   OrchestrationThreadActivity,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -261,7 +262,7 @@ import { HandoffPacketDialog, type HandoffPacketDialogState } from "./chat/Hando
 import { handoffNoticeBannerItem, switchStatusBannerItem } from "./chat/ProviderSwitchBanners";
 import type { TimelineHandoffView } from "./chat/MessagesTimeline";
 import {
-  answeringModelLabel,
+  answeringModels,
   canOfferHandoffTo,
   conversationOwner,
   handoffDividers,
@@ -10418,6 +10419,37 @@ export default function ChatView(props: ChatViewProps) {
   // Dividers and answering models of cross-provider switches (§8.3, §8.4).
   const activeProviderSwitch = activeThread?.providerSwitch;
   const activeTurnAssignments = activeThread?.turnAssignments;
+  // Only who started each turn matters to the answerer table, so streamed
+  // text does not rebuild the timeline's handoff view (§8.4).
+  const activeThreadMessagesRaw = activeThread?.messages;
+  const handoffMessageShapeKey = useMemo(
+    () =>
+      JSON.stringify(
+        (activeThreadMessagesRaw ?? []).map((message) => [
+          message.role,
+          message.turnId ?? null,
+          message.deliveryState ?? null,
+        ]),
+      ),
+    [activeThreadMessagesRaw],
+  );
+  const activeThreadMessagesForHandoff = useMemo(
+    () =>
+      (
+        JSON.parse(handoffMessageShapeKey) as Array<
+          [
+            OrchestrationMessage["role"],
+            TurnId | null,
+            OrchestrationMessage["deliveryState"] | null,
+          ]
+        >
+      ).map(([role, turnId, deliveryState]) => ({
+        role,
+        turnId,
+        ...(deliveryState !== null ? { deliveryState } : {}),
+      })),
+    [handoffMessageShapeKey],
+  );
   const activeThreadIdForHandoff = activeThread?.id ?? null;
   const activeEnvironmentIdForHandoff = activeThread?.environmentId ?? null;
   const timelineHandoffView = useMemo<TimelineHandoffView | null>(() => {
@@ -10430,8 +10462,12 @@ export default function ChatView(props: ChatViewProps) {
     }
     const thread = { providerSwitch: activeProviderSwitch, turnAssignments: activeTurnAssignments };
     const dividers = handoffDividers(thread, providerStatuses);
+    const answeringModel = answeringModels(
+      { ...thread, messages: activeThreadMessagesForHandoff },
+      providerStatuses,
+    );
     return {
-      answeringModel: (turnId) => answeringModelLabel(thread, turnId, providerStatuses),
+      answeringModel,
       dividerBefore: (messageId) => dividers.get(messageId) ?? null,
       onOpenPacket: (divider) => {
         if (divider.packetId === null) return;
@@ -10463,6 +10499,7 @@ export default function ChatView(props: ChatViewProps) {
     activeEnvironmentIdForHandoff,
     activeProviderSwitch,
     activeThreadIdForHandoff,
+    activeThreadMessagesForHandoff,
     activeTurnAssignments,
     getHandoffPacket,
     providerStatuses,

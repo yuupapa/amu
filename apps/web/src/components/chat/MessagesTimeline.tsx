@@ -2534,36 +2534,58 @@ function AssistantMessageMeta({
   const ctx = use(TimelineRowCtx);
   // Which model answered, on threads that switched providers (§8.4).
   const answeringModel = ctx.handoff?.answeringModel(message.turnId) ?? null;
+  const revealOnHover = alwaysVisible
+    ? "opacity-100"
+    : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100";
+  // Inside the always-visible row, focus anywhere in it reveals both parts.
+  const revealInRow = alwaysVisible
+    ? "opacity-100"
+    : "opacity-0 pointer-coarse:opacity-100 group-focus-within/assistant-meta:opacity-100 group-hover/assistant:opacity-100";
+  // On switched threads the answering model stays visible; the rest still
+  // shows on hover.
+  const keepModelVisible = answeringModel !== null;
 
   return (
     <div
       className={cn(
-        "flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
-        alwaysVisible
-          ? "opacity-100"
-          : "opacity-0 pointer-coarse:opacity-100 focus-within:opacity-100 group-hover/assistant:opacity-100",
+        "group/assistant-meta flex items-center gap-2 text-xs tabular-nums transition-opacity duration-200",
+        keepModelVisible ? "opacity-100" : revealOnHover,
         className,
       )}
     >
-      <AssistantCopyButton
-        message={message}
-        showCopyButton={showCopyButton}
-        streaming={copyStreaming}
-      />
+      <span
+        className={cn(
+          "inline-flex items-center transition-opacity duration-200",
+          keepModelVisible && revealInRow,
+        )}
+      >
+        <AssistantCopyButton
+          message={message}
+          showCopyButton={showCopyButton}
+          streaming={copyStreaming}
+        />
+      </span>
       {answeringModel !== null ? (
         <p className="text-muted-foreground text-xs" data-answering-model="">
           {answeringModel}
         </p>
       ) : null}
       {!message.streaming && (
-        <Tooltip>
-          <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
-            {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
-          </TooltipTrigger>
-          <TooltipPopup>
-            {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
-          </TooltipPopup>
-        </Tooltip>
+        <span
+          className={cn(
+            "inline-flex items-center transition-opacity duration-200",
+            keepModelVisible && revealInRow,
+          )}
+        >
+          <Tooltip>
+            <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
+              {formatDayAwareTimestamp(message.updatedAt, ctx.timestampFormat)}
+            </TooltipTrigger>
+            <TooltipPopup>
+              {formatChatTimestampTooltip(message.updatedAt, ctx.timestampFormat)}
+            </TooltipPopup>
+          </Tooltip>
+        </span>
       )}
     </div>
   );

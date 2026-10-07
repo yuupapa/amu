@@ -11,7 +11,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  answeringModelLabel,
+  answeringModels,
   canOfferHandoffTo,
   conversationOwner,
   handoffDividers,
@@ -353,7 +353,7 @@ describe("switchRevertBlock", () => {
   });
 });
 
-describe("handoffDividers and answeringModelLabel", () => {
+describe("handoffDividers and answeringModels", () => {
   const delivered = {
     ...EMPTY_THREAD_PROVIDER_SWITCH_STATE,
     hasHistory: true,
@@ -391,27 +391,87 @@ describe("handoffDividers and answeringModelLabel", () => {
         changedMidTurn: false,
       },
     ];
+    const messages = [
+      { role: "user" as const, turnId: null },
+      { role: "assistant" as const, turnId: TurnId.make("turn-3") },
+    ];
     expect(
-      answeringModelLabel(
-        { providerSwitch: undefined, turnAssignments: assignments },
-        TurnId.make("turn-3"),
+      answeringModels(
+        { providerSwitch: undefined, turnAssignments: assignments, messages },
         providers,
-      ),
+      )(TurnId.make("turn-3")),
     ).toBeNull();
-    expect(
-      answeringModelLabel(
-        { providerSwitch: delivered, turnAssignments: assignments },
-        TurnId.make("turn-3"),
-        providers,
-      ),
-    ).toBe("Claude Opus 5.5");
-    expect(
-      answeringModelLabel(
-        { providerSwitch: delivered, turnAssignments: assignments },
-        TurnId.make("turn-9"),
-        providers,
-      ),
-    ).toBe("担当モデル不明");
+    const answerer = answeringModels(
+      { providerSwitch: delivered, turnAssignments: assignments, messages },
+      providers,
+    );
+    expect(answerer(TurnId.make("turn-3"))).toBe("Claude Opus 5.5");
+    expect(answerer(TurnId.make("turn-9"))).toBe("担当モデル不明");
+  });
+
+  it("gives a provider's own turn the model of the turn before it", () => {
+    const assignments = [
+      {
+        turnId: TurnId.make("turn-3"),
+        messageId: MessageId.make("message-switch"),
+        ...claude,
+        generation: 2,
+        changedMidTurn: false,
+      },
+    ];
+    const answerer = answeringModels(
+      {
+        providerSwitch: delivered,
+        turnAssignments: assignments,
+        messages: [
+          { role: "user", turnId: null },
+          { role: "assistant", turnId: TurnId.make("turn-3") },
+          // A background task finished: no user message started this turn.
+          { role: "assistant", turnId: TurnId.make("turn-4") },
+          // A refused message starts nothing either.
+          { role: "user", turnId: null, deliveryState: "rejected" },
+          { role: "assistant", turnId: TurnId.make("turn-5") },
+          // A delivered message whose turn has no record stays unknown,
+          { role: "user", turnId: null },
+          { role: "assistant", turnId: TurnId.make("turn-6") },
+          // and a provider's turn after it has nothing to inherit.
+          { role: "assistant", turnId: TurnId.make("turn-7") },
+        ],
+      },
+      providers,
+    );
+    expect(answerer(TurnId.make("turn-4"))).toBe("Claude Opus 5.5");
+    expect(answerer(TurnId.make("turn-5"))).toBe("Claude Opus 5.5");
+    expect(answerer(TurnId.make("turn-6"))).toBe("担当モデル不明");
+    expect(answerer(TurnId.make("turn-7"))).toBe("担当モデル不明");
+  });
+
+  it("names no one for a reply to a message discarded after an unknown delivery", () => {
+    const answerer = answeringModels(
+      {
+        providerSwitch: delivered,
+        turnAssignments: [
+          {
+            turnId: TurnId.make("turn-3"),
+            messageId: MessageId.make("message-codex"),
+            ...codex,
+            generation: 1,
+            changedMidTurn: false,
+          },
+        ],
+        messages: [
+          { role: "user", turnId: null },
+          { role: "assistant", turnId: TurnId.make("turn-3") },
+          // Sent to Claude, delivery unknown, then discarded: Claude may still answer.
+          { role: "user", turnId: null, deliveryState: "unknown-discarded" },
+          { role: "assistant", turnId: TurnId.make("turn-4") },
+          { role: "assistant", turnId: TurnId.make("turn-5") },
+        ],
+      },
+      providers,
+    );
+    expect(answerer(TurnId.make("turn-4"))).toBe("担当モデル不明");
+    expect(answerer(TurnId.make("turn-5"))).toBe("担当モデル不明");
   });
 });
 
