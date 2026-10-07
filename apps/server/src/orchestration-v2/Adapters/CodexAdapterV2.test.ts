@@ -802,6 +802,60 @@ describe("CodexAdapterV2 process spawning", () => {
   );
 });
 
+describe("CodexAdapterV2 image generation projection", () => {
+  const savedPath = "/Users/example/.codex/generated_images/thread/ig_1.png";
+  const generation = {
+    type: "imageGeneration" as const,
+    id: "ig_1",
+    status: "completed",
+    revisedPrompt: "  A red apple on a desk  ",
+    // The PNG Codex also sends inline; it must not reach the turn item.
+    result: "iVBORw0KGgo".repeat(64),
+    savedPath,
+  };
+
+  it("keeps the saved file's path and the prompt, never the inline image", () => {
+    const projection = CodexAdapterV2.codexImageGenerationProjection(generation, true);
+    assert.deepStrictEqual(projection.status.turnItem, "completed");
+    assert.equal(projection.toolName, "codex.image_generation");
+    assert.equal(projection.title, "Generated image");
+    assert.equal(projection.viewedImagePath, savedPath);
+    assert.deepStrictEqual(projection.input, { prompt: "A red apple on a desk" });
+    assert.notInclude(JSON.stringify(projection), generation.result);
+  });
+
+  it("shows a running generation without an image", () => {
+    const projection = CodexAdapterV2.codexImageGenerationProjection(
+      { ...generation, status: "generating", savedPath: null },
+      false,
+    );
+    assert.equal(projection.status.turnItem, "running");
+    assert.equal(projection.title, "Generating image");
+    assert.isUndefined(projection.viewedImagePath);
+  });
+
+  it("marks a failed generation and drops its path", () => {
+    const projection = CodexAdapterV2.codexImageGenerationProjection(
+      { ...generation, failure: { type: "usageLimitExceeded", limitId: "images" } },
+      true,
+    );
+    assert.equal(projection.status.turnItem, "failed");
+    assert.equal(projection.title, "Image generation failed");
+    assert.isUndefined(projection.viewedImagePath);
+    assert.deepStrictEqual(projection.output, {
+      failure: { type: "usageLimitExceeded", limitId: "images" },
+    });
+  });
+
+  it("ignores a saved path that is not an image", () => {
+    const projection = CodexAdapterV2.codexImageGenerationProjection(
+      { ...generation, savedPath: "/Users/example/.ssh/id_ed25519" },
+      true,
+    );
+    assert.isUndefined(projection.viewedImagePath);
+  });
+});
+
 describe("CodexAdapterV2 dynamic tool projection", () => {
   it.effect("uses the CUA call title while leaving other MCP titles as tool arguments", () =>
     Effect.gen(function* () {

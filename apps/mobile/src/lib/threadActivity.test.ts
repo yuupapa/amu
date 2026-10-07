@@ -2443,3 +2443,54 @@ describe("html renders", () => {
     }
   });
 });
+
+describe("generated images", () => {
+  const image = {
+    path: "/Users/example/.codex/generated_images/thread/ig_1.png",
+    prompt: "A red apple on a desk",
+  };
+  const generation = (
+    overrides: Partial<Extract<OrchestrationV2TurnItem, { type: "dynamic_tool" }>> = {},
+  ): OrchestrationV2TurnItem => ({
+    ...base("item-image", "2026-06-20T00:00:02.500Z", 2),
+    type: "dynamic_tool",
+    toolName: "codex.image_generation",
+    title: "Generated image",
+    input: { prompt: image.prompt },
+    viewedImagePath: image.path,
+    ...overrides,
+  });
+  const latestRun = {
+    runId,
+    status: "completed" as const,
+    startedAt: "2026-06-20T00:00:01.000Z",
+    completedAt: "2026-06-20T00:00:04.000Z",
+  };
+
+  it("keeps a generated image visible and in order when its run folds", () => {
+    const feed = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(command(), 1),
+      projected(generation(), 2),
+      projected(assistantMessage("2026-06-20T00:00:04.000Z"), 3),
+    ]);
+    const collapsed = deriveThreadFeedPresentation(feed, latestRun, new Set());
+    expect(collapsed.map((entry) => entry.type)).toEqual([
+      "message",
+      "run-fold",
+      "generated-image",
+      "message",
+    ]);
+    expect(collapsed[2]).toMatchObject({ type: "generated-image", image, runId });
+  });
+
+  it("leaves a running or failed generation in the work log", () => {
+    for (const call of [
+      generation({ status: "running", viewedImagePath: undefined }),
+      generation({ status: "failed", viewedImagePath: undefined }),
+    ]) {
+      const entries = buildThreadFeed([projected(call, 0)]);
+      expect(entries.map((entry) => entry.type)).toEqual(["activity-group"]);
+    }
+  });
+});

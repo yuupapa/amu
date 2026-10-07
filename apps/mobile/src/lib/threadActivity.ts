@@ -58,7 +58,12 @@ import {
 } from "@t3tools/shared/toolActivity";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
-import { compactDynamicToolOutput, htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
+import {
+  compactDynamicToolOutput,
+  generatedImageFromToolItem,
+  htmlRenderFromToolItem,
+  type GeneratedImageReference,
+} from "@t3tools/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
 
 export type PendingApproval = ThreadPendingApproval;
@@ -164,12 +169,20 @@ type RawThreadFeedEntry =
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly render: HtmlRenderReference;
+    }
+  | {
+      /** Amu: an image a Codex image generation saved, shown in place of its work row. */
+      readonly type: "generated-image";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly image: GeneratedImageReference;
     };
 
 export type ThreadFeedEntry = ThreadFeedEntryContent & { readonly continuesWorkLog?: boolean };
 
 type ThreadFeedEntryContent =
-  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" }>
+  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "generated-image" }>
   | {
       readonly type: "activity-group";
       readonly id: string;
@@ -1048,7 +1061,9 @@ function deriveThreadFeedRunFolds(
     const runId =
       entry.type === "message" && entry.message.role === "assistant"
         ? (entry.message.runId ?? runlessKey)
-        : entry.type === "activity-group" || entry.type === "html-render"
+        : entry.type === "activity-group" ||
+            entry.type === "html-render" ||
+            entry.type === "generated-image"
           ? (entry.runId ?? runlessKey)
           : null;
     if (!runId) continue;
@@ -1101,6 +1116,7 @@ function deriveThreadFeedRunFolds(
             entry.id !== firstAssistantId &&
             entry.id !== terminalAssistantId &&
             entry.type !== "html-render" &&
+            entry.type !== "generated-image" &&
             !(
               entry.type === "activity-group" &&
               entry.activities.some(
@@ -1741,6 +1757,22 @@ export function buildThreadFeed(
         createdAt,
         runId: item.runId,
         render,
+      };
+      projectedEntriesCache.set(row, { attemptId, entry });
+      entries.push(entry);
+      continue;
+    }
+    const image =
+      item.type === "dynamic_tool" && item.status === "completed"
+        ? generatedImageFromToolItem(item)
+        : undefined;
+    if (image) {
+      const entry: RawThreadFeedEntry = {
+        type: "generated-image",
+        id: `generated-image:${row.visibility}:${row.sourceThreadId}:${row.sourceItemId}`,
+        createdAt,
+        runId: item.runId,
+        image,
       };
       projectedEntriesCache.set(row, { attemptId, entry });
       entries.push(entry);

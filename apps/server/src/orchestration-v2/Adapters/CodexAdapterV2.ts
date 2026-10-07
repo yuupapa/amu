@@ -32,6 +32,8 @@ import {
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { dynamicToolTitle } from "@t3tools/shared/toolActivity";
+import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import { CODEX_GENERATED_IMAGE_TOOL_NAME } from "@t3tools/shared/toolOutput";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import type {
@@ -1232,6 +1234,53 @@ type CodexWebSearchItem = {
     | CodexSchema.V2ItemCompletedNotification__WebSearchAction
     | null;
 };
+
+type CodexImageGenerationItem = Extract<
+  | CodexSchema.V2ItemStartedNotification__ThreadItem
+  | CodexSchema.V2ItemCompletedNotification__ThreadItem,
+  { readonly type: "imageGeneration" }
+>;
+
+/**
+ * Amu: a Codex image generation as a tool row. Codex sends the PNG inline as
+ * base64 and also saves it to a file; only the file's path is kept, so the
+ * event log and the projection never hold the pixels.
+ */
+export function codexImageGenerationProjection(
+  item: CodexImageGenerationItem,
+  notificationCompleted: boolean,
+) {
+  const failed = item.failure != null || /fail|error/i.test(item.status);
+  const status = codexItemStatus(
+    failed
+      ? "failed"
+      : notificationCompleted || item.status === "completed"
+        ? "completed"
+        : "inProgress",
+  );
+  const savedPath = item.savedPath?.trim();
+  const viewedImagePath =
+    !failed &&
+    savedPath &&
+    savedPath.length <= 4096 &&
+    !/[\r\n]/.test(savedPath) &&
+    isWorkspaceImagePreviewPath(savedPath)
+      ? savedPath
+      : undefined;
+  const prompt = item.revisedPrompt?.trim();
+  return {
+    status,
+    title: failed
+      ? "Image generation failed"
+      : status.completed
+        ? "Generated image"
+        : "Generating image",
+    toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+    input: prompt ? { prompt } : {},
+    ...(viewedImagePath === undefined ? {} : { viewedImagePath }),
+    ...(item.failure == null ? {} : { output: { failure: item.failure } }),
+  };
+}
 
 export type CodexDynamicToolItem = Extract<
   | CodexSchema.V2ItemStartedNotification__ThreadItem
@@ -3555,6 +3604,64 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             return { node, turnItem };
           });
 
+        const buildImageGenerationArtifacts = (
+          context: ActiveCodexTurnContext,
+          item: CodexImageGenerationItem,
+          notificationCompleted: boolean,
+        ) =>
+          Effect.gen(function* () {
+            const updatedAt = yield* DateTime.now;
+            const { status, ...projection } = codexImageGenerationProjection(
+              item,
+              notificationCompleted,
+            );
+            const completedAt = status.completed ? updatedAt : null;
+            const nodeId = idAllocator.derive.nodeFromProviderItem({
+              driver: CODEX_PROVIDER,
+              nativeItemId: item.id,
+            });
+            const turnItemId = idAllocator.derive.turnItemFromProviderItem({
+              driver: CODEX_PROVIDER,
+              nativeItemId: item.id,
+            });
+            const { ordinal, startedAt } = yield* resolveItemPosition(context, item.id);
+            const node: OrchestrationV2ExecutionNode = {
+              id: nodeId,
+              threadId: context.projectionThreadId,
+              runId: context.projectionRunId,
+              parentNodeId: context.itemParentNodeId,
+              rootNodeId: context.rootNodeId,
+              kind: "tool_call",
+              status: status.node,
+              countsForRun: false,
+              providerThreadId: context.providerThread.id,
+              providerTurnId: context.providerTurnId,
+              nativeItemRef: codexNativeItemRef(item.id),
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt,
+              completedAt,
+            };
+            const turnItem: OrchestrationV2TurnItem = {
+              id: turnItemId,
+              threadId: context.projectionThreadId,
+              runId: context.projectionRunId,
+              nodeId,
+              providerThreadId: context.providerThread.id,
+              providerTurnId: context.providerTurnId,
+              nativeItemRef: codexNativeItemRef(item.id),
+              parentItemId: null,
+              ordinal,
+              status: status.turnItem,
+              startedAt,
+              completedAt,
+              updatedAt,
+              type: "dynamic_tool",
+              ...projection,
+            };
+            return { node, turnItem };
+          });
+
         const buildProposedPlanArtifacts = (input: {
           readonly context: ActiveCodexTurnContext;
           readonly nativeItemId: string;
@@ -4397,6 +4504,21 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               return;
             }
 
+            if (payload.item.type === "imageGeneration") {
+              const artifacts = yield* buildImageGenerationArtifacts(context, payload.item, false);
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: artifacts.turnItem,
+              });
+              return;
+            }
+
             if (payload.item.type !== "webSearch") {
               return;
             }
@@ -4553,6 +4675,21 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               if (artifacts === null) {
                 return;
               }
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: artifacts.turnItem,
+              });
+              return;
+            }
+
+            if (payload.item.type === "imageGeneration") {
+              const artifacts = yield* buildImageGenerationArtifacts(context, payload.item, true);
               yield* emitProviderEvent({
                 type: "node.updated",
                 driver: CODEX_PROVIDER,

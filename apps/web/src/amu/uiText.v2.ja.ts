@@ -18,7 +18,18 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   "{0} clients": "{0} 台のクライアント",
   "Settled ({0})": "完了済み（{0}）",
 
+  // Codex image generation rows (Amu)
+  "Generated image": "生成した画像",
+  "Generating image": "画像を生成しています",
+  "Image generation failed": "画像を生成できませんでした",
+
   // Chat and sidebar
+  "Add a project, or start without one.": "プロジェクトを追加するか、プロジェクトなしで始めます。",
+  "Start without a project": "プロジェクトなしで始める",
+  "No project": "プロジェクトなし",
+  "T3 Code collects anonymous usage data to help us improve it. To read more about how your data is used and how to opt out, see our":
+    "Amu は改善のため、匿名の利用データを集めています。データの使い方と止め方の説明は",
+  "privacy policy": "プライバシーポリシー",
   "or start without a project": "またはプロジェクトなしで始める",
   "New thread without a project": "プロジェクトなしの新しいスレッド",
   "New thread in {0}": "{0} に新しいスレッド",

@@ -1798,7 +1798,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                 row.kind === "worktree-setup" ||
                 row.kind === "event" ||
                 row.kind === "attempt-fold" ||
-                row.kind === "html-render"
+                row.kind === "html-render" ||
+                row.kind === "generated-image"
               ? "pb-2"
               : "pb-4",
         (row.kind === "message" && row.message.role === "assistant") ||
@@ -1847,6 +1848,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
+      {row.kind === "generated-image" ? <GeneratedImageTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
@@ -2732,6 +2734,46 @@ function HtmlRenderTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "htm
         htmlRender={row.htmlRender}
         onOpen={ctx.onFileOpen}
       />
+    </div>
+  );
+}
+
+/** Amu: a Codex image generation's saved file, shown open rather than behind a tool row. */
+function GeneratedImageTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "generated-image" }>;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const threadRef = ctx.threadRef;
+  const image = threadRef
+    ? resolveViewedImageAsset(row.generatedImage.path, {
+        threadId: threadRef.threadId,
+        workspaceRoot: ctx.workspaceRoot,
+      })
+    : null;
+  if (!threadRef || !image) return null;
+  const prompt = row.generatedImage.prompt;
+  return (
+    <div className="min-w-0 px-1">
+      <ChatMarkdownAssetImage
+        environmentId={threadRef.environmentId}
+        resource={image.resource}
+        alt={prompt ?? image.alt}
+        srcFragment={image.srcFragment}
+        workspaceRoot={ctx.workspaceRoot}
+        maxHeightRem={28}
+        onImageExpand={ctx.onImageExpand}
+      />
+      {prompt ? (
+        <p
+          className="mt-1 line-clamp-2 text-xs text-muted-foreground"
+          title={prompt}
+          translate="no"
+        >
+          {prompt}
+        </p>
+      ) : null}
     </div>
   );
 }

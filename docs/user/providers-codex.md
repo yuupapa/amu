@@ -92,6 +92,18 @@ in the thread on web, desktop, or mobile. Some tools offer access for one reques
 the current session, or permanently. See [Permission modes](./permission-modes.md)
 for command and file approvals.
 
+## See images Codex generates
+
+When Codex generates an image, Amu shows the picture in the conversation,
+right where Codex made it, with the prompt it generated from underneath.
+Click the picture to view it larger. The picture stays visible when the turn
+is folded, and the mobile app shows it the same way.
+
+Amu shows the file Codex saved under `~/.codex/generated_images` and does not
+keep a second copy in its own database. If you delete that file, the picture
+no longer loads. A generation that is still running or failed appears as an
+ordinary tool row.
+
 ## Codex says I hit a usage limit
 
 When Codex stops on a usage limit, the thread names the window that ran out and

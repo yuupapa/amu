@@ -1597,6 +1597,19 @@ function renderFeedEntry(
     );
   }
 
+  if (entry.type === "generated-image") {
+    return (
+      <View className="px-1 pb-2">
+        {props.renderViewedImage({ href: entry.image.path, alt: entry.image.prompt, title: null })}
+        {entry.image.prompt ? (
+          <Text className="mt-1 text-xs text-foreground-muted" numberOfLines={2}>
+            {entry.image.prompt}
+          </Text>
+        ) : null}
+      </View>
+    );
+  }
+
   if (entry.type === "work-toggle") {
     return (
       <ThreadWorkGroupToggle

@@ -9,6 +9,7 @@ import {
   readHtmlRenderReference,
   type HtmlRenderReference,
 } from "./htmlRender.ts";
+import { isWorkspaceImagePreviewPath } from "./filePreview.ts";
 import { resolveT3McpToolId } from "./t3McpToolPresentation.ts";
 
 const MAX_PARSED_BYTES = 16_384;
@@ -175,6 +176,47 @@ export function htmlRenderFromToolItem(item: {
   if (resolveT3McpToolId(item.toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
+}
+
+/**
+ * Amu: the tool name the Codex adapter gives an `imageGeneration` item. Codex
+ * saves each generated image to a file (under `$CODEX_HOME/generated_images`)
+ * and the item carries that path as `viewedImagePath`, so clients show the
+ * picture inline without the base64 copy Codex also sends.
+ */
+export const CODEX_GENERATED_IMAGE_TOOL_NAME = "codex.image_generation";
+
+export interface GeneratedImageReference {
+  /** Absolute path of the saved image on the environment host. */
+  readonly path: string;
+  /** The prompt Codex rewrote and generated from, when it reported one. */
+  readonly prompt: string | null;
+}
+
+/** The image a completed Codex image generation saved, if this item is one. */
+export function generatedImageFromToolItem(item: {
+  readonly toolName: string | null | undefined;
+  readonly viewedImagePath?: string | null | undefined;
+  readonly input?: unknown;
+}): GeneratedImageReference | undefined {
+  if (item.toolName !== CODEX_GENERATED_IMAGE_TOOL_NAME) return undefined;
+  const path = item.viewedImagePath?.trim();
+  if (
+    !path ||
+    path.length > 4096 ||
+    /[\r\n]/.test(path) ||
+    !(path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) ||
+    !isWorkspaceImagePreviewPath(path)
+  ) {
+    return undefined;
+  }
+  const prompt =
+    Predicate.isObject(item.input) &&
+    "prompt" in item.input &&
+    typeof item.input.prompt === "string"
+      ? item.input.prompt.trim()
+      : "";
+  return { path, prompt: prompt.length > 0 ? prompt : null };
 }
 
 /** Some providers report completion even when command output describes a failure. */

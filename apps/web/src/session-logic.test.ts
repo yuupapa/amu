@@ -1350,6 +1350,50 @@ describe("HTML renders in the timeline", () => {
     expect(entries.some((entry) => entry.kind === "html-render")).toBe(false);
     expect(entries.find((entry) => entry.id === "render")?.kind).toBe("work");
   });
+
+  const imageCall = (
+    status: OrchestrationV2TurnItem["status"],
+    viewedImagePath?: string,
+  ): OrchestrationV2TurnItem => ({
+    ...base("render", 2),
+    status,
+    type: "dynamic_tool",
+    toolName: "codex.image_generation",
+    title: "Generated image",
+    input: { prompt: "A red apple on a desk" },
+    ...(viewedImagePath === undefined ? {} : { viewedImagePath }),
+  });
+  const savedImage = "/Users/example/.codex/generated_images/thread/ig_1.png";
+
+  it("shows a generated image open, above the reply, through the turn fold", () => {
+    const entries = turn(imageCall("completed", savedImage));
+    expect(entries.find((entry) => entry.kind === "generated-image")).toMatchObject({
+      id: "render",
+      runId,
+      generatedImage: { path: savedImage, prompt: "A red apple on a desk" },
+    });
+    expect(rowsFor(entries, false)).toEqual(["message", "turn-fold", "generated-image", "message"]);
+    expect(rowsFor(entries, true)).toEqual([
+      "message",
+      "turn-fold",
+      "work",
+      "generated-image",
+      "work",
+      "message",
+    ]);
+  });
+
+  it.each([
+    ["running", "running", undefined],
+    ["failed", "failed", undefined],
+    ["completed without a saved file", "completed", undefined],
+    ["completed with a non-image file", "completed", "/Users/example/notes.txt"],
+    ["completed with a relative path", "completed", "generated/ig_1.png"],
+  ] as const)("keeps a generation %s in the work log", (_label, status, path) => {
+    const entries = turn(imageCall(status, path));
+    expect(entries.some((entry) => entry.kind === "generated-image")).toBe(false);
+    expect(entries.find((entry) => entry.id === "render")?.kind).toBe("work");
+  });
 });
 
 describe("work-log failure policy (#7999/#7893)", () => {

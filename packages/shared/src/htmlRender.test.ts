@@ -13,7 +13,11 @@ import {
   readHtmlRenderReference,
 } from "./htmlRender.ts";
 import { T3_CODE_DARK_THEME_COLORS, T3_CODE_LIGHT_THEME_COLORS } from "./themePalettes.ts";
-import { htmlRenderFromToolItem } from "./toolOutput.ts";
+import {
+  CODEX_GENERATED_IMAGE_TOOL_NAME,
+  generatedImageFromToolItem,
+  htmlRenderFromToolItem,
+} from "./toolOutput.ts";
 
 const reference = { attachmentId: "thread-abc-123.html", title: "Chart", height: 420 };
 
@@ -235,5 +239,42 @@ describe("htmlRenderFrameHeight", () => {
     const copy = readHtmlRenderReference(JSON.parse(JSON.stringify(measured)))!;
     expect(htmlRenderReferencesEqual(measured, copy)).toBe(true);
     expect(htmlRenderReferencesEqual(measured, { ...copy, heights: [[390, 1290]] })).toBe(false);
+  });
+});
+
+describe("generatedImageFromToolItem", () => {
+  const path = "/Users/example/.codex/generated_images/thread/ig_1.png";
+
+  it("reads the saved image and the prompt Codex generated from", () => {
+    expect(
+      generatedImageFromToolItem({
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: path,
+        input: { prompt: "  A red apple  " },
+      }),
+    ).toEqual({ path, prompt: "A red apple" });
+    expect(
+      generatedImageFromToolItem({
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: path,
+        input: {},
+      }),
+    ).toEqual({ path, prompt: null });
+  });
+
+  it.each([
+    ["another tool", { toolName: "image_generation", viewedImagePath: path }],
+    ["no saved file", { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME }],
+    ["a relative path", { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME, viewedImagePath: "ig_1.png" }],
+    [
+      "a file that is not an image",
+      { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME, viewedImagePath: "/tmp/a.sh" },
+    ],
+    [
+      "a path with a line break",
+      { toolName: CODEX_GENERATED_IMAGE_TOOL_NAME, viewedImagePath: "/tmp/a.png\n/etc/passwd" },
+    ],
+  ] as const)("ignores %s", (_label, item) => {
+    expect(generatedImageFromToolItem(item)).toBeUndefined();
   });
 });

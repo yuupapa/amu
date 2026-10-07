@@ -21,7 +21,11 @@ import {
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
-import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
+import {
+  generatedImageFromToolItem,
+  htmlRenderFromToolItem,
+  type GeneratedImageReference,
+} from "@t3tools/shared/toolOutput";
 import {
   contextCompactionLabel,
   workEntryIndicatesToolFailure,
@@ -139,6 +143,14 @@ export type TimelineEntry = (
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly htmlRender: HtmlRenderReference;
+    }
+  | {
+      /** Amu: an image a Codex image generation saved, shown where it was made. */
+      readonly id: string;
+      readonly kind: "generated-image";
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly generatedImage: GeneratedImageReference;
     }
   | {
       readonly id: string;
@@ -709,6 +721,22 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         createdAt,
         runId: item.runId,
         htmlRender,
+        ...attemptMetadata,
+      });
+      continue;
+    }
+
+    const generatedImage =
+      item.type === "dynamic_tool" && item.status === "completed"
+        ? generatedImageFromToolItem(item)
+        : undefined;
+    if (generatedImage !== undefined) {
+      entries.push({
+        id: item.id,
+        kind: "generated-image",
+        createdAt,
+        runId: item.runId,
+        generatedImage,
         ...attemptMetadata,
       });
       continue;
