@@ -219,8 +219,9 @@ export function isCodexGeneratedImagePath(path: string): boolean {
   if (/^[A-Za-z]:[\\/]/.test(path)) {
     rest = path.slice(3);
     separator = /[\\/]/;
-  } else if (path.startsWith("/") && !/^\/[A-Za-z]:/.test(path)) {
-    // A leading "/C:" is read as a Windows drive by the resolver.
+  } else if (path.startsWith("/") && !/^\/[A-Za-z]:/.test(path) && !path.includes("\\")) {
+    // A leading "/C:" is read as a Windows drive by the resolver, and Windows
+    // would read a backslash as a separator (or a UNC root).
     rest = path.slice(1);
     separator = /\//;
   } else {

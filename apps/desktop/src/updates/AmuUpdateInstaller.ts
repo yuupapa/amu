@@ -204,15 +204,17 @@ fail() {
     log "could not record the rollback; the watchdog will retry it"
     exit 1
   fi
-  # Read by the next Amu as "the update was undone", so only once it will be.
-  printf '%s\\n' "$AMU_VERSION: $1" > "$AMU_UPDATES/last-failure.txt"
   stop_app
   wait_port_free 60
-  if restore; then
-    rm -f "$JOURNAL"
-  else
-    log "RESTORE INCOMPLETE: check $RES for .amu-old-* files"
+  if ! restore; then
+    # The journal and the watchdog stay, so the restore is tried again; Amu
+    # is not opened on a half-restored bundle.
+    log "RESTORE INCOMPLETE: the watchdog will retry; check $RES for .amu-old-* files"
+    exit 1
   fi
+  rm -f "$JOURNAL"
+  # Read by the next Amu as "the update was undone", so only now.
+  printf '%s\\n' "$AMU_VERSION: $1" > "$AMU_UPDATES/last-failure.txt"
   launch
   stop_watchdog
   exit 1
@@ -278,8 +280,15 @@ if ! wait_port_free 60; then log "port $AMU_PORT is still in use; update skipped
 # drops it), without unloading one that may be restoring right now.
 if [ -f "$JOURNAL" ]; then
   log "update skipped: an earlier update is unfinished ($(journal_field phase) phase)"
+  # Reload the earlier job file as it was: it holds that update's parts and
+  # versions, which this update's may not match.
   if ! "$LAUNCHCTL" print "$WATCH_DOMAIN/$WATCH_LABEL" >/dev/null 2>&1; then
-    start_watchdog || log "could not start the update watchdog"
+    if [ -f "$WATCH_PLIST" ]; then
+      "$LAUNCHCTL" bootstrap "$WATCH_DOMAIN" "$WATCH_PLIST" >> "$AMU_LOG" 2>&1 ||
+        log "could not start the earlier update's watchdog"
+    else
+      log "the earlier update's watchdog is gone; restore by hand from $RES/.amu-old-*"
+    fi
   fi
   launch
   exit 1

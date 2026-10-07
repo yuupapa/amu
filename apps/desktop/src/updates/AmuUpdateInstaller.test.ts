@@ -610,6 +610,43 @@ describe.skipIf(!isMac)("Amu update installer", () => {
     );
   });
 
+  it("reloads the earlier update's own watchdog job when a restart dropped it", () => {
+    leaveHalfSwapped({ phase: "rollback", pid: 999_999 });
+    const earlierJob = NodePath.join(updates, "update-watchdog.plist");
+    NodeFS.writeFileSync(earlierJob, "<plist>the earlier update's job</plist>");
+    const notLoaded = NodePath.join(root, "launchctl-not-loaded.sh");
+    NodeFS.writeFileSync(
+      notLoaded,
+      `#!/bin/sh\necho "$*" >> "${root}/launchctl.log"\ncase "$1" in print) exit 113 ;; esac\n`,
+      { mode: 0o755 },
+    );
+    const result = runInstaller({ AMU_OPEN: "/usr/bin/true", AMU_LAUNCHCTL: notLoaded });
+
+    expect(result.status).toBe(1);
+    expect(read(earlierJob)).toBe("<plist>the earlier update's job</plist>");
+    expect(launchctlCalls()).toContainEqual(
+      expect.stringMatching(/^bootstrap gui\/\d+ .*update-watchdog\.plist$/),
+    );
+    expect(launchctlCalls().some((call) => call.startsWith("bootout"))).toBe(false);
+  });
+
+  it("keeps the journal and the watchdog when the restore itself fails", () => {
+    leaveHalfSwapped({ phase: "swap", pid: 999_999 });
+    const resources = NodePath.join(app, "Contents/Resources");
+    // The live app.asar.unpacked cannot be moved away: its folder is locked.
+    NodeFS.chmodSync(resources, 0o555);
+    let result;
+    try {
+      result = runInstaller({ AMU_MODE: "recover", AMU_OPEN: "/usr/bin/true" });
+    } finally {
+      NodeFS.chmodSync(resources, 0o755);
+    }
+    expect(result.status).toBe(1);
+    expect(read(NodePath.join(updates, "install-journal"))).toContain("phase=rollback");
+    expect(NodeFS.existsSync(NodePath.join(updates, "last-failure.txt"))).toBe(false);
+    expect(launchctlCalls().some((call) => call.startsWith("bootout"))).toBe(false);
+  });
+
   it("reports the update undone only once the rollback is recorded", () => {
     leaveHalfSwapped({ phase: "swap", pid: 999_999 });
     const scriptPath = writeScript();

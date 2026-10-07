@@ -318,6 +318,20 @@ describe("generatedImageFromToolItem", () => {
       },
     ],
     [
+      "a slash path hiding a network root",
+      {
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: "/\\server/share/generated_images/a.png",
+      },
+    ],
+    [
+      "a slash path climbing out with a backslash",
+      {
+        toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
+        viewedImagePath: "/tmp/generated_images/..\\private.png",
+      },
+    ],
+    [
       "a path with a trailing space",
       {
         toolName: CODEX_GENERATED_IMAGE_TOOL_NAME,
