@@ -274,8 +274,6 @@ fi
 
 log "installing Amu $AMU_VERSION over $AMU_OLD_VERSION"
 if ! wait_pid_exit "$AMU_PID" 120; then log "Amu did not quit; update skipped"; exit 1; fi
-if ! wait_port_free 60; then log "port $AMU_PORT is still in use; update skipped"; launch; exit 1; fi
-
 # An unfinished earlier update comes first: its journal and the old files it
 # would restore must survive. Make sure its watchdog is there (a restart
 # drops it), without unloading one that may be restoring right now.
@@ -296,6 +294,8 @@ if [ -f "$JOURNAL" ]; then
   launch
   exit 1
 fi
+if ! wait_port_free 60; then log "port $AMU_PORT is still in use; update skipped"; launch; exit 1; fi
+
 # Leftovers of an earlier, finished run. Amu was just running, so the live
 # files work. A leftover that cannot be removed would swallow the live folder
 # on rename.

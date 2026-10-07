@@ -657,6 +657,22 @@ describe.skipIf(!isMac)("Amu update installer", () => {
     expect(launchctlCalls().some((call) => call.startsWith("bootout"))).toBe(false);
   });
 
+  it("does not open Amu for an unfinished update even when the port stays taken", async () => {
+    leaveHalfSwapped({ phase: "rollback", pid: 999_999 });
+    const server = NodeNet.createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address ? String(address.port) : "0";
+    try {
+      const opened = NodePath.join(root, "opened");
+      const result = runInstaller({ AMU_OPEN: writeRecordingOpen(opened), AMU_PORT: port });
+      expect(result.status).toBe(1);
+      expect(NodeFS.existsSync(opened)).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
   it("opens Amu as it is when no watchdog can finish an unfinished update", () => {
     leaveHalfSwapped({ phase: "rollback", pid: 999_999 });
     const notLoaded = NodePath.join(root, "launchctl-not-loaded.sh");
