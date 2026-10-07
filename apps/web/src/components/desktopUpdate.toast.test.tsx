@@ -4,10 +4,17 @@ import type { DesktopUpdateState } from "@t3tools/contracts";
 
 const testState = vi.hoisted(() => ({
   addToast: vi.fn(),
+  amuNoticeShowsVersion: false,
 }));
 
 vi.mock("./ui/toast", () => ({
   toastManager: { add: testState.addToast },
+}));
+
+// Amu's own update notice owns a version it shows; these tests cover the case
+// where the user closed that notice.
+vi.mock("./AmuAppUpdateNotification.logic", () => ({
+  amuUpdateNoticeShowsVersion: () => testState.amuNoticeShowsVersion,
 }));
 
 import { showDesktopUpdateDownloadedToast } from "./desktopUpdate.toast";
@@ -63,6 +70,13 @@ function downloadedState(overrides: Partial<DesktopUpdateState> = {}): DesktopUp
 describe("showDesktopUpdateDownloadedToast", () => {
   beforeEach(() => {
     testState.addToast.mockReset();
+    testState.amuNoticeShowsVersion = false;
+  });
+
+  it("leaves the version to Amu's update notice while that notice shows it", () => {
+    testState.amuNoticeShowsVersion = true;
+    showDesktopUpdateDownloadedToast({ openExternal: vi.fn() }, downloadedState());
+    expect(testState.addToast).not.toHaveBeenCalled();
   });
 
   it("opens the downloaded version's release notes", async () => {
@@ -73,7 +87,7 @@ describe("showDesktopUpdateDownloadedToast", () => {
     link?.props.onClick?.();
     await vi.waitFor(() => {
       expect(openExternal).toHaveBeenCalledWith(
-        "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
+        "https://github.com/yuupapa/amu/releases/tag/v0.0.30",
       );
     });
     expect(testState.addToast).toHaveBeenCalledTimes(1);
@@ -91,7 +105,7 @@ describe("showDesktopUpdateDownloadedToast", () => {
 
     await vi.waitFor(() => {
       expect(openExternal).toHaveBeenCalledWith(
-        "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
+        "https://github.com/yuupapa/amu/releases/tag/v0.0.30",
       );
     });
   });

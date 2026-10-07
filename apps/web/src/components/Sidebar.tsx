@@ -1667,6 +1667,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     ) : (
       <span
         aria-hidden
+        // Amu: the saved title is the user's words; only the default one is UI copy.
+        translate={thread.title === "New thread" ? undefined : "no"}
         className={cn(
           "min-w-0 flex-1 text-sm transition-opacity motion-reduce:transition-none",
           shouldRecede ? "font-normal" : "font-medium",
@@ -1697,7 +1699,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         {thread.title}
       </span>
     );
-  const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
+  const accessibleTitle = isRenaming ? null : (
+    <span className="sr-only" translate={thread.title === "New thread" ? undefined : "no"}>
+      {thread.title}
+    </span>
+  );
 
   // Stacks show their layer count; multiple unrelated links show their total count.
   // Either opens the thread's pull requests tab; a single PR link opens that PR and still
@@ -2337,7 +2343,12 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           ) : null}
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-2.5">
-              <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+              <span
+                className="min-w-0 flex-1 truncate"
+                translate={thread.title === "New thread" ? undefined : "no"}
+              >
+                {thread.title}
+              </span>
               <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
                 {threadTimeLabel(thread)}
               </span>

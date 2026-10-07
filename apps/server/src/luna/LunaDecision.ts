@@ -207,30 +207,50 @@ export async function runLunaJudge(input: JudgeInput): Promise<AutoDecision> {
   }
 }
 
+/** Ids seen recently are kept so a repeated id is never judged twice; old ones age out. */
+const SEEN_ID_LIMIT = 512;
+
 export class LunaDecisionBroker {
-  private readonly requests = new Map<string, AbortController>();
+  /** Judgements running now. */
+  private readonly running = new Map<string, AbortController>();
+  /** Finished, failed or cancelled ids, oldest first. */
+  private readonly seen = new Set<string>();
   private readonly judge: typeof runLunaJudge;
   constructor(judge = runLunaJudge) {
     this.judge = judge;
   }
+  private remember(id: string) {
+    this.seen.delete(id);
+    this.seen.add(id);
+    while (this.seen.size > SEEN_ID_LIMIT) {
+      const oldest = this.seen.values().next().value;
+      if (oldest === undefined) break;
+      this.seen.delete(oldest);
+    }
+  }
   cancel(id: string) {
-    const c = this.requests.get(id) ?? new AbortController();
-    c.abort();
-    this.requests.set(id, c);
+    // A cancel that arrives before its judgement still stops it.
+    this.running.get(id)?.abort();
+    this.remember(id);
   }
   async decide(id: string, input: Omit<JudgeInput, "signal">): Promise<AutoDecision> {
-    if (this.requests.has(id))
+    if (this.running.has(id) || this.seen.has(id))
       throw new Error("このモデル選択は開始済みです。結果不明の依頼を自動再送しません。");
-    if (this.requests.size >= 4096)
-      throw new Error("モデル選択の上限に達しました。手動送信に戻してください。");
+    if (this.running.size >= 16)
+      throw new Error("モデル選択が混み合っています。少し待ってから送信してください。");
     const c = new AbortController();
-    this.requests.set(id, c);
-    const result = await this.judge({ ...input, signal: c.signal });
-    if (c.signal.aborted) throw new Error("モデル選択を取り消しました。");
-    return validateAutoDecision(result, input.choices);
+    this.running.set(id, c);
+    try {
+      const result = await this.judge({ ...input, signal: c.signal });
+      if (c.signal.aborted) throw new Error("モデル選択を取り消しました。");
+      return validateAutoDecision(result, input.choices);
+    } finally {
+      this.running.delete(id);
+      this.remember(id);
+    }
   }
   close() {
-    for (const c of this.requests.values()) c.abort();
+    for (const c of this.running.values()) c.abort();
   }
 }
 

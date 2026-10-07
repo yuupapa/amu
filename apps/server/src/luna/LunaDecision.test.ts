@@ -239,3 +239,17 @@ describe.skipIf(installedCodex.status !== 0)(
     });
   },
 );
+
+describe("Luna broker bookkeeping", () => {
+  it("keeps working after many judgements and early cancels, and never judges an id twice", async () => {
+    const judge = vi.fn(async () => decision);
+    const broker = new LunaDecisionBroker(judge);
+    for (let index = 0; index < 5_000; index++) broker.cancel(`cancelled-before-start-${index}`);
+    for (let index = 0; index < 600; index++) {
+      await expect(broker.decide(`finished-${index}`, input)).resolves.toEqual(decision);
+    }
+    await expect(broker.decide("finished-599", input)).rejects.toThrow("開始済み");
+    await expect(broker.decide("a-new-request", input)).resolves.toEqual(decision);
+    expect(judge).toHaveBeenCalledTimes(601);
+  });
+});

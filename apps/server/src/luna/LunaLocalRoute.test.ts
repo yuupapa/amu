@@ -220,3 +220,19 @@ it.effect(
       );
     }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+describe("isLoopbackRemoteAddress", () => {
+  it("accepts only this machine's own addresses", async () => {
+    const { isLocalLunaAutoRequest, isLoopbackRemoteAddress } = await import("../httpCors.ts");
+    for (const address of ["127.0.0.1", "127.8.0.1", "::1", "::ffff:127.0.0.1"]) {
+      expect(isLoopbackRemoteAddress(address), address).toBe(true);
+    }
+    for (const address of ["192.168.1.2", "10.0.0.1", "::ffff:192.168.1.2", "fe80::1"]) {
+      expect(isLoopbackRemoteAddress(address), address).toBe(false);
+    }
+    // A spoofed Host header does not help a request from another machine.
+    const url = new URL("http://localhost:5233/api/luna-auto");
+    expect(isLocalLunaAutoRequest(url, { "x-amu-auto": "1" }, "192.168.1.2")).toBe(false);
+    expect(isLocalLunaAutoRequest(url, { "x-amu-auto": "1" }, "127.0.0.1")).toBe(true);
+  });
+});

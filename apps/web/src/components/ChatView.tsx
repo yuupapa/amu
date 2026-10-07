@@ -8689,13 +8689,13 @@ export default function ChatView(props: ChatViewProps) {
       composerRef.current?.resetCursorState({ prompt });
     },
     currentPrompt: () => promptRef.current,
-    rememberPick: (selection) => {
-      if (!activeThread) return;
-      setComposerDraftModelSelection(
-        scopeThreadRef(activeThread.environmentId, activeThread.id),
-        selection,
-        { explicit: true, replaceOptions: true },
-      );
+    currentThreadRef: () =>
+      activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null,
+    rememberPick: (thread, selection) => {
+      setComposerDraftModelSelection(thread, selection, {
+        explicit: true,
+        replaceOptions: true,
+      });
     },
   });
 

@@ -14,7 +14,12 @@ type AutoRecord = { id: string; state: AutoState };
 export type AutoTicket = { id: string; signal: AbortSignal; markDispatch: () => boolean };
 const key = (thread: string) => `amu:luna:auto-run:${thread}`;
 export function readAutoRecord(thread: string): AutoRecord | null {
-  const value: unknown = JSON.parse(localStorage.getItem(key(thread)) ?? "null");
+  let value: unknown;
+  try {
+    value = JSON.parse(localStorage.getItem(key(thread)) ?? "null");
+  } catch {
+    throw new AutoRecordUnreadableError();
+  }
   if (value === null) return null;
   if (
     typeof value !== "object" ||
@@ -25,8 +30,22 @@ export function readAutoRecord(thread: string): AutoRecord | null {
       String(value.state),
     )
   )
-    throw new Error("オートの保存状態を確認できません。手動送信に戻してください。");
+    throw new AutoRecordUnreadableError();
   return value as AutoRecord;
+}
+
+export class AutoRecordUnreadableError extends Error {
+  constructor() {
+    super("オートの保存状態を確認できません。手動送信に戻してください。");
+    this.name = "AutoRecordUnreadableError";
+  }
+}
+
+/** Move an unreadable record aside (kept for inspection) so the thread can send again. */
+export function discardAutoRecord(thread: string): void {
+  const value = localStorage.getItem(key(thread));
+  if (value !== null) localStorage.setItem(`amu:luna:auto-run-unreadable:${thread}`, value);
+  localStorage.removeItem(key(thread));
 }
 function writeRecord(thread: string, value: AutoRecord) {
   localStorage.setItem(key(thread), JSON.stringify(value));

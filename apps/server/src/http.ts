@@ -56,6 +56,7 @@ import { autoChoices } from "@t3tools/shared/lunaAuto";
 import { LunaDecisionBroker } from "./luna/LunaDecision.ts";
 import { resolveLunaPreflight } from "./luna/LunaPreflight.ts";
 import { applyLunaRoutingPolicy, loadLunaRoutingPolicy } from "./luna/LunaRoutingPolicy.ts";
+import { deriveAuthClientMetadata } from "./auth/utils.ts";
 import { expandHomePath } from "./pathExpansion.ts";
 import { mergeProviderInstanceEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
 import { deriveProviderInstanceConfigMap } from "./provider/ProviderInstanceRegistryHydration.ts";
@@ -472,7 +473,11 @@ export const layerLunaAutoRoute = Layer.unwrap(
         yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
         const request = yield* HttpServerRequest.HttpServerRequest;
         const url = HttpServerRequest.toURL(request);
-        if (Option.isNone(url) || !isLocalLunaAutoRequest(url.value, request.headers))
+        const remoteAddress = deriveAuthClientMetadata({ request }).ipAddress;
+        if (
+          Option.isNone(url) ||
+          !isLocalLunaAutoRequest(url.value, request.headers, remoteAddress)
+        )
           return HttpServerResponse.jsonUnsafe(
             { error: "オートはこのMacのローカルのAmuで利用してください。" },
             { status: 403 },

@@ -172,6 +172,14 @@ const writtenText = new WeakMap<Text, string>();
 const originalAttributes = new WeakMap<Element, Map<string, string>>();
 const writtenAttributes = new WeakMap<Element, Map<string, string>>();
 
+/** Form fields hold user input, but their placeholder and labels are app copy. */
+const FIELD_SELECTOR = "input, textarea, select";
+
+function attributesTranslatable(element: Element): boolean {
+  if (element.matches(FIELD_SELECTOR)) return !isExcluded(element.parentElement);
+  return !isExcluded(element);
+}
+
 function isExcluded(element: Element | null): boolean {
   for (let node = element; node !== null; node = node.parentElement) {
     if (node.matches(INCLUDE_SELECTOR)) return false;
@@ -256,6 +264,7 @@ function translateTree(root: Node) {
   const start = root.nodeType === Node.DOCUMENT_NODE ? (root as Document).documentElement : root;
   if (start === null) return;
   if (start.nodeType === Node.ELEMENT_NODE && isExcluded(start as Element)) {
+    if (attributesTranslatable(start as Element)) translateElementAttributes(start as Element);
     // An excluded subtree can still hold app copy (a code block's header).
     for (const included of (start as Element).querySelectorAll(INCLUDE_SELECTOR)) {
       translateTree(included);
@@ -269,6 +278,9 @@ function translateTree(root: Node) {
         const element = node as Element;
         if (element.matches(INCLUDE_SELECTOR)) return NodeFilter.FILTER_ACCEPT;
         if (element.matches(EXCLUDE_SELECTOR)) {
+          if (element.matches(FIELD_SELECTOR) && attributesTranslatable(element)) {
+            translateElementAttributes(element);
+          }
           for (const included of element.querySelectorAll(INCLUDE_SELECTOR)) {
             translateTree(included);
           }
@@ -312,7 +324,7 @@ export function startPageTranslation(root: Node = document): () => void {
       } else if (record.type === "attributes") {
         const element = record.target as Element;
         const name = record.attributeName;
-        if (name === null || isExcluded(element)) continue;
+        if (name === null || !attributesTranslatable(element)) continue;
         if (writtenAttributes.get(element)?.get(name) === element.getAttribute(name)) continue;
         translateAttribute(element, name);
       } else {

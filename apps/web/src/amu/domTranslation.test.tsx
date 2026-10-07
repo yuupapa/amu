@@ -125,7 +125,9 @@ describe("startPageTranslation", () => {
     expect(host.querySelector("[data-user-message-body]")?.textContent).toBe("Archive");
     expect(host.querySelector("code")?.textContent).toBe("Copy");
     expect(host.querySelector("#path")?.textContent).toBe("Settings");
-    expect(host.querySelector("input")?.getAttribute("placeholder")).toBe("Search");
+    // The field's value is the user's, its placeholder is app copy.
+    expect(host.querySelector("input")?.getAttribute("placeholder")).toBe("検索");
+    expect(host.querySelector("input")?.value).toBe("Settings");
     expect(host.querySelector(".chat-markdown-codeblock-header")?.textContent).toBe("コピー");
   });
 

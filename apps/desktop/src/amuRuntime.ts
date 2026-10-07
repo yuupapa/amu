@@ -21,20 +21,20 @@ if (resourcesPath) {
   }
 }
 
-// A reinstalled Amu.app without that file must still open Amu's conversations,
-// not upstream's ~/.t3 folder. Development runs (Electron from node_modules) never do this.
+// A packaged Amu without that file (a new or reinstalled Amu.app) still keeps
+// its data in Amu's own folder, never in upstream T3 Code's ~/.t3.
+// Development runs (Electron from node_modules) never do this.
 const packagedApp =
   resourcesPath !== undefined &&
   resourcesPath.endsWith(".app/Contents/Resources") &&
   !resourcesPath.includes(`${NodePath.sep}node_modules${NodePath.sep}`);
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Runs in the boot script, before any Effect runtime exists.
 if (process.env.T3CODE_HOME === undefined && process.platform === "darwin" && packagedApp) {
-  const amuHome = NodePath.join(
+  process.env.T3CODE_HOME = NodePath.join(
     NodeOS.homedir(),
     "Library",
     "Application Support",
     "Amu",
     "runtime",
   );
-  if (NodeFS.existsSync(NodePath.join(amuHome, "userdata"))) process.env.T3CODE_HOME = amuHome;
 }

@@ -336,7 +336,13 @@ function SplitPaneHeader(props: {
         props.atWindowTopLeft && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
       )}
     >
-      <span className="min-w-0 flex-1 truncate">{title}</span>
+      <span
+        className="min-w-0 flex-1 truncate"
+        // A saved thread title is the user's words; the pane labels above are UI copy.
+        translate={props.target?.kind === "server" && title !== "New thread" ? "no" : undefined}
+      >
+        {title}
+      </span>
       <button
         type="button"
         className={iconButton}

@@ -5,7 +5,7 @@ import {
   type AutoDecision,
 } from "@t3tools/shared/lunaAuto";
 import { createModelSelection } from "@t3tools/shared/model";
-import type { ModelSelection, ServerProvider } from "@t3tools/contracts";
+import type { ModelSelection, ScopedThreadRef, ServerProvider } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ChatComposerHandle } from "../components/chat/ChatComposer";
@@ -17,6 +17,8 @@ import { Button } from "../components/ui/button";
 import {
   autoRecoveryMessage,
   cancelPendingAutoRecord,
+  AutoRecordUnreadableError,
+  discardAutoRecord,
   lunaAutoRequest,
   readAutoRecord,
   runLunaAuto,
@@ -62,8 +64,10 @@ export type LunaAutoInputs = {
   /** Put the request back in the composer when the send cleared it. */
   readonly restorePrompt: (prompt: string) => void;
   readonly currentPrompt: () => string;
-  /** Keep Luna's pick in the composer, so the next message stays on it. */
-  readonly rememberPick: (selection: ModelSelection) => void;
+  /** The thread this view shows now. */
+  readonly currentThreadRef: () => ScopedThreadRef | null;
+  /** Keep Luna's pick in that thread's composer, so its next message stays on it. */
+  readonly rememberPick: (thread: ScopedThreadRef, selection: ModelSelection) => void;
 };
 
 type Prepared = { decision: AutoDecision; choice: AutoChoice; ticket: AutoTicket };
@@ -204,6 +208,7 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
         !hasNonPromptContent(current)
       );
     };
+    const threadRef = live.current.currentThreadRef();
     const id = randomUUID();
     const controller = new AbortController();
     pending.current = { id, controller };
@@ -236,7 +241,9 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
             dispatched.current = null;
             try {
               const accepted = (await resend()) === true;
-              if (accepted && dispatched.current) live.current.rememberPick(dispatched.current);
+              if (accepted && dispatched.current && threadRef) {
+                live.current.rememberPick(threadRef, dispatched.current);
+              }
               return accepted;
             } finally {
               prepared.current = null;
@@ -301,6 +308,12 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
     if (ticket.signal.aborted || !provider || !stillOffered || !ticket.markDispatch()) {
       return undefined;
     }
+    // From here the send is under way; the judgement can no longer be cancelled.
+    setStatus({
+      key: live.current.routeThreadKey,
+      busy: false,
+      text: "Lunaが選んだモデルで送信しています。",
+    });
     const selection = createModelSelection(
       provider.instanceId as never,
       decision.model,
@@ -355,6 +368,14 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
           size="sm"
           onClick={() => {
             void cancelPendingAutoRecord(routeThreadKey)
+              // A record that cannot be read is set aside, so the thread can send again.
+              .catch((error: unknown) => {
+                if (error instanceof AutoRecordUnreadableError) {
+                  discardAutoRecord(routeThreadKey);
+                  return;
+                }
+                throw error;
+              })
               .then(() => {
                 setManualRecoveryKey(routeThreadKey);
                 setMode({ key: routeThreadKey, enabled: false });

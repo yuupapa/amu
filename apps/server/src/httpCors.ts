@@ -12,10 +12,18 @@ export const browserApiCorsAllowedHeaders = [
 ] as const;
 
 /** Call only after validating the session and orchestration operate scope. */
+export function isLoopbackRemoteAddress(address: string): boolean {
+  const normalized = address.startsWith("::ffff:") ? address.slice("::ffff:".length) : address;
+  return normalized === "::1" || /^127(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
 export function isLocalLunaAutoRequest(
   url: URL,
   headers: Readonly<Record<string, string | undefined>>,
+  /** The socket's peer; the Host header alone can be set to anything. */
+  remoteAddress?: string,
 ): boolean {
+  if (remoteAddress !== undefined && !isLoopbackRemoteAddress(remoteAddress)) return false;
   if (
     !["http:", "https:"].includes(url.protocol) ||
     !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
