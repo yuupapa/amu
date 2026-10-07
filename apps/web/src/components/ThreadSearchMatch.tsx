@@ -60,7 +60,10 @@ export function ThreadSearchMatchExcerpt(props: {
       <span className={isUser ? "text-info-foreground" : "text-success-foreground"}>
         {isUser ? "You:" : "Agent:"}
       </span>{" "}
-      <HighlightedSearchText text={props.match.snippet} query={props.match.query} />
+      {/* Amu: the excerpt is conversation text, never UI copy. */}
+      <span translate="no">
+        <HighlightedSearchText text={props.match.snippet} query={props.match.query} />
+      </span>
     </span>
   );
 }

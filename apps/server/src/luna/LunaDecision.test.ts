@@ -250,6 +250,27 @@ describe.skipIf(installedCodex.status !== 0)(
 );
 
 describe("Luna broker bookkeeping", () => {
+  it("ignores cancels outside the window and keeps room for new requests", async () => {
+    const judge = vi.fn(async () => decision);
+    const broker = new LunaDecisionBroker(judge, () => NOW);
+    for (let index = 0; index < 5_000; index++) {
+      broker.cancel(lunaId(`future-${index}`, NOW + 24 * 3_600_000));
+    }
+    await expect(broker.decide(lunaId("now"), input)).resolves.toEqual(decision);
+  });
+
+  it("records a cancel after old ids age out, so the cancelled id never runs", async () => {
+    let now = NOW;
+    const judge = vi.fn(async () => decision);
+    const broker = new LunaDecisionBroker(judge, () => now);
+    for (let index = 0; index < 4_096; index++) broker.cancel(lunaId(`old-${index}`, now));
+    now += LUNA_REQUEST_TTL_MS + 1;
+    const cancelled = lunaId("cancelled", now);
+    broker.cancel(cancelled);
+    await expect(broker.decide(cancelled, input)).rejects.toThrow("開始済み");
+    expect(judge).not.toHaveBeenCalled();
+  });
+
   it("never judges an id twice, and fails closed when flooded until old ids age out", async () => {
     let now = NOW;
     const judge = vi.fn(async () => decision);

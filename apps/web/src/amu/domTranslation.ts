@@ -60,7 +60,8 @@ function buildTables(dictionary: Readonly<Record<string, string>>) {
       }
       // A short fixed part ("{0}d") would match ordinary words ("Add"), so
       // such templates take numbers only.
-      const value = anchor.length < 4 ? "(\\d+(?:[.,]\\d+)?)" : "(.+?)";
+      const timeLike = /^\{\d+\}\s?[a-z]{1,3}( ago)?$/.test(key);
+      const value = anchor.length < 4 || timeLike ? "(\\d+(?:[.,]\\d+)?)" : "(.+?)";
       parts.forEach((part, index) => {
         if (index % 2 === 0) {
           source += escapeRegExp(part);

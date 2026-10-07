@@ -12,6 +12,8 @@ import { Button } from "../components/ui/button";
 
 type ProviderEntry = {
   readonly instanceId: string;
+  readonly enabled?: boolean;
+  readonly isAvailable?: boolean;
   readonly models: ServerProvider["models"];
 };
 
@@ -37,6 +39,9 @@ export function switchNoticeText(inputs: SwitchNoticeInputs): string | null {
   if (!started || current === null || picked === null) return null;
   // Same provider: the conversation simply continues on the other model.
   if (picked.instanceId === current.instanceId) return null;
+  // A pick whose provider cannot take the send is not where it will go.
+  const target = inputs.providers.find((provider) => provider.instanceId === picked.instanceId);
+  if (!target || target.enabled === false || target.isAvailable === false) return null;
   return `次の送信で ${modelName(inputs.providers, current)} → ${modelName(
     inputs.providers,
     picked,

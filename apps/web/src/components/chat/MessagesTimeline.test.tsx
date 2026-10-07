@@ -2360,7 +2360,7 @@ describe("MessagesTimeline", () => {
     );
 
     // The T3 wordmark replaces the generic tool icon for T3 MCP calls.
-    expect(markup).toContain('viewBox="15.5309 37 94.3941 56.96"');
+    expect(markup).toContain('src="/apple-touch-icon.png"');
     expect(markup).toContain("Read a T3 thread");
     expect(markup).not.toContain("mcp__t3-code__t3_thread_read");
   });

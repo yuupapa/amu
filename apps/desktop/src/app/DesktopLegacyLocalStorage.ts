@@ -30,7 +30,9 @@ export class DesktopLegacyLocalStorage extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopLegacyLocalStorage") {}
 
-const MARKER_FILE_NAME = "v1-local-storage-imported";
+// Named for the source it reads: a marker left by a build that read
+// somewhere else does not stop the import from Amu's own profile.
+const MARKER_FILE_NAME = "amu-profile-local-storage-imported";
 // Amu before 0.0.48 used the "amu" profile. Upstream T3 Code's own profiles
 // ("T3 Code (Alpha)", "t3code") belong to another app and are never read.
 const V1_PROFILE_NAMES = ["amu"];

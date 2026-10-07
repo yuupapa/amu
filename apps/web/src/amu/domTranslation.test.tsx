@@ -35,6 +35,8 @@ describe("translateUiCopy", () => {
     expect(translateUiCopy("Rapid")).toBeNull();
     expect(translateUiCopy("Bath")).toBeNull();
     expect(translateUiCopy("Hm")).toBeNull();
+    expect(translateUiCopy("team ago")).toBeNull();
+    expect(translateUiCopy("5m ago")).toBe("5分前");
   });
 
   it("leaves unknown text alone", () => {

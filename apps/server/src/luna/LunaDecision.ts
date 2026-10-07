@@ -240,18 +240,21 @@ export class LunaDecisionBroker {
     this.forgetOld();
     this.seen.set(id, at);
   }
+  private inWindow(at: number | null): at is number {
+    const now = this.now();
+    return at !== null && at >= now - LUNA_REQUEST_TTL_MS && at <= now + 60_000;
+  }
   cancel(id: string) {
     const at = lunaRequestTime(id);
-    if (at === null) return;
+    if (!this.inWindow(at)) return;
     // A cancel that arrives before its judgement still stops it.
     this.running.get(id)?.abort();
+    this.forgetOld();
     if (this.seen.size < SEEN_ID_LIMIT) this.remember(id, at);
   }
   async decide(id: string, input: Omit<JudgeInput, "signal">): Promise<AutoDecision> {
     const at = lunaRequestTime(id);
-    const now = this.now();
-    if (at === null || at < now - LUNA_REQUEST_TTL_MS || at > now + 60_000)
-      throw new Error("このモデル選択は期限切れです。送信し直してください。");
+    if (!this.inWindow(at)) throw new Error("このモデル選択は期限切れです。送信し直してください。");
     this.forgetOld();
     if (this.running.has(id) || this.seen.has(id))
       throw new Error("このモデル選択は開始済みです。結果不明の依頼を自動再送しません。");
