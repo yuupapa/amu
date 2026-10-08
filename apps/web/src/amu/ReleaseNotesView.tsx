@@ -111,6 +111,7 @@ type CliNotes = {
   sections: Array<{ version: string; items: string[] }>;
   language: "ja" | "en";
   sourceUrl: string;
+  complete?: boolean;
 };
 
 type CliNotesRequest = { driver: string; currentVersion: string; latestVersion: string };
@@ -126,12 +127,12 @@ function cliNotesRequest(input: CliNotesRequest): Promise<CliNotes | null> {
       notLocal: "このMacのローカルのAmuで利用してください。",
       unknown: "更新内容を取得できませんでした。",
     }).then((answer) => (answer.result ?? null) as CliNotes | null);
-    // Only a Japanese translation is kept for this session. A failure, or the
-    // English original shown while translating did not work, is asked for
-    // again the next time the panel opens.
+    // Only a whole Japanese translation is kept for this session. A failure,
+    // notes with a version that failed to load, or the English original shown
+    // while translating did not work, are asked for again on the next open.
     request.then(
       (notes) => {
-        if (notes?.language !== "ja") cliNotesRequests.delete(key);
+        if (notes?.language !== "ja" || notes.complete === false) cliNotesRequests.delete(key);
       },
       () => cliNotesRequests.delete(key),
     );

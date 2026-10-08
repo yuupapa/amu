@@ -231,7 +231,9 @@ describe("translating the notes", () => {
           fetchText,
           haiku,
         });
-      expect((await call())?.sections.map((section) => section.version)).toEqual(["0.160.0"]);
+      const partial = await call();
+      expect(partial?.sections.map((section) => section.version)).toEqual(["0.160.0"]);
+      expect(partial?.complete).toBe(false);
       failNewest = false;
       expect((await call())?.sections.map((section) => section.version)).toEqual([
         "0.161.0",

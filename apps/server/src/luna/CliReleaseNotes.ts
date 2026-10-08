@@ -19,6 +19,8 @@ export type CliReleaseNotes = {
   language: "ja" | "en";
   /** Where the original is, to open in the browser. */
   sourceUrl: string;
+  /** False when a version failed to load: shown, but not kept. */
+  complete?: boolean;
 };
 
 type Source =
@@ -326,7 +328,7 @@ export async function cliReleaseNotes(input: {
   );
   if (!fetched) return null;
   const { complete, ...found } = fetched;
-  const original: CliReleaseNotes = { ...found, language: "en" };
+  const original: CliReleaseNotes = { ...found, language: "en", complete };
   if (!input.haikuRuntime || !fetched.sections.length) return original;
   try {
     const translated = await translateSections(
@@ -336,7 +338,7 @@ export async function cliReleaseNotes(input: {
       input.haiku,
     );
     if (!translated) return original;
-    const notes: CliReleaseNotes = { ...found, sections: translated, language: "ja" };
+    const notes: CliReleaseNotes = { ...found, sections: translated, language: "ja", complete };
     if (complete) writeCachedNotes(input.stateDir, key, notes);
     return notes;
   } catch {
