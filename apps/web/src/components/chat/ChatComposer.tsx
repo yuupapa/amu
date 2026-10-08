@@ -1071,13 +1071,15 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
   );
 }
 import { Button } from "../ui/button";
-import { Select, SelectItem, SelectPopup, SelectValue } from "../ui/select";
+import { Select, SelectGroup, SelectGroupLabel, SelectItem, SelectPopup } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
   FileIcon,
-  BotIcon,
+  CheckIcon,
   CircleAlertIcon,
+  GoalIcon,
+  type LucideIcon,
   PaperclipIcon,
   PencilRulerIcon,
   PlayIcon,
@@ -1233,6 +1235,12 @@ const supervisedRuntimeModeOption = {
   mode: "approval-required" as const,
   ...runtimeModeConfig["approval-required"],
 };
+// Amu: plan mode and goals live in the access menu, below the access levels,
+// like Claude Code's mode picker. They are actions, not access levels, so
+// their values never become the selected runtime mode.
+const PLAN_MODE_MENU_VALUE = "amu:plan-mode";
+const GOAL_MENU_VALUE = "amu:goal";
+
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
@@ -1242,6 +1250,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   hidden?: boolean;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  /** Starts a `/goal` in the composer; omitted when the provider has no goals. */
+  onStartGoal?: (() => void) | undefined;
 }) {
   const size = props.size ?? "sm";
   const composerFloatingLayerProps = useComposerMenuProps();
@@ -1249,49 +1259,9 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   const runtimeModeOption =
     props.runtimeModeOptions.find((option) => option.mode === props.runtimeMode) ??
     supervisedRuntimeModeOption;
-  const RuntimeModeIcon = runtimeModeOption.icon;
-  const interactionModeTooltip =
-    props.interactionMode === "plan"
-      ? "Plan mode — click to return to normal build mode"
-      : "Default mode — click to enter plan mode";
-
-  const interactionModeToggle = props.showInteractionModeToggle ? (
-    <>
-      <ComposerControlSeparator size={size} />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <ComposerControl
-              size={size}
-              className="shrink-0 whitespace-nowrap"
-              aria-pressed={props.interactionMode === "plan"}
-              type="button"
-              onClick={props.onToggleInteractionMode}
-              aria-label={interactionModeTooltip}
-            />
-          }
-        >
-          {props.interactionMode === "plan" ? (
-            <ComposerControlIcon
-              icon={PencilRulerIcon}
-              size={size}
-              className="text-current opacity-100"
-            />
-          ) : (
-            <ComposerControlIcon
-              icon={BotIcon}
-              size={size}
-              opticalSize={size === "xs" ? "default" : "large"}
-            />
-          )}
-          <span data-composer-control-label className="sr-only sm:not-sr-only">
-            {props.interactionMode === "plan" ? "Plan" : "Build"}
-          </span>
-        </TooltipTrigger>
-        <TooltipPopup side="top">{interactionModeTooltip}</TooltipPopup>
-      </Tooltip>
-    </>
-  ) : null;
+  const planning = props.showInteractionModeToggle && props.interactionMode === "plan";
+  const TriggerIcon = planning ? PencilRulerIcon : runtimeModeOption.icon;
+  const showWayOfWorking = props.showInteractionModeToggle || props.onStartGoal !== undefined;
 
   return (
     <>
@@ -1301,8 +1271,12 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
         <Select
           open={open}
           onOpenChange={setOpen}
-          value={props.runtimeMode}
-          onValueChange={(value) => props.onRuntimeModeChange(value!)}
+          value={props.runtimeMode as string}
+          onValueChange={(value) => {
+            if (value === PLAN_MODE_MENU_VALUE) props.onToggleInteractionMode();
+            else if (value === GOAL_MENU_VALUE) props.onStartGoal?.();
+            else if (value !== null) props.onRuntimeModeChange(value as RuntimeMode);
+          }}
         >
           <TooltipTrigger
             render={
@@ -1310,45 +1284,87 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
                 data-composer-shortcut="composer.mode"
                 size={size}
                 aria-label="Runtime mode"
+                aria-pressed={planning}
               />
             }
           >
-            <ComposerControlIcon icon={RuntimeModeIcon} size={size} />
-            <SelectValue data-composer-control-label>{runtimeModeOption.label}</SelectValue>
+            <ComposerControlIcon
+              icon={TriggerIcon}
+              size={size}
+              className={planning ? "text-current opacity-100" : undefined}
+            />
+            {/* While planning nothing is written, so the trigger names the plan, not the access level. */}
+            <span data-composer-control-label>{planning ? "Plan" : runtimeModeOption.label}</span>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false} {...composerFloatingLayerProps}>
-            {props.runtimeModeOptions.map((option) => {
-              const OptionIcon = option.icon;
-              return (
-                <SelectItem
+            <SelectGroup>
+              <SelectGroupLabel>Access</SelectGroupLabel>
+              {props.runtimeModeOptions.map((option) => (
+                <ModeMenuItem
                   key={option.mode}
                   value={option.mode}
-                  hideIndicator
-                  className="min-w-64"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="grid min-w-0 flex-1 gap-0.5">
-                      <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-                        <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        {option.label}
-                      </span>
-                      <span className="text-muted-foreground text-xs leading-4">
-                        {option.description}
-                      </span>
-                    </div>
-                  </div>
-                </SelectItem>
-              );
-            })}
+                  icon={option.icon}
+                  label={option.label}
+                  description={option.description}
+                />
+              ))}
+            </SelectGroup>
+            {showWayOfWorking ? (
+              <SelectGroup>
+                <div role="separator" className="mx-2 my-1 h-px bg-border" />
+                <SelectGroupLabel>Way of working</SelectGroupLabel>
+                {props.showInteractionModeToggle ? (
+                  <ModeMenuItem
+                    value={PLAN_MODE_MENU_VALUE}
+                    icon={PencilRulerIcon}
+                    label="Plan mode"
+                    description="Plan without changing files. Shift+Tab switches it too."
+                    checked={props.interactionMode === "plan"}
+                  />
+                ) : null}
+                {props.onStartGoal ? (
+                  <ModeMenuItem
+                    value={GOAL_MENU_VALUE}
+                    icon={GoalIcon}
+                    label="Set a goal…"
+                    description="Keeps working until the condition you write is met (/goal)."
+                  />
+                ) : null}
+              </SelectGroup>
+            ) : null}
           </SelectPopup>
         </Select>
-        <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
+        <TooltipPopup side="top">
+          {planning ? "Plan mode — plans without changing files" : runtimeModeOption.description}
+        </TooltipPopup>
       </Tooltip>
-
-      {interactionModeToggle}
     </>
   );
 });
+
+function ModeMenuItem(props: {
+  value: string;
+  icon: LucideIcon;
+  label: string;
+  description: string;
+  checked?: boolean;
+}) {
+  const Icon = props.icon;
+  return (
+    <SelectItem value={props.value} hideIndicator className="min-w-64">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="grid min-w-0 flex-1 gap-0.5">
+          <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+            <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+            {props.label}
+          </span>
+          <span className="text-muted-foreground text-xs leading-4">{props.description}</span>
+        </div>
+        {props.checked ? <CheckIcon className="size-4 shrink-0 text-foreground" /> : null}
+      </div>
+    </SelectItem>
+  );
+}
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
@@ -4347,6 +4363,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     promptHistoryPositionRef.current = null;
   }, [promptHistoryTargetKey]);
 
+  // Amu: "Set a goal…" in the access menu. Provider commands run only at the
+  // start of a message, so /goal goes in front of whatever is already typed.
+  const providerSupportsGoal = selectedProviderSlashCommands.some(
+    (command) => command.name === "goal",
+  );
+  const startGoal = useCallback(() => {
+    if (/^\/goal(\s|$)/u.test(promptRef.current)) {
+      composerEditorRef.current?.focusAtEnd();
+      return;
+    }
+    applyPromptReplacement(0, 0, "/goal ");
+  }, [applyPromptReplacement, promptRef]);
+
   const replacePromptFromHistory = useCallback(
     (nextPrompt: string) => {
       promptRef.current = nextPrompt;
@@ -5416,6 +5445,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               hidden={composerControlsHidden || restingHiddenBlockCount > 0}
               onToggleInteractionMode={toggleInteractionMode}
               onRuntimeModeChange={handleRuntimeModeChange}
+              onStartGoal={providerSupportsGoal ? startGoal : undefined}
             />
           ),
         },
@@ -5596,6 +5626,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             }
             onToggleInteractionMode={toggleInteractionMode}
             onRuntimeModeChange={handleRuntimeModeChange}
+            onStartGoal={
+              providerSupportsGoal && hiddenRestingBlockIds.includes("mode") ? startGoal : undefined
+            }
           />
         </div>
       </>

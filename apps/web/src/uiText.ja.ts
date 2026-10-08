@@ -4106,6 +4106,14 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Open below": "下に分割して開く",
   "New thread to the right": "右に分割して新規スレッド",
   "New thread below": "下に分割して新規スレッド",
+  "Way of working": "進め方",
+  "Plan mode": "計画モード",
+  "Plan without changing files. Shift+Tab switches it too.":
+    "ファイルを変えずに計画だけ作ります。Shift+Tab でも切り替えられます。",
+  "Plan mode — plans without changing files": "計画モード：ファイルを変えずに計画だけ作ります",
+  "Set a goal…": "ゴールを決める…",
+  "Keeps working until the condition you write is met (/goal).":
+    "書いた条件を満たすまで、作業を続けます（/goal）。",
   "Drop on the chat area to open it": "会話エリアに落とすと開きます",
   "Split right with {0}, down with {1}": "{0} で右に、{1} で下に分割できます",
   "Handing the conversation over to {0}": "{0} に引き継いでいます",

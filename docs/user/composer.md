@@ -206,6 +206,13 @@ row above the composer shows the goal and its progress.
 - Stopping Claude ends the current turn, but the goal stays set. Claude checks it
   again at the end of your next message.
 
+### 計画モードとゴール（Amu）
+
+入力欄のアクセスのボタン（「フルアクセス」など）を押すと、アクセス権限の下の「進め方」に「計画モード」と「ゴールを決める…」があります。
+
+- **計画モード**：選ぶとオンになり、もう一度選ぶとオフになります。オンのあいだ、AI はファイルを変えずに計画だけを作ります。ボタンには「計画 ·」が付きます。Shift+Tab でも切り替えられます。**設定 → 一般** の「計画モード（旧設定）」をオフにすると、この項目は消えます。
+- **ゴールを決める…**：入力欄の先頭に `/goal ` が入るので、続けて完了の条件を書いて送ります。Codex と Claude のように、ゴールが使える AI を選んでいるときだけ出ます。
+
 ## Context in your message
 
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,

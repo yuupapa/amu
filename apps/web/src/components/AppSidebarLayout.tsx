@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useSidebarTreeByDefault } from "../amu/sidebarTreeDefault";
+import { useAmuSettingDefaults } from "../amu/settingDefaults";
 import * as Schema from "effect/Schema";
 import {
   useEffect,
@@ -219,8 +219,8 @@ function ProjectProjectionRetention() {
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
-  // Amu: per-project thread trees by default (amu/sidebarTreeDefault.ts).
-  useSidebarTreeByDefault();
+  // Amu: per-project thread trees and plan mode on by default (amu/settingDefaults.ts).
+  useAmuSettingDefaults();
   const legacySidebarEnabled = useLegacySidebarEnabled();
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();

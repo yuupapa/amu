@@ -5,6 +5,7 @@ import {
   Menu,
   MenuPopup,
   MenuRadioGroup,
+  MenuItem,
   MenuRadioItem,
   MenuSeparator as MenuDivider,
   MenuTrigger,
@@ -31,6 +32,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   hidden?: boolean;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  /** Amu: starts a `/goal` in the composer; omitted when the provider has no goals. */
+  onStartGoal?: (() => void) | undefined;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const size = props.size ?? "sm";
@@ -72,6 +75,12 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
               <MenuRadioItem value="default">Chat</MenuRadioItem>
               <MenuRadioItem value="plan">Plan</MenuRadioItem>
             </MenuRadioGroup>
+            <MenuDivider />
+          </>
+        ) : null}
+        {props.onStartGoal ? (
+          <>
+            <MenuItem onClick={props.onStartGoal}>Set a goal…</MenuItem>
             <MenuDivider />
           </>
         ) : null}
