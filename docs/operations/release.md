@@ -467,7 +467,7 @@ Amu は上の Release ワークフローを使いません。Mac で `node scrip
 2. 続けて `.github/workflows/amu-windows-release.yml` を起動します。このワークフローは同じコミットから Windows x64 のインストーラーをビルドし、`Amu-<版>-x64.exe`、その `.blockmap`、`latest.yml` を下書きに追加してからリリースを公開します。
 3. 公開されるまで、Mac と Windows のどちらの Amu にも新しい版は届きません。Windows の更新は electron-updater が `latest.yml` を読むので、インストーラーより先にリリースが公開されると、Windows の Amu が更新の確認に失敗します。
 
-ワークフローは yuupapa/amu の既定ブランチ `amu` に置いてある版が動きます。ビルドするコミットは入力の `commit` で決まります。`-f dry_run=true` を付けると、リリースには触りません。インストーラーを Actions の成果物として残し、ランナーに実際に入れて確かめます。起動すること、データが `%APPDATA%\Amu\runtime` にできて `~/.t3` には書かないこと、5233 番ポートで待ち受けること、アンインストールしてもデータが残ることを見ます。
+ワークフローは yuupapa/amu の既定ブランチ `amu` に置いてある版が動きます。ビルドするコミットは入力の `commit` で決まります。`-f dry_run=true` を付けると、リリースには触りません。インストーラーを Actions の成果物として残し、本家 T3 Code の最新版と一緒にランナーへ入れて確かめます。Amu が `Programs\amu` に入ること、5233 番ポートで待ち受けること、データが `%APPDATA%\Amu\runtime` にできて `~/.t3` には書かないこと、本家と同時に起動できること、アンインストールしても Amu のデータと本家が残ることを見ます。
 
 Windows のビルドが失敗したら、`gh run view --repo yuupapa/amu --log-failed` で原因を見て、`gh workflow run amu-windows-release.yml --repo yuupapa/amu -f tag=v<版> -f commit=<sha>` でやり直します。Mac 版だけ先に出す場合は `gh release edit v<版> --repo yuupapa/amu --draft=false --latest` を実行します。Windows の成果物は、あとで同じワークフローを動かせば追加されます。
 

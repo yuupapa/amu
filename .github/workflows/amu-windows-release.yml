@@ -201,18 +201,39 @@ jobs:
             release/latest.yml
           if-no-files-found: error
 
-      # Dry runs also install the build on this runner and check what a user
-      # would: Amu starts, keeps its data in %APPDATA%\Amu\runtime (not ~/.t3),
-      # serves on 5233, installs and registers as Amu, and leaves its data after
-      # uninstall.
+      # Dry runs also install the build on this runner beside upstream T3 Code
+      # and check what a user would: Amu installs and registers as Amu in its
+      # own folder, starts on 5233 with its data in %APPDATA%\Amu\runtime (not
+      # ~/.t3), runs at the same time as T3 Code, and its uninstall leaves both
+      # its data and T3 Code in place.
       - name: Smoke test the installer
         if: inputs.dry_run
         shell: pwsh
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
+          GH_TOKEN: ${{ github.token }}
           T3CODE_DISABLE_AUTO_UPDATE: "true"
         run: |
           $ErrorActionPreference = "Stop"
+          function Wait-Listener([scriptblock]$match, [string]$what) {
+            $deadline = (Get-Date).AddMinutes(4)
+            do {
+              Start-Sleep -Seconds 3
+              $found = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object $match | Select-Object -First 1
+            } until ($found -or (Get-Date) -gt $deadline)
+            if (-not $found) { throw "$what was not listening within 4 minutes." }
+            Write-Host "$what listens on $($found.LocalPort): $((Get-Process -Id $found.OwningProcess).Path)"
+            return $found
+          }
+
+          gh release download --repo pingdotgg/t3code --pattern "T3-Code-*-x64.exe" --dir upstream
+          $upstreamInstaller = Get-ChildItem upstream -Filter "T3-Code-*-x64.exe" | Select-Object -First 1
+          Start-Process $upstreamInstaller.FullName -ArgumentList "/S" -Wait
+          $upstreamApp = Get-ChildItem "$env:LOCALAPPDATA\Programs\t3code" -Filter "*.exe" |
+            Where-Object { $_.Name -notlike "Uninstall*" } | Select-Object -First 1
+          if (-not $upstreamApp) { throw "Upstream T3 Code did not install to Programs\t3code." }
+          Write-Host "Upstream T3 Code: $($upstreamApp.FullName)"
+
           $installer = Get-ChildItem release -Filter "Amu-*-x64.exe" | Select-Object -First 1
           Start-Process $installer.FullName -ArgumentList "/S" -Wait
           $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Depth 2 -Filter "Amu.exe" | Select-Object -First 1
@@ -220,26 +241,29 @@ jobs:
           Write-Host "Installed: $($app.FullName)"
           # Upstream T3 Code installs to Programs\t3code; sharing it would overwrite each other.
           if ($app.Directory.Name -ne "amu") { throw "Installed under $($app.DirectoryName), not Programs\amu." }
-          $entry = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" |
-            Where-Object { $_.DisplayName -like "Amu*" } | Select-Object -First 1
+          if (-not (Test-Path $upstreamApp.FullName)) { throw "Installing Amu removed upstream T3 Code." }
+          $entries = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+          $entry = $entries | Where-Object { $_.DisplayName -like "Amu*" } | Select-Object -First 1
           if (-not $entry) { throw "No uninstall entry named Amu." }
-          Write-Host "Uninstall entry: $($entry.PSChildName) $($entry.DisplayName) $($entry.DisplayVersion)"
+          $entries | Where-Object { $_.DisplayName } | ForEach-Object { Write-Host "Uninstall entry: $($_.PSChildName) $($_.DisplayName) $($_.DisplayVersion)" }
 
           $amu = Start-Process $app.FullName -PassThru
-          $deadline = (Get-Date).AddMinutes(4)
-          do {
-            Start-Sleep -Seconds 3
-            $listening = Get-NetTCPConnection -LocalPort 5233 -State Listen -ErrorAction SilentlyContinue
-          } until ($listening -or (Get-Date) -gt $deadline)
-          if (-not $listening) { throw "Nothing listened on port 5233 within 4 minutes." }
-          Write-Host "Port 5233 is served by: $((Get-Process -Id $listening[0].OwningProcess).Path)"
+          $null = Wait-Listener { $_.LocalPort -eq 5233 } "Amu"
           $runtime = Join-Path $env:APPDATA "Amu\runtime"
           if (-not (Test-Path $runtime)) { throw "$runtime was not created." }
-          Get-ChildItem $runtime -Recurse -Depth 1 | Select-Object -ExpandProperty FullName
+          Get-ChildItem $runtime -Depth 0 | Select-Object -ExpandProperty FullName
           if (Test-Path (Join-Path $env:USERPROFILE ".t3")) { throw "Amu wrote to ~/.t3, upstream T3 Code's folder." }
 
-          # Stop only the process tree this step started.
+          $upstream = Start-Process $upstreamApp.FullName -PassThru
+          $upstreamDir = $upstreamApp.DirectoryName
+          $null = Wait-Listener { $_.LocalPort -ne 5233 -and (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).Path -like "$upstreamDir\*" } "Upstream T3 Code"
+          if (-not (Get-NetTCPConnection -LocalPort 5233 -State Listen -ErrorAction SilentlyContinue)) { throw "Amu stopped listening once T3 Code started." }
+          if ($amu.HasExited) { throw "Amu exited once T3 Code started." }
+          Write-Host "Amu and upstream T3 Code run side by side."
+
+          # Stop only the process trees this step started.
           taskkill /PID $amu.Id /T /F | Out-Null
+          taskkill /PID $upstream.Id /T /F | Out-Null
           Start-Sleep -Seconds 5
           $uninstaller = Join-Path $app.DirectoryName "Uninstall Amu.exe"
           Start-Process $uninstaller -ArgumentList "/S" -Wait
@@ -247,7 +271,8 @@ jobs:
           while ((Test-Path $app.FullName) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
           if (Test-Path $app.FullName) { throw "Uninstall left $($app.FullName) behind." }
           if (-not (Test-Path $runtime)) { throw "Uninstall removed $runtime." }
-          Write-Host "Uninstalled; $runtime is still there."
+          if (-not (Test-Path $upstreamApp.FullName)) { throw "Uninstalling Amu removed upstream T3 Code." }
+          Write-Host "Uninstalled Amu; $runtime and upstream T3 Code are still there."
 
       - name: Upload to the draft release and publish it
         if: ${{ !inputs.dry_run }}
