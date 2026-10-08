@@ -48,7 +48,9 @@ export const MCP_MARKET_CATALOG: ReadonlyArray<McpMarketEntry> = [
       scopes: ["openid", "offline_access"],
       allowedOrigins: ["https://mcp.vercel.com", "https://vercel.com", "https://api.vercel.com"],
     },
-    verified: false,
+    // Verified 2026-10-08: browser login, initialize, tools/list, and a read-only
+    // tools/call from a Claude and a Codex thread through the proxy.
+    verified: true,
   },
   {
     id: "hyperframes",
@@ -72,7 +74,9 @@ export const MCP_MARKET_CATALOG: ReadonlyArray<McpMarketEntry> = [
       scopes: [],
       allowedOrigins: ["https://mcp.supabase.com", "https://api.supabase.com"],
     },
-    verified: false,
+    // Verified 2026-10-08: browser login, initialize, tools/list, and a read-only
+    // tools/call from a Claude and a Codex thread through the proxy.
+    verified: true,
   },
   {
     id: "linear",
@@ -84,7 +88,9 @@ export const MCP_MARKET_CATALOG: ReadonlyArray<McpMarketEntry> = [
       scopes: ["read", "write"],
       allowedOrigins: ["https://mcp.linear.app"],
     },
-    verified: false,
+    // Verified 2026-10-08: browser login, initialize, tools/list, and a read-only
+    // tools/call from a Claude and a Codex thread through the proxy.
+    verified: true,
   },
   {
     id: "topview",
@@ -100,7 +106,9 @@ export const MCP_MARKET_CATALOG: ReadonlyArray<McpMarketEntry> = [
         "https://www.topview.ai",
       ],
     },
-    verified: false,
+    // Verified 2026-10-08: browser login, initialize, tools/list, and a read-only
+    // tools/call from a Claude and a Codex thread through the proxy.
+    verified: true,
   },
 ];
 
