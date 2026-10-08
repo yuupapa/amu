@@ -117,14 +117,14 @@ describe("picking the work folder too", () => {
   });
 
   it("passes the folders to every judge and checks the folder in its answer", async () => {
-    const judge = vi.fn(async (target: JudgeTarget) =>
+    const judge = vi.fn(async (target: JudgeTarget, _call: { folders?: unknown }) =>
       target.kind === "claude" ? decision : { ...decision, folder: "f1" },
     );
     const broker = new LunaDecisionBroker(judge, () => 1_000);
     const verdict = await broker.decide(broker.issue(), { ...input([haiku, luna]), folders });
     // Haiku left the folder out, so Luna judged.
     expect(verdict).toEqual({ decision: { ...decision, folder: "f1" }, judge: "Luna" });
-    expect(judge.mock.calls[0]?.[1].folders).toEqual(folders);
+    expect(judge.mock.calls[0]?.[1]?.folders).toEqual(folders);
   });
 });
 
@@ -261,14 +261,15 @@ describe("Composer judge", () => {
     ).toEqual(decision);
   });
 
-  it("runs the real transport against an offline CLI and stops at a tool call", async () => {
+  it("runs the real transport in its own settings and empty workspace, and stops at a tool call", async () => {
     const directory = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "amu-composer-fixture-"),
     );
     const binary = NodePath.join(directory, "cursor-agent"),
       receipt = NodePath.join(directory, "receipt.json");
+    // The judge passes on no variables of its own, so the receipt path is in the script.
     const script = (events: unknown[]) =>
-      `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(process.env.FIXTURE_RECEIPT,JSON.stringify({args:process.argv.slice(2),apiKey:!!process.env.CURSOR_API_KEY,cwd:process.cwd()}));for(const e of ${JSON.stringify(events)})console.log(JSON.stringify(e));\n`;
+      `#!/usr/bin/env node\nconst fs=require('node:fs');const config=process.env.CURSOR_CONFIG_DIR;fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({args:process.argv.slice(2),env:Object.keys(process.env).sort(),cwd:process.cwd(),config:JSON.parse(fs.readFileSync(config+'/cli-config.json','utf8')),workspaceFiles:fs.readdirSync(process.cwd())}));for(const e of ${JSON.stringify(events)})console.log(JSON.stringify(e));\n`;
     const call = () =>
       runCursorJudge({
         prompt: "架空の依頼",
@@ -279,8 +280,10 @@ describe("Composer judge", () => {
           home: "",
           environment: {
             PATH: process.env.PATH,
-            FIXTURE_RECEIPT: receipt,
+            HOME: process.env.HOME,
             CURSOR_API_KEY: "fixture-must-not-forward",
+            NODE_OPTIONS: "--require=/fixture-must-not-forward.js",
+            SECRET_TOKEN: "fixture-must-not-forward",
           },
         },
       });
@@ -296,11 +299,20 @@ describe("Composer judge", () => {
       );
       expect(await call()).toEqual(decision);
       const seen = JSON.parse(await NodeFSP.readFile(receipt, "utf8"));
-      expect(seen.apiKey).toBe(false);
-      // The judge ran in its own empty folder, removed again after the run.
+      expect(seen.env).toEqual(
+        expect.arrayContaining(["CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR", "HOME", "PATH", "TMPDIR"]),
+      );
+      for (const key of ["CURSOR_API_KEY", "NODE_OPTIONS", "SECRET_TOKEN"])
+        expect(seen.env).not.toContain(key);
+      expect(seen.config.permissions.deny).toEqual(
+        expect.arrayContaining(["Shell(*)", "Read(**)", "Write(**)", "Mcp(*:*)", "WebFetch(*)"]),
+      );
+      expect(seen.config.permissions.allow).toEqual([]);
+      // The judge ran in an empty workspace of its own, removed again after the run.
       const workspace = seen.args[seen.args.indexOf("--workspace") + 1];
-      expect(NodePath.basename(workspace)).toMatch(/^amu-composer-judge-/);
-      expect(NodePath.basename(seen.cwd)).toBe(NodePath.basename(workspace));
+      expect(NodePath.basename(workspace)).toBe("workspace");
+      expect(NodePath.basename(NodePath.dirname(workspace))).toMatch(/^amu-composer-judge-/);
+      expect(seen.workspaceFiles).toEqual([]);
 
       await NodeFSP.writeFile(
         binary,
@@ -312,6 +324,37 @@ describe("Composer judge", () => {
         { mode: 0o755 },
       );
       await expect(call()).rejects.toThrow("判断以外");
+    } finally {
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("gives up on a judge that ignores the stop, so the next one can try", async () => {
+    const directory = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "amu-stubborn-fixture-"),
+    );
+    const binary = NodePath.join(directory, "cursor-agent");
+    try {
+      // Ignores SIGTERM and keeps stdout open after a tool call.
+      await NodeFSP.writeFile(
+        binary,
+        `#!/usr/bin/env node\nprocess.on('SIGTERM',()=>{});console.log(JSON.stringify({type:'tool_call',subtype:'started'}));setInterval(()=>{},1000);\n`,
+        { mode: 0o755 },
+      );
+      const started = performance.now();
+      await expect(
+        runCursorJudge({
+          prompt: "架空の依頼",
+          choices,
+          signal: new AbortController().signal,
+          runtime: {
+            binary,
+            home: "",
+            environment: { PATH: process.env.PATH, HOME: process.env.HOME },
+          },
+        }),
+      ).rejects.toThrow("判断以外");
+      expect(performance.now() - started).toBeLessThan(10_000);
     } finally {
       await NodeFSP.rm(directory, { recursive: true, force: true });
     }

@@ -9,6 +9,7 @@ import {
   codexFolders,
   collectWorkFolders,
   folderChoicesForJudge,
+  realFolder,
   type AmuProjectFolder,
 } from "./WorkFolders.ts";
 
@@ -80,7 +81,7 @@ export function judgeFoldersFromRequest(value: unknown, stateDir: string) {
     excluded: [NodePath.dirname(stateDir)],
   });
   if (folders.length === 0) return null;
-  const current = request.current ? NodePath.resolve(request.current) : null;
+  const current = request.current ? realFolder(request.current) : null;
   return {
     judge: {
       ids: folders.map((folder) => folder.id),

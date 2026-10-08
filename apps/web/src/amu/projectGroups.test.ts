@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { buildAmuProjectGroups, groupDisplayName, groupFolderFor } from "./projectGroups";
 
@@ -60,5 +60,37 @@ describe("project groups", () => {
     expect(groups).toEqual([
       { scopeKey: "amu-group:g1", name: "仕事", kind: "manual", projectKeys: ["showa", "amu"] },
     ]);
+  });
+});
+
+describe("hand-made groups across windows", () => {
+  it("keeps a group another window saved in the meantime", async () => {
+    const { saveManualGroups, updateManualGroups, useManualProjectGroups } =
+      await import("./projectGroups");
+    void useManualProjectGroups;
+    const items = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => items.get(key) ?? null,
+        setItem: (key: string, value: string) => void items.set(key, value),
+        removeItem: (key: string) => void items.delete(key),
+      },
+    });
+    saveManualGroups([{ id: "a", name: "A", projectKeys: ["p1"] }]);
+    // Another window adds a group straight to storage.
+    window.localStorage.setItem(
+      "amu:project-groups:v1",
+      JSON.stringify([
+        { id: "a", name: "A", projectKeys: ["p1"] },
+        { id: "b", name: "B", projectKeys: ["p2"] },
+      ]),
+    );
+    updateManualGroups((current) => [...current, { id: "c", name: "C", projectKeys: ["p3"] }]);
+    expect(
+      JSON.parse(window.localStorage.getItem("amu:project-groups:v1")!).map(
+        (group: { id: string }) => group.id,
+      ),
+    ).toEqual(["a", "b", "c"]);
+    vi.unstubAllGlobals();
   });
 });

@@ -8697,11 +8697,18 @@ export default function ChatView(props: ChatViewProps) {
     isScratchProject(project, scratchWorkspaceRootFor(project.environmentId));
   const moveDraftToAutoFolder = async (
     answer: { kind: "path"; path: string } | { kind: "new" },
+    signal: AbortSignal,
   ): Promise<string | null> => {
     const project = activeProject;
     if (!draftId || !project) return null;
     const environmentId = project.environmentId;
+    const routeKeyAtStart = currentRouteThreadKeyRef.current;
+    // A cancel, or leaving this draft, while a project is being found or made
+    // leaves the draft where it is.
+    const stillWanted = () =>
+      !signal.aborted && currentRouteThreadKeyRef.current === routeKeyAtStart;
     let target: NonNullable<typeof activeProject> | null;
+    if (!stillWanted()) return null;
     if (answer.kind === "new") {
       target = await openScratchProject(environmentId);
     } else {
@@ -8711,6 +8718,7 @@ export default function ChatView(props: ChatViewProps) {
           answer.path,
         ) ?? null;
       if (!target) {
+        if (!stillWanted()) return null;
         const projectId = newProjectId();
         const created = await createProjectForAutoFolder({
           environmentId,
@@ -8728,7 +8736,11 @@ export default function ChatView(props: ChatViewProps) {
           readProject(scopeProjectRef(environmentId, projectId));
       }
     }
-    if (!target || target.id === project.id) return null;
+    if (!target || target.id === project.id || !stillWanted()) return null;
+    // Keep the access mode the judgement started with: an implicit draft would
+    // otherwise take the new project's default.
+    if (composerRuntimeMode === undefined || composerRuntimeMode === null)
+      setComposerDraftRuntimeMode(composerDraftTarget, runtimeMode);
     setLogicalProjectDraftThreadId(
       deriveLogicalProjectKeyFromSettings(target, projectGroupingSettings),
       scopeProjectRef(target.environmentId, target.id),
@@ -8774,8 +8786,8 @@ export default function ChatView(props: ChatViewProps) {
             isScratch: isScratchForAutoFolder,
           })
         : null,
-    moveToFolder: (answer) =>
-      answer.kind === "current" ? Promise.resolve(null) : moveDraftToAutoFolder(answer),
+    moveToFolder: (answer, signal) =>
+      answer.kind === "current" ? Promise.resolve(null) : moveDraftToAutoFolder(answer, signal),
   });
 
   // Amu: say before the next send that it hands the conversation to another AI.

@@ -171,31 +171,43 @@ export function codexFolders(codexHome: string, limit = 150): Found[] {
 }
 
 /** Folders that are not a place to keep work: temporary, tool homes, the home folder itself. */
+/** The folder's real location (links followed), or the plain resolved path when it is gone. */
+export function realFolder(path: string): string {
+  const resolved = NodePath.resolve(path);
+  try {
+    return NodeFS.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+/**
+ * Whether a folder is a place to keep work. Compared by real location, so a
+ * link into a temporary folder, a tool's home or Amu's own data is refused too.
+ */
 export function isWorkFolder(path: string, excluded: ReadonlyArray<string>): boolean {
   if (!NodePath.isAbsolute(path)) return false;
-  const normal = NodePath.resolve(path);
-  const home = NodeOS.homedir();
-  if (normal === NodePath.parse(normal).root || normal === home) return false;
-  const inside = (root: string) => normal === root || normal.startsWith(`${root}${NodePath.sep}`);
-  const temporary = [
+  let real: string;
+  try {
+    real = NodeFS.realpathSync(path);
+    if (!NodeFS.statSync(real).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  const home = realFolder(NodeOS.homedir());
+  if (real === NodePath.parse(real).root || real === home) return false;
+  const inside = (root: string) => real === root || real.startsWith(`${root}${NodePath.sep}`);
+  const refused = [
     NodeOS.tmpdir(),
     "/tmp",
     "/private/tmp",
     "/var/folders",
     "/private/var/folders",
-  ];
-  if (temporary.some(inside)) return false;
-  if (
-    [NodePath.join(home, ".codex"), NodePath.join(home, ".claude"), ...excluded].some((root) =>
-      inside(NodePath.resolve(root)),
-    )
-  )
-    return false;
-  try {
-    return NodeFS.statSync(normal).isDirectory();
-  } catch {
-    return false;
-  }
+    NodePath.join(home, ".codex"),
+    NodePath.join(home, ".claude"),
+    ...excluded,
+  ].flatMap((root) => [NodePath.resolve(root), realFolder(root)]);
+  return !refused.some(inside);
 }
 
 /**
@@ -237,7 +249,7 @@ export function collectWorkFolders(input: {
 }): WorkFolder[] {
   const byPath = new Map<string, { lastUsedMs: number; hints: string[] }>();
   const add = (path: string, atMs: number, hints: ReadonlyArray<string | null>) => {
-    const key = NodePath.resolve(path);
+    const key = realFolder(path);
     const entry = byPath.get(key) ?? { lastUsedMs: 0, hints: [] };
     entry.lastUsedMs = Math.max(entry.lastUsedMs, atMs);
     for (const hint of hints)
@@ -284,7 +296,7 @@ export function folderChoicesForJudge(folders: ReadonlyArray<WorkFolder>, curren
       lastUsed: new Date(folder.lastUsedMs).toISOString().slice(0, 10),
       repositories: repositoryNames(folder.path),
       examples: folder.hints,
-      isCurrent: current !== null && NodePath.resolve(current) === folder.path,
+      isCurrent: current !== null && realFolder(current) === folder.path,
     })),
   };
 }

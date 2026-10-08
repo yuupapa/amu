@@ -72,15 +72,36 @@ export function saveManualGroups(next: ManualProjectGroup[]): void {
   for (const listener of listeners) listener();
 }
 
+/** Another window saved: read its groups, so this one shows them and builds on them. */
+function onStorage(event: StorageEvent) {
+  if (event.key !== null && event.key !== STORAGE_KEY) return;
+  manualGroups = readManualGroups();
+  for (const listener of listeners) listener();
+}
+
 export function useManualProjectGroups(): ManualProjectGroup[] {
   return useSyncExternalStore(
     (listener) => {
+      if (listeners.size === 0) window.addEventListener("storage", onStorage);
       listeners.add(listener);
-      return () => listeners.delete(listener);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) window.removeEventListener("storage", onStorage);
+      };
     },
     currentManualGroups,
     currentManualGroups,
   );
+}
+
+/**
+ * Changes the saved groups from what is saved now, not from this window's
+ * copy, so a group another window added in the meantime is kept.
+ */
+export function updateManualGroups(
+  change: (current: ManualProjectGroup[]) => ManualProjectGroup[],
+): void {
+  saveManualGroups(change(readManualGroups()));
 }
 
 /** Folder names that say nothing about the work in them. */
@@ -266,24 +287,23 @@ function GroupEditor(props: {
   const save = () => {
     const trimmed = name.trim();
     if (!trimmed || selected.size === 0) return;
-    const others = currentManualGroups()
-      .filter((group) => group.id !== manualId)
-      // A project belongs to one hand-made group at a time.
-      .map((group) => ({
-        ...group,
-        projectKeys: group.projectKeys.filter((key) => !selected.has(key)),
-      }))
-      .filter((group) => group.projectKeys.length > 0);
     const groupId = manualId ?? randomUUID();
-    saveManualGroups([
-      ...others,
+    updateManualGroups((current) => [
+      ...current
+        .filter((group) => group.id !== groupId)
+        // A project belongs to one hand-made group at a time.
+        .map((group) => ({
+          ...group,
+          projectKeys: group.projectKeys.filter((key) => !selected.has(key)),
+        }))
+        .filter((group) => group.projectKeys.length > 0),
       { id: groupId, name: trimmed.slice(0, 60), projectKeys: [...selected] },
     ]);
     props.onSaved(`${AMU_GROUP_SCOPE_PREFIX}${groupId}`);
   };
   const remove = () => {
     if (!manualId) return;
-    saveManualGroups(currentManualGroups().filter((group) => group.id !== manualId));
+    updateManualGroups((current) => current.filter((group) => group.id !== manualId));
     props.onSaved(null);
   };
   return (

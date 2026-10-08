@@ -145,6 +145,32 @@ describe("work folders from earlier work", () => {
       expect(folders.map((folder) => folder.path)).toEqual([project]);
     }));
 
+  it("refuses a link into a refused folder", () =>
+    withTemp((root) => {
+      const amuData = NodePath.join(root, "amu-runtime");
+      NodeFS.mkdirSync(NodePath.join(amuData, "scratch"), { recursive: true });
+      const link = NodePath.join(root, "looks-normal");
+      NodeFS.symlinkSync(NodePath.join(amuData, "scratch"), link);
+      const tmpLink = NodePath.join(root, "to-tmp");
+      NodeFS.symlinkSync("/tmp", tmpLink);
+      expect(isWorkFolder(link, [amuData])).toBe(false);
+      expect(isWorkFolder(tmpLink, [])).toBe(false);
+      // A plain folder next to them is fine, and the same folder through a link counts once.
+      const real = NodePath.join(root, "work");
+      NodeFS.mkdirSync(real);
+      const alias = NodePath.join(root, "alias");
+      NodeFS.symlinkSync(real, alias);
+      const folders = collectWorkFolders({
+        amuProjects: [],
+        found: [
+          { path: alias, atMs: 2, hint: "a" },
+          { path: real, atMs: 1, hint: "b" },
+        ],
+        excluded: [amuData],
+      });
+      expect(folders.map((folder) => folder.path)).toEqual([real]);
+    }));
+
   it("shortens hints and drops system notes", () => {
     expect(hintFrom("a".repeat(100))).toHaveLength(60);
     expect(hintFrom("Caveat: the messages below")).toBeNull();

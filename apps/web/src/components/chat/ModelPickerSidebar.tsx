@@ -159,7 +159,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                           )}
                           onClick={props.onAutoSelect}
                           type="button"
-                          aria-label="オート（Luna）"
+                          aria-label="オート"
                           aria-pressed={props.autoSelected === true}
                         >
                           <WandSparklesIcon className="size-5 shrink-0" aria-hidden />

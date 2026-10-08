@@ -37,6 +37,39 @@ const INSTRUCTIONS =
 const SHORT_REASON = "reasonは80字以内の日本語1文にしてください。";
 const FOLDER_GUIDANCE =
   '作業フォルダーの選び方: workFolders.folders に、これまで作業したフォルダーと、そこでの依頼の例（examples）があります。依頼が、どれかのフォルダーでの作業の続き・同じシリーズ・同じ案件（例: 同じ番組の次の回の台本、同じサイトや同じアプリの修正）なら、そのフォルダーの id を folder に入れます。今のプロジェクト（workFolders.current）のままでよいときは "current"。どのフォルダーにも当てはまらない新しい作業なら "new" にします。同じ案件のフォルダーが複数あるときは、repositories が合うものと lastUsed が新しいものを優先します。迷ったら "current" にします。';
+/**
+ * Starts a judge CLI in its own process group, so stopping it also stops
+ * anything it started (an npm launcher's native child, for one).
+ */
+function spawnJudge(
+  binary: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+) {
+  return NodeChildProcess.spawn(binary, args, {
+    ...options,
+    stdio: ["pipe", "pipe", "pipe"],
+    detached: true,
+  });
+}
+
+/** SIGTERM to the whole group, then SIGKILL if it is still there after a moment. */
+function stopJudgeTree(child: NodeChildProcess.ChildProcess): void {
+  const signal = (name: NodeJS.Signals) => {
+    try {
+      if (child.pid !== undefined) process.kill(-child.pid, name);
+      else child.kill(name);
+    } catch {
+      // Already gone.
+    }
+  };
+  signal("SIGTERM");
+  setTimeout(() => signal("SIGKILL"), 2_000).unref();
+}
+
+/** How long a stopped judge may take to close before the judgement gives up on it. */
+const STOP_GRACE_MS = 3_000;
+
 export function judgeArgs(
   schema: string,
   output: string,
@@ -158,16 +191,32 @@ export async function runLunaJudge(input: JudgeInput): Promise<AutoDecision> {
     ])
       delete environment[key];
     await new Promise<void>((resolve, reject) => {
-      const child = NodeChildProcess.spawn(
+      const child = spawnJudge(
         input.runtime.binary,
         judgeArgs(schema, output, instructions, catalog),
-        { cwd: directory, env: environment, stdio: ["pipe", "pipe", "pipe"] },
+        {
+          cwd: directory,
+          env: environment,
+        },
       );
       let failure: Error | null = null,
-        bytes = 0;
+        bytes = 0,
+        settled = false;
+      const finish = (error: Error | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        input.signal.removeEventListener("abort", abort);
+        lines.close();
+        if (error) reject(error);
+        else resolve();
+      };
       const stop = (error: Error) => {
-        failure ??= error;
-        child.kill("SIGTERM");
+        if (failure) return;
+        failure = error;
+        stopJudgeTree(child);
+        // Do not wait on a CLI that ignores the stop or leaves stdout open.
+        setTimeout(() => finish(error), STOP_GRACE_MS).unref();
       };
       const abort = () => stop(new Error("モデル選択を取り消しました。元の依頼は保持しています。"));
       input.signal.addEventListener("abort", abort, { once: true });
@@ -192,19 +241,16 @@ export async function runLunaJudge(input: JudgeInput): Promise<AutoDecision> {
       child.stderr.resume();
       child.stdin.on("error", () => stop(new Error("Lunaへの依頼を受け付けられませんでした。")));
       child.once("error", () => stop(new Error("Codex CLIを起動できませんでした。")));
-      child.once("close", (code) => {
-        clearTimeout(timer);
-        input.signal.removeEventListener("abort", abort);
-        lines.close();
-        if (failure) reject(failure);
-        else if (code !== 0)
-          reject(
-            new Error(
-              `Lunaを利用できません（Codex CLI 終了コード ${code}）。元の依頼を残して手動送信に戻ります。`,
-            ),
-          );
-        else resolve();
-      });
+      child.once("close", (code) =>
+        finish(
+          failure ??
+            (code !== 0
+              ? new Error(
+                  `Lunaを利用できません（Codex CLI 終了コード ${code}）。元の依頼を残して手動送信に戻ります。`,
+                )
+              : null),
+        ),
+      );
       child.stdin.end(judgeRequest(input));
     });
     if (input.signal.aborted) throw new Error("モデル選択を取り消しました。");
@@ -234,17 +280,29 @@ function runJudgeProcess(input: {
   onEvent: (event: JudgeEvent) => unknown;
 }): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
-    const child = NodeChildProcess.spawn(input.binary, input.args, {
+    const child = spawnJudge(input.binary, input.args, {
       cwd: input.cwd,
       env: input.environment,
-      stdio: ["pipe", "pipe", "pipe"],
     });
     let failure: Error | null = null,
       answer: unknown,
-      bytes = 0;
+      bytes = 0,
+      settled = false;
+    const finish = (result: { error: Error } | { value: unknown }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      input.signal.removeEventListener("abort", abort);
+      lines.close();
+      if ("error" in result) reject(result.error);
+      else resolve(result.value);
+    };
     const stop = (error: Error) => {
-      failure ??= error;
-      child.kill("SIGTERM");
+      if (failure) return;
+      failure = error;
+      stopJudgeTree(child);
+      // Do not wait on a CLI that ignores the stop or leaves stdout open.
+      setTimeout(() => finish({ error }), STOP_GRACE_MS).unref();
     };
     const abort = () => stop(new Error("モデル選択を取り消しました。元の依頼は保持しています。"));
     input.signal.addEventListener("abort", abort, { once: true });
@@ -281,14 +339,12 @@ function runJudgeProcess(input: {
     );
     child.once("error", () => stop(new Error(`${input.name}のCLIを起動できませんでした。`)));
     child.once("close", (code) => {
-      clearTimeout(timer);
-      input.signal.removeEventListener("abort", abort);
-      lines.close();
-      if (failure) reject(failure);
+      if (failure) finish({ error: failure });
       else if (code !== 0)
-        reject(new Error(`${input.name}を利用できません（CLI 終了コード ${code}）。`));
-      else if (answer === undefined) reject(new Error(`${input.name}の判定結果がありません。`));
-      else resolve(answer);
+        finish({ error: new Error(`${input.name}を利用できません（CLI 終了コード ${code}）。`) });
+      else if (answer === undefined)
+        finish({ error: new Error(`${input.name}の判定結果がありません。`) });
+      else finish({ value: answer });
     });
     child.stdin.end(input.stdin);
   });
@@ -493,14 +549,54 @@ export function parseJudgeText(text: string): unknown {
   }
 }
 
+/**
+ * Cursor's own settings for the judge: none of the user's rules, hooks, MCP
+ * servers, plugins or allow-lists, and every file, shell, MCP and web tool
+ * denied. The login itself stays in the Keychain, which this does not touch.
+ */
+export const CURSOR_JUDGE_CONFIG = {
+  version: 1,
+  permissions: {
+    allow: [],
+    deny: ["Shell(*)", "Read(*)", "Read(**)", "Write(*)", "Write(**)", "Mcp(*:*)", "WebFetch(*)"],
+  },
+};
+
+/**
+ * The environment Composer runs with: only what the CLI needs to find its
+ * runtime and the Keychain login, its settings in the judge's own folders,
+ * and no API key, token, other endpoint or Node options from the server.
+ */
+export function cursorJudgeEnvironment(
+  from: NodeJS.ProcessEnv,
+  folders: { config: string; data: string; temporary: string },
+): NodeJS.ProcessEnv {
+  const keep = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "SHELL"];
+  const environment: NodeJS.ProcessEnv = {};
+  for (const key of keep) if (from[key] !== undefined) environment[key] = from[key];
+  return {
+    ...environment,
+    TMPDIR: folders.temporary,
+    CURSOR_CONFIG_DIR: folders.config,
+    CURSOR_DATA_DIR: folders.data,
+  };
+}
+
 export async function runCursorJudge(input: JudgeInput): Promise<AutoDecision> {
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "amu-composer-judge-"));
   try {
     if (input.signal.aborted) throw new Error("モデル選択を取り消しました。");
-    const environment: NodeJS.ProcessEnv = { ...input.runtime.environment };
-    // The CLI login only: no API key and no other endpoint.
-    for (const key of ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_API_ENDPOINT"])
-      delete environment[key];
+    // An empty workspace: Ask mode only reaches files inside it, and there are none.
+    const workspace = NodePath.join(directory, "workspace"),
+      config = NodePath.join(directory, "config"),
+      data = NodePath.join(directory, "data"),
+      temporary = NodePath.join(directory, "tmp");
+    await Promise.all([workspace, config, data, temporary].map((folder) => NodeFSP.mkdir(folder)));
+    await NodeFSP.writeFile(
+      NodePath.join(config, "cli-config.json"),
+      JSON.stringify(CURSOR_JUDGE_CONFIG),
+      { mode: 0o600 },
+    );
     const prompt = [
       judgeInstructions(input),
       `ツールは一切使わず、${input.folders ? '{"model":"…","effort":"…","reason":"…","folder":"…"}' : '{"model":"…","effort":"…","reason":"…"}'} というJSONオブジェクトだけを返してください。前後に文章を付けないでください。`,
@@ -509,9 +605,9 @@ export async function runCursorJudge(input: JudgeInput): Promise<AutoDecision> {
     const answer = await runJudgeProcess({
       name: "Composer",
       binary: input.runtime.binary,
-      args: cursorJudgeArgs(directory, prompt),
-      environment,
-      cwd: directory,
+      args: cursorJudgeArgs(workspace, prompt),
+      environment: cursorJudgeEnvironment(input.runtime.environment, { config, data, temporary }),
+      cwd: workspace,
       stdin: "",
       signal: input.signal,
       timeoutMs: 60_000,
