@@ -53,6 +53,7 @@ import {
   isLocalLunaAutoRequest,
 } from "./httpCors.ts";
 import { autoChoices, LUNA_JUDGE_NAMES } from "@t3tools/shared/lunaAuto";
+import { cliReleaseNotes, hasCliReleaseNotes } from "./luna/CliReleaseNotes.ts";
 import { findCursorAgent, LunaDecisionBroker, type JudgeTarget } from "./luna/LunaDecision.ts";
 import {
   lunaPreflightBlocked,
@@ -631,6 +632,92 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
   );
 
 export const layerLunaAutoRoute = makeLunaAutoRouteLayer();
+
+// Amu: what a CLI update changes, in Japanese, for the update notice (docs/user/updating.md).
+export const makeCliReleaseNotesRouteLayer = (options: LunaAutoRouteOptions = {}) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const providers = yield* ProviderRegistry;
+      const settings = yield* ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      return HttpRouter.add(
+        "POST",
+        "/api/amu/cli-release-notes",
+        Effect.gen(function* () {
+          yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const url = HttpServerRequest.toURL(request);
+          const remoteAddress = (options.peerAddress ?? socketPeerAddress)(request);
+          if (
+            Option.isNone(url) ||
+            !isLocalLunaAutoRequest(url.value, request.headers, remoteAddress)
+          )
+            return HttpServerResponse.jsonUnsafe(
+              { error: "このMacのローカルのAmuで利用してください。" },
+              { status: 403 },
+            );
+          const body = yield* request.text;
+          if (Buffer.byteLength(body) > 4_000)
+            return HttpServerResponse.jsonUnsafe(
+              { error: "入力が大きすぎます。" },
+              { status: 400 },
+            );
+          const data = yield* Schema.decodeEffect(
+            Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+          )(body).pipe(Effect.orElseSucceed(() => null));
+          const version = /^v?\d+(?:\.\d+){1,3}$/;
+          if (
+            !data ||
+            typeof data.driver !== "string" ||
+            typeof data.currentVersion !== "string" ||
+            typeof data.latestVersion !== "string" ||
+            !version.test(data.currentVersion) ||
+            !version.test(data.latestVersion)
+          )
+            return HttpServerResponse.jsonUnsafe({ error: "形式が不正です。" }, { status: 400 });
+          if (!hasCliReleaseNotes(data.driver))
+            return HttpServerResponse.jsonUnsafe({ result: null });
+          const snapshots = yield* providers.getProviders;
+          const currentSettings = yield* settings.getSettings;
+          const claude = resolveClaudeJudge(
+            snapshots,
+            deriveProviderInstanceConfigMap(currentSettings),
+          );
+          const haikuRuntime = claude.ok
+            ? {
+                binary: expandHomePath(claude.config.binaryPath),
+                home:
+                  claude.provider.runtimePaths?.homePath ??
+                  (claude.config.homePath ? expandHomePath(claude.config.homePath) : ""),
+                environment: mergeProviderInstanceEnvironment(claude.instance.environment),
+              }
+            : null;
+          const input = {
+            driver: data.driver,
+            currentVersion: data.currentVersion,
+            latestVersion: data.latestVersion,
+          };
+          return yield* Effect.tryPromise({
+            try: (signal) =>
+              cliReleaseNotes({
+                ...input,
+                stateDir: serverConfig.stateDir,
+                haikuRuntime,
+                signal,
+              }),
+            catch: () => "更新内容を取得できませんでした。",
+          }).pipe(
+            Effect.map((result) => HttpServerResponse.jsonUnsafe({ result })),
+            Effect.catch((message) =>
+              Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 502 })),
+            ),
+          );
+        }),
+      );
+    }),
+  );
+
+export const layerCliReleaseNotesRoute = makeCliReleaseNotesRouteLayer();
 
 export const layerAttachmentUploadRoute = HttpRouter.add(
   "POST",

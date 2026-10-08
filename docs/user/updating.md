@@ -79,6 +79,13 @@ update can roll back to the previous version. If the update still fails:
 at once. Hover it to see which providers it will update. Providers that only
 offer a manual update command are not included.
 
+## 更新内容を見る（Amu）
+
+Amu の更新のお知らせと、CLI（Claude Code、Codex、OpenCode）の更新のお知らせには「詳しくはこちら」があります。押すとお知らせの中で開き、何が変わるかを読めます。
+
+- **Amu の更新**: 公開のときに書いた日本語の更新内容が、見出しごとにそのまま出ます。「GitHub で見る」で公開ページも開けます。
+- **CLI の更新**: 今入っている版より後から、届いた版までの公式の更新内容を読み、Claude Haiku 5.5 で日本語に訳して出します。お知らせが出た時点で取得と翻訳を始めるので、開くころには読めることが多いです。訳したものは保存しておき、同じ更新では訳し直しません。Claude のサブスク接続が無いときや翻訳に失敗したときは、英語のまま出します。Cursor など公式の更新内容を読み取れない CLI では、そう表示します。
+
 ## Mobile updates
 
 To update an environment from your phone, open **Settings → Environments** and

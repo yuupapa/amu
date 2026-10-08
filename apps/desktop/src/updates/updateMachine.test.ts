@@ -20,6 +20,34 @@ const runtimeInfo = {
 } as const;
 
 describe("updateMachine", () => {
+  it("keeps Amu's Markdown notes for the offered version and drops them with no update", () => {
+    const initial = {
+      ...createInitialDesktopUpdateState("0.0.49", runtimeInfo, "latest"),
+      enabled: true,
+    };
+    const offered = reduceDesktopUpdateStateOnUpdateAvailable(
+      initial,
+      "0.0.50",
+      "2026-10-08T00:00:00.000Z",
+      [],
+      0,
+      "## 新しくできること\n\n- 判定役を3つに",
+    );
+    expect(offered.releaseNotesText).toBe("## 新しくできること\n\n- 判定役を3つに");
+    const downloaded = reduceDesktopUpdateStateOnDownloadComplete(offered, "0.0.50");
+    // A later check that brings no notes keeps the downloaded version's notes.
+    expect(
+      reduceDesktopUpdateStateOnUpdateAvailable(downloaded, "0.0.50", "2026-10-08T01:00:00.000Z")
+        .releaseNotesText,
+    ).toBe("## 新しくできること\n\n- 判定役を3つに");
+    expect(
+      reduceDesktopUpdateStateOnNoUpdate(offered, "2026-10-08T02:00:00.000Z").releaseNotesText,
+    ).toBeNull();
+    expect(
+      reduceDesktopUpdateStateOnCheckStart(offered, "2026-10-08T03:00:00.000Z").releaseNotesText,
+    ).toBeNull();
+  });
+
   it("clears transient errors when a check starts", () => {
     const state = reduceDesktopUpdateStateOnCheckStart(
       {

@@ -91,17 +91,33 @@ export async function lunaAutoDecide(
   return { result: answer.result, judge };
 }
 
-async function lunaAutoCall(
+function lunaAutoCall(
   body: unknown,
   signal?: AbortSignal,
 ): Promise<{ result?: unknown; judge?: unknown }> {
-  const url = resolvePrimaryEnvironmentHttpUrl("/api/luna-auto");
+  return amuLocalPost("/api/luna-auto", body, signal, {
+    notLocal: "オートはこのMacのローカルのAmuで利用してください。",
+    unknown: "オートの結果が不明です。自動再送はしません。",
+  });
+}
+
+/**
+ * A POST to one of Amu's own routes on this Mac's server (Auto, CLI release
+ * notes). Other machines are refused here and again by the server.
+ */
+export async function amuLocalPost(
+  path: string,
+  body: unknown,
+  signal: AbortSignal | undefined,
+  messages: { notLocal: string; unknown: string },
+): Promise<{ result?: unknown; judge?: unknown }> {
+  const url = resolvePrimaryEnvironmentHttpUrl(path);
   const target = new URL(url);
   if (
     !["http:", "https:"].includes(target.protocol) ||
     !["localhost", "127.0.0.1", "[::1]"].includes(target.hostname)
   )
-    throw new Error("オートはこのMacのローカルのAmuで利用してください。");
+    throw new Error(messages.notLocal);
   const bearer = await readDesktopPrimaryBearerToken();
   const response = await fetch(url, {
     method: "POST",
@@ -120,8 +136,7 @@ async function lunaAutoCall(
     error?: string;
     cancelled?: boolean;
   };
-  if (!response.ok || result.error)
-    throw new Error(result.error ?? "オートの結果が不明です。自動再送はしません。");
+  if (!response.ok || result.error) throw new Error(result.error ?? messages.unknown);
   return result;
 }
 

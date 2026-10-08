@@ -278,6 +278,8 @@ export interface DesktopUpdateState {
   availableVersion: string | null;
   downloadedVersion: string | null;
   releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote>;
+  /** Amu: the offered version's notes as written (Markdown), for the update notice. */
+  releaseNotesText?: string | null;
   omittedReleaseCount: number;
   downloadPercent: number | null;
   checkedAt: string | null;
@@ -309,6 +311,7 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   availableVersion: Schema.NullOr(Schema.String),
   downloadedVersion: Schema.NullOr(Schema.String),
   releaseNotes: Schema.Array(DesktopUpdateReleaseNoteSchema),
+  releaseNotesText: Schema.optionalKey(Schema.NullOr(Schema.String)),
   omittedReleaseCount: Schema.Number,
   downloadPercent: Schema.NullOr(Schema.Number),
   checkedAt: Schema.NullOr(Schema.String),

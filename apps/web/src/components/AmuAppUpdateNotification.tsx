@@ -17,6 +17,7 @@ import {
   getDesktopUpdateReleaseUrl,
 } from "./desktopUpdate.logic";
 import { openDesktopUpdateReleaseNotes } from "./desktopUpdate.toast";
+import { AmuReleaseNotes } from "../amu/ReleaseNotesView";
 import { hiddenToastActionProps, stackedThreadToast, toastManager } from "./ui/toast";
 
 // "A new Amu is out — download it?" as a corner notice, like the CLI update
@@ -106,13 +107,34 @@ export function AmuAppUpdateNotification() {
       return;
     }
     const view = resolved;
+    // "詳しくはこちら" opens the notes that came with the update, in the notice itself.
+    const notesText =
+      view.kind === "available" || view.kind === "downloading" || view.kind === "ready"
+        ? notesFor(state, view.version)
+        : null;
     const payload = {
       ...stackedThreadToast({
-        ...toastContent(view, { download, install: () => void install(), pending }),
+        ...toastContent(view, {
+          download,
+          install: () => void install(),
+          pending,
+          hasNotes: notesText !== null,
+        }),
         timeout: 0,
         data: {
           hideCopyButton: true,
           leadingIcon: <DownloadIcon aria-hidden="true" className="size-4 text-success" />,
+          ...(notesText
+            ? {
+                expandableContent: (
+                  <AmuReleaseNotes
+                    text={notesText}
+                    releaseUrl={getDesktopUpdateReleaseUrl(view.version)}
+                  />
+                ),
+                expandableLabels: { expand: "詳しくはこちら", collapse: "閉じる" },
+              }
+            : {}),
         },
       }),
       // Any close by the user (button, Escape, swipe) hides this version.
@@ -125,11 +147,19 @@ export function AmuAppUpdateNotification() {
     } else {
       toastManager.update(toastIdRef.current, payload);
     }
-  }, [resolved, download, install, pending, dismiss, closeOwnToast]);
+  }, [resolved, state, download, install, pending, dismiss, closeOwnToast]);
 
   useEffect(() => closeOwnToast, [closeOwnToast]);
 
   return null;
+}
+
+/** The offered version's notes, when they came with it. */
+function notesFor(state: ReturnType<typeof useDesktopUpdateState>, version: string): string | null {
+  if (!state || (state.availableVersion !== version && state.downloadedVersion !== version))
+    return null;
+  const text = state.releaseNotesText?.trim();
+  return text ? text : null;
 }
 
 function ReleaseNotesButton({ version }: { version: string }) {
@@ -148,7 +178,7 @@ function ReleaseNotesButton({ version }: { version: string }) {
 
 function toastContent(
   view: AmuUpdateToastView,
-  actions: { download: () => void; install: () => void; pending: boolean },
+  actions: { download: () => void; install: () => void; pending: boolean; hasNotes: boolean },
 ) {
   switch (view.kind) {
     case "available":
@@ -158,7 +188,7 @@ function toastContent(
         description: (
           <>
             {uiText("Download it now? Conversations and settings stay as they are.")}
-            <ReleaseNotesButton version={view.version} />
+            {actions.hasNotes ? null : <ReleaseNotesButton version={view.version} />}
           </>
         ),
         actionProps: {

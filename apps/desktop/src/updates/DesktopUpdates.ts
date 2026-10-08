@@ -776,6 +776,8 @@ export const make = Effect.gen(function* () {
               checkedAt,
               releaseNotes,
               omittedReleaseCount,
+              // Amu's manifest carries the notes as Markdown; keep them whole for the notice.
+              typeof info.releaseNotes === "string" ? info.releaseNotes.slice(0, 20_000) : null,
             ),
           );
           yield* Ref.set(lastLoggedDownloadMilestoneRef, -1);

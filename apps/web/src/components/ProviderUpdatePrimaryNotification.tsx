@@ -27,6 +27,7 @@ import {
 } from "./ProviderUpdateLaunchNotification.logic";
 import { hiddenToastActionProps, stackedThreadToast, toastManager } from "./ui/toast";
 import { useAtomCommand } from "../state/use-atom-command";
+import { CliReleaseNotes, cliNotesEntries, prefetchCliReleaseNotes } from "../amu/ReleaseNotesView";
 
 const seenProviderUpdateNotificationKeys = new Set<string>();
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
@@ -208,6 +209,9 @@ export function ProviderUpdatePrimaryNotification() {
     seenProviderUpdateNotificationKeys.add(notificationKey);
 
     const initialView = getProviderUpdateInitialToastView({ updateProviders, oneClickProviders });
+    // Amu: what the update changes, in Japanese, under "詳しくはこちら".
+    const hasCliNotes = cliNotesEntries(updateProviders).length > 0;
+    if (hasCliNotes) prefetchCliReleaseNotes(updateProviders);
 
     let toastId!: ProviderUpdateToastId;
     let updateStarted = false;
@@ -322,6 +326,12 @@ export function ProviderUpdatePrimaryNotification() {
           ) : undefined,
         hideCopyButton: true,
         onClose: dismissPrompt,
+        ...(hasCliNotes
+          ? {
+              expandableContent: <CliReleaseNotes providers={updateProviders} />,
+              expandableLabels: { expand: "詳しくはこちら", collapse: "閉じる" },
+            }
+          : {}),
         ...(oneClickProviders.length > 0
           ? {
               secondaryActionProps: {

@@ -374,7 +374,18 @@ export function acceptClaudeJudgeEvent(event: JudgeEvent): unknown {
   return undefined;
 }
 
-export async function runClaudeJudge(input: JudgeInput): Promise<AutoDecision> {
+/**
+ * Asks Haiku for one structured answer: no tools, no settings, subscription
+ * login only. Used for Auto's judgement and for translating CLI release notes.
+ */
+export async function runHaiku(input: {
+  runtime: JudgeRuntime;
+  schema: unknown;
+  instructions: string;
+  stdin: string;
+  signal: AbortSignal;
+  timeoutMs: number;
+}): Promise<unknown> {
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "amu-haiku-judge-"));
   try {
     if (input.signal.aborted) throw new Error("モデル選択を取り消しました。");
@@ -393,25 +404,33 @@ export async function runClaudeJudge(input: JudgeInput): Promise<AutoDecision> {
       "CLAUDE_CODE_USE_FOUNDRY",
     ])
       delete environment[key];
-    const answer = await runJudgeProcess({
+    return await runJudgeProcess({
       name: "Haiku",
       binary: input.runtime.binary,
-      args: claudeJudgeArgs(
-        JSON.stringify(autoOutputSchema(input.choices)),
-        judgeInstructions(input),
-      ),
+      args: claudeJudgeArgs(JSON.stringify(input.schema), input.instructions),
       environment,
       cwd: directory,
-      stdin: judgeRequest(input),
+      stdin: input.stdin,
       signal: input.signal,
-      timeoutMs: 45_000,
+      timeoutMs: input.timeoutMs,
       onEvent: acceptClaudeJudgeEvent,
     });
-    if (input.signal.aborted) throw new Error("モデル選択を取り消しました。");
-    return validateAutoDecision(answer, input.choices);
   } finally {
     await NodeFSP.rm(directory, { recursive: true, force: true });
   }
+}
+
+export async function runClaudeJudge(input: JudgeInput): Promise<AutoDecision> {
+  const answer = await runHaiku({
+    runtime: input.runtime,
+    schema: autoOutputSchema(input.choices),
+    instructions: judgeInstructions(input),
+    stdin: judgeRequest(input),
+    signal: input.signal,
+    timeoutMs: 45_000,
+  });
+  if (input.signal.aborted) throw new Error("モデル選択を取り消しました。");
+  return validateAutoDecision(answer, input.choices);
 }
 
 export function cursorJudgeArgs(workspace: string, prompt: string): string[] {
