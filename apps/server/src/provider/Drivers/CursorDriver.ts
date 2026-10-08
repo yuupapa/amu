@@ -210,18 +210,30 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
             auth.usesApiKey ? "api-key" : "browser",
           ).pipe(
             Effect.flatMap((snapshot) =>
-              effectiveConfig.enabled &&
-              snapshot.installed &&
-              snapshot.auth.status === "authenticated"
+              effectiveConfig.enabled && snapshot.installed
                 ? serverSettings.getSettings.pipe(
-                    Effect.flatMap((settings) =>
-                      readCursorUsageLimits(
+                    Effect.flatMap((settings) => {
+                      const read = readCursorUsageLimits(
                         effectiveConfig,
                         { ...processEnv, CURSOR_API_KEY: apiKey },
                         settings.cursorKeychainUsageEnabled,
-                      ),
-                    ),
-                    Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
+                      );
+                      if (snapshot.auth.status === "authenticated")
+                        return read.pipe(
+                          Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
+                        );
+                      // Amu: before signing in here, the Cursor CLI's own login (read from
+                      // Keychain once allowed) can still report the plan's usage. Only a
+                      // reading with numbers is shown; anything else leaves the snapshot as is.
+                      if (!settings.cursorKeychainUsageEnabled || apiKey)
+                        return Effect.succeed(snapshot);
+                      return read.pipe(
+                        Effect.map((usageLimits) =>
+                          usageLimits.unavailable ? snapshot : { ...snapshot, usageLimits },
+                        ),
+                        Effect.orElseSucceed(() => snapshot),
+                      );
+                    }),
                   )
                 : Effect.succeed(snapshot),
             ),

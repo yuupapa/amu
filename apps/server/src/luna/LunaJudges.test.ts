@@ -343,6 +343,10 @@ describe("which connected AIs may judge", () => {
       ok: false,
       skip: "not_subscription",
     });
+    // Not signed in here yet: Composer may still judge with the Cursor CLI's own login.
+    expect(
+      resolveCursorJudge([snapshot("cursor", { status: "unauthenticated" })], configs).ok,
+    ).toBe(true);
     const custom = decodeConfigs({
       cursor: { driver: "cursor", config: { apiEndpoint: "https://example.invalid" } },
     });

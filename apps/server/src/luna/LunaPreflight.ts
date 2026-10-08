@@ -134,9 +134,14 @@ export function resolveCursorJudge(
   configs: ProviderInstanceConfigMap,
 ): OtherJudgeResult<CursorSettings> {
   if (!providers.some((p) => p.driver === "cursor")) return { ok: false, skip: "missing" };
-  const ready = readyProviders(providers, "cursor");
-  if (!ready.length) return { ok: false, skip: "not_ready" };
-  const account = ready.find((p) => p.auth.type === "browser");
+  const usable = providers.filter((p) => p.driver === "cursor" && p.enabled && p.installed);
+  if (!usable.length) return { ok: false, skip: "not_ready" };
+  // Composer judges through the Cursor CLI and its own login, so a connection
+  // not yet signed in here may still judge. A connection signed in with an API
+  // key is skipped, so Auto never runs on API billing.
+  const account =
+    usable.find((p) => p.auth.status === "authenticated" && p.auth.type === "browser") ??
+    usable.find((p) => p.auth.status !== "authenticated");
   if (!account) return { ok: false, skip: "not_subscription" };
   const instance = configs[account.instanceId];
   if (!instance || instance.driver !== "cursor") return { ok: false, skip: "config_invalid" };
