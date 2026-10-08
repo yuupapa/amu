@@ -333,7 +333,11 @@ export const makeGrokAuth = Effect.fn("makeGrokAuth")(function* (options: {
 
   const logout = Effect.gen(function* () {
     const grok = grokCommand();
-    if (!grok) return;
+    if (!grok)
+      return yield* failure(
+        "logout",
+        "Grok Build CLI が見つからないため、ログアウトできませんでした。CLI の場所を確かめてください。",
+      );
     const result = yield* runCommand({
       command: grok,
       args: ["logout"],
