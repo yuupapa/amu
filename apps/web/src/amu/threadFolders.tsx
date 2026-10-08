@@ -155,7 +155,11 @@ export function useListedProjectIdOf() {
   );
 }
 
-/** The threads listed under these projects (the project-tree sidebar's rows). */
+/**
+ * The threads listed under these projects (the project-tree sidebar's rows).
+ * Subagent threads stay out, as in the flat sidebar: they belong to the
+ * parent thread's Agents view.
+ */
 export function useListedThreadShells(refs: ReadonlyArray<ScopedProjectRef>) {
   const threads = useThreadShells();
   const listedProjectIdOf = useListedProjectIdOf();
@@ -165,7 +169,11 @@ export function useListedThreadShells(refs: ReadonlyArray<ScopedProjectRef>) {
   );
   return useMemo(
     () =>
-      threads.filter((thread) => keys.has(`${thread.environmentId}:${listedProjectIdOf(thread)}`)),
+      threads.filter(
+        (thread) =>
+          thread.lineage.relationshipToParent !== "subagent" &&
+          keys.has(`${thread.environmentId}:${listedProjectIdOf(thread)}`),
+      ),
     [keys, listedProjectIdOf, threads],
   );
 }
