@@ -39,16 +39,21 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      # .repos holds orphaned gitlinks that break checkout's submodule cleanup.
+      # .repos holds orphaned gitlinks that break actions/checkout's submodule
+      # cleanup, so check out by hand (as release-desktop.yml does). The
+      # repository is public, so Git needs no credentials.
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.commit }}
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+        shell: bash
+        env:
+          COMMIT: ${{ inputs.commit }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "$COMMIT"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
 
       - name: Check version matches tag
         shell: bash
