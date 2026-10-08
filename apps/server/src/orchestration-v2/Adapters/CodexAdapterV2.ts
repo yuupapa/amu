@@ -161,7 +161,6 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "../SubagentProjection.ts";
-
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
 export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER_KIND);
@@ -1596,7 +1595,7 @@ export type CodexAdapterV2DriverEnv =
 
 export const createCodexAdapterV2 = (
   { instanceId, environment, enabled, config }: ProviderAdapterDriverCreateInput<CodexSettings>,
-  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime"> = {},
+  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime" | "threadSectionName"> = {},
 ) =>
   Effect.gen(function* () {
     const clientFactory = yield* CodexAppServerClientFactory;
@@ -1683,6 +1682,12 @@ export interface CodexAdapterV2Options {
   readonly environment: NodeJS.ProcessEnv;
   readonly clientFactory: CodexAppServerClientFactoryShape;
   readonly onUsageLimits?: ServerProviderShape["applyUsageLimits"];
+  /**
+   * Amu: files every thread this adapter starts or forks under the Codex
+   * thread section (a folder in the Codex app) with this name, creating it
+   * when missing. Omitted, threads stay where Codex puts them.
+   */
+  readonly threadSectionName?: string;
   /**
    * Resolves launch settings when each session opens, replacing `settings` and
    * `environment`. Managed ChatGPT sign-in uses it to launch the T3-installed
@@ -1798,6 +1803,56 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             yield* Ref.set(initialized, true);
           }),
         );
+        // Amu: threads this app starts are filed under one section, so the
+        // Codex app lists them in one folder instead of among the user's own
+        // threads. Best effort: a Codex without sections, or a failed call,
+        // leaves the thread where Codex put it.
+        const sectionName = adapterOptions.threadSectionName;
+        const sectionPermit = yield* Semaphore.make(1);
+        const sectionId = yield* Ref.make<string | null>(null);
+        const listSections = (cursor: string | null) =>
+          client.request("threadSection/list", cursor === null ? {} : { cursor });
+        const resolveSectionId = (name: string) =>
+          sectionPermit.withPermit(
+            Effect.gen(function* () {
+              const cached = yield* Ref.get(sectionId);
+              if (cached !== null) return cached;
+              let cursor: string | null = null;
+              let found: string | null = null;
+              do {
+                const page: {
+                  readonly data: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+                  readonly nextCursor?: string | null;
+                } = yield* listSections(cursor);
+                found = page.data.find((section) => section.name === name)?.id ?? null;
+                cursor = page.nextCursor ?? null;
+              } while (found === null && cursor !== null);
+              const id =
+                found ?? (yield* client.request("threadSection/create", { name })).section.id;
+              yield* Ref.set(sectionId, id);
+              return id;
+            }),
+          );
+        const fileUnderThreadSection = (nativeThreadId: string): Effect.Effect<void> =>
+          sectionName === undefined
+            ? Effect.void
+            : resolveSectionId(sectionName).pipe(
+                Effect.flatMap((id) =>
+                  client.request("thread/section/move", {
+                    threadId: nativeThreadId,
+                    sectionId: id,
+                  }),
+                ),
+                Effect.catchCause((cause) =>
+                  // The user may have deleted the section in the Codex app; look it up again next time.
+                  Ref.set(sectionId, null).pipe(
+                    Effect.andThen(
+                      Effect.logWarning("orchestration-v2.codex-thread-section-failed", { cause }),
+                    ),
+                  ),
+                ),
+                Effect.asVoid,
+              );
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,
@@ -6304,6 +6359,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   }),
                 ),
               ),
+              Effect.tap((response) => fileUnderThreadSection(response.thread.id)),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
                   appThreadId: threadInput.threadId,
@@ -7125,6 +7181,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     }),
                 ),
               );
+              yield* fileUnderThreadSection(response.thread.id);
               let forkedThread = response.thread;
               if (boundary.rollbackTurnCount > 0) {
                 // Reached only when the selected source turn has no native

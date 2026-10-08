@@ -76,6 +76,10 @@ reported accounts, refresh provider status, and confirm the second instance has
 its own shadow path and login. A shadow-home conflict usually means the directory
 contains a copied Codex setup. Use a fresh shadow directory and sign in again.
 
+## Amu の会話は Codex アプリの「Amu」フォルダーに入る
+
+Amu から始めた Codex の会話は、Codex アプリの一覧で「Amu」という名前のセクションにまとまります。Codex アプリで自分で始めた会話とは混ざりません。セクションを消しても、次に Amu で会話を始めたときにまた作ります。
+
 ## Answer questions while Codex works
 
 Codex can ask a question and keep working. Answer it in the thread's question

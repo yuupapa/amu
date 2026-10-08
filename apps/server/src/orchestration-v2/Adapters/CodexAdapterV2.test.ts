@@ -1745,6 +1745,7 @@ describe("CodexAdapterV2 session initialize", () => {
   const openReplaySession = (
     transcript: CodexReplay.CodexAppServerReplayTranscript,
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
+    threadSectionName?: string,
   ) =>
     Effect.gen(function* () {
       const driver = yield* CodexReplay.makeReplayDriver(
@@ -1786,6 +1787,7 @@ describe("CodexAdapterV2 session initialize", () => {
         fileSystem: yield* FileSystem.FileSystem,
         idAllocator: yield* IdAllocator.IdAllocatorV2,
         serverConfig: yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),
+        ...(threadSectionName === undefined ? {} : { threadSectionName }),
       });
       const runtime = yield* adapter.openSession({
         threadId: ThreadId.make(`thread-${transcript.scenario}`),
@@ -1847,6 +1849,96 @@ describe("CodexAdapterV2 session initialize", () => {
         providerThreads.map((providerThread) => providerThread.nativeThreadRef?.nativeId),
         ["concurrent-first", "concurrent-second"],
       );
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
+
+  it.effect("files started threads under the configured section, creating it once", () =>
+    Effect.gen(function* () {
+      const outbound = (
+        id: number,
+        method: string,
+        params: unknown,
+      ): CodexReplay.CodexAppServerReplayEntry => ({
+        type: "expect_outbound",
+        label: method,
+        frame: { id, method, params },
+      });
+      // Response shapes recorded from codex app-server 0.161.0.
+      const inbound = (
+        id: number,
+        label: string,
+        result: unknown,
+      ): CodexReplay.CodexAppServerReplayEntry => ({
+        type: "emit_inbound",
+        label,
+        frame: { id, result },
+      });
+      const session = yield* openReplaySession(
+        makeCodexReplayTranscript({
+          scenario: "thread-section",
+          entries: [
+            ...replayPreamble("section-first").slice(0, 5),
+            outbound(3, "threadSection/list", {}),
+            inbound(3, "threadSection/list", {
+              data: [{ id: "pinned", name: "Pinned", appearance: null }],
+              nextCursor: null,
+            }),
+            outbound(4, "threadSection/create", { name: "Amu" }),
+            inbound(4, "threadSection/create", {
+              section: { id: "amu-section", name: "Amu", appearance: null },
+            }),
+            outbound(5, "thread/section/move", {
+              threadId: "section-first",
+              sectionId: "amu-section",
+            }),
+            inbound(5, "thread/section/move", {}),
+            // The second thread reuses the section without looking it up again.
+            ...replayPreamble("section-second")
+              .slice(3, 5)
+              .map((entry) => withReplayRequestId(entry, 6)),
+            outbound(7, "thread/section/move", {
+              threadId: "section-second",
+              sectionId: "amu-section",
+            }),
+            inbound(7, "thread/section/move", {}),
+          ],
+        }),
+        undefined,
+        "Amu",
+      );
+
+      const first = yield* session.ensureThread("thread-section-first");
+      const second = yield* session.ensureThread("thread-section-second");
+      assert.equal(first.nativeThreadRef?.nativeId, "section-first");
+      assert.equal(second.nativeThreadRef?.nativeId, "section-second");
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
+
+  it.effect("starts the thread even when Codex cannot file it under a section", () =>
+    Effect.gen(function* () {
+      const session = yield* openReplaySession(
+        makeCodexReplayTranscript({
+          scenario: "thread-section-unsupported",
+          entries: [
+            ...replayPreamble("section-unsupported").slice(0, 5),
+            {
+              type: "expect_outbound",
+              label: "threadSection/list",
+              frame: { id: 3, method: "threadSection/list", params: {} },
+            },
+            {
+              type: "emit_inbound",
+              label: "threadSection/list",
+              frame: { id: 3, error: { code: -32601, message: "Method not found" } },
+            },
+          ],
+        }),
+        undefined,
+        "Amu",
+      );
+
+      const providerThread = yield* session.ensureThread("thread-section-unsupported");
+      assert.equal(providerThread.nativeThreadRef?.nativeId, "section-unsupported");
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );
 

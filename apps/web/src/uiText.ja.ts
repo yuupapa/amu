@@ -4104,6 +4104,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Split here": "ここに分割して開く",
   "Open to the right": "右に分割して開く",
   "Open below": "下に分割して開く",
+  "New thread to the right": "右に分割して新規スレッド",
+  "New thread below": "下に分割して新規スレッド",
   "Drop on the chat area to open it": "会話エリアに落とすと開きます",
   "Split right with {0}, down with {1}": "{0} で右に、{1} で下に分割できます",
   "Handing the conversation over to {0}": "{0} に引き継いでいます",

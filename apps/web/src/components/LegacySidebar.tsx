@@ -140,6 +140,16 @@ import {
   resolveThreadRouteTarget,
 } from "../threadRoutes";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import {
+  canOpenThreadInSplitPane,
+  commitThreadSplitDrop,
+  openThreadInSplitPane,
+  prepareNewThreadInSplitPane,
+  prepareNewThreadSplitDrop,
+} from "./SplitWorkspace";
+import { beginSplitPointerDrag } from "./splitPointerDrag";
+import type { SplitPlacement } from "../splitLayout.logic";
+import { uiText } from "~/uiText";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { Kbd } from "./ui/kbd";
 import {
@@ -251,6 +261,26 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
   repository_path: "Group by repository path",
   separate: "Keep separate",
 };
+/** Where a new thread opens instead of replacing the focused pane. */
+type NewThreadSplit =
+  | { kind: "beside"; placement: SplitPlacement }
+  | { kind: "drop"; point: { x: number; y: number } };
+
+/** How long the new-thread button is held before it can be dragged to the chat area. */
+const NEW_THREAD_HOLD_MS = 350;
+
+const NEW_THREAD_SPLIT_MENU_ITEMS: ReadonlyArray<ContextMenuItem<string>> = [
+  { id: "new-thread", label: "New thread", icon: "message-square-plus" },
+  { id: "new-thread-split-right", label: "New thread to the right", icon: "columns-2" },
+  { id: "new-thread-split-down", label: "New thread below", icon: "rows-2" },
+];
+
+function newThreadSplitForMenuId(id: string | null): NewThreadSplit | undefined {
+  if (id === "new-thread-split-right") return { kind: "beside", placement: "right" };
+  if (id === "new-thread-split-down") return { kind: "beside", placement: "bottom" };
+  return undefined;
+}
+
 const SIDEBAR_ICON_ACTION_BUTTON_CLASS =
   "inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-0.75 text-icon-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -702,6 +732,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     },
     [],
   );
+  // Dragging the row out over the chat area opens it in a split pane.
+  const handleRowPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const target = { kind: "server", threadRef } as const;
+      beginSplitPointerDrag(event, {
+        target,
+        onDrop: (point) => commitThreadSplitDrop(target, point),
+      });
+    },
+    [threadRef],
+  );
   const handleConfirmArchiveClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -761,6 +802,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           isFileDragOver && "ring-1 ring-inset ring-primary/70",
         )}
         onClick={handleRowClick}
+        onPointerDown={handleRowPointerDown}
         onDoubleClick={handleRowDoubleClick}
         onKeyDown={handleRowKeyDown}
         onContextMenu={handleRowContextMenu}
@@ -1730,6 +1772,130 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [memberThreadCountByPhysicalKey, removeProject],
   );
 
+  // `split` opens the new thread beside the focused pane, or where a held
+  // new-thread button was dropped, instead of replacing the focused pane.
+  const createThreadForProjectMember = useCallback(
+    (member: SidebarProjectGroupMember, split?: NewThreadSplit) => {
+      if (split !== undefined) {
+        const prepared =
+          split.kind === "beside"
+            ? prepareNewThreadInSplitPane(split.placement)
+            : prepareNewThreadSplitDrop(split.point);
+        if (!prepared) return;
+      }
+      if (isMobile) {
+        setOpenMobile(false);
+      }
+      void (async () => {
+        // No options: branch, worktree, and env mode come from the user's
+        // configured defaults, never from the currently viewed thread.
+        const result = await settlePromise(() =>
+          handleNewThread(scopeProjectRef(member.environmentId, member.id)),
+        );
+        if (result._tag === "Failure") {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not create thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [handleNewThread, isMobile, setOpenMobile],
+  );
+
+  /** Creates a thread in this project, asking which member when it groups several. */
+  const createThreadInProject = useCallback(
+    (position: { x: number; y: number }, split?: NewThreadSplit) => {
+      if (project.memberProjects.length === 1) {
+        createThreadForProjectMember(project.memberProjects[0]!, split);
+        return;
+      }
+
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) {
+          return;
+        }
+        const clickedResult = await settlePromise(() =>
+          api.contextMenu.show(
+            project.memberProjects.map((member) => ({
+              id: member.physicalProjectKey,
+              label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
+            })),
+            position,
+          ),
+        );
+        if (clickedResult._tag === "Failure") {
+          const error = squashAtomCommandFailure(clickedResult);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not choose environment",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+          return;
+        }
+        const clicked = clickedResult.value;
+        if (!clicked) {
+          return;
+        }
+        const targetMember = project.memberProjects.find(
+          (member) => member.physicalProjectKey === clicked,
+        );
+        if (!targetMember) {
+          return;
+        }
+        createThreadForProjectMember(targetMember, split);
+      })();
+    },
+    [createThreadForProjectMember, project.groupedProjectCount, project.memberProjects],
+  );
+
+  const handleCreateThreadClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      createThreadInProject({ x: event.clientX, y: event.clientY });
+    },
+    [createThreadInProject],
+  );
+
+  const handleCreateThreadContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const position = { x: event.clientX, y: event.clientY };
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) return;
+        const clicked = await api.contextMenu.show(NEW_THREAD_SPLIT_MENU_ITEMS, position);
+        const split = newThreadSplitForMenuId(clicked);
+        if (clicked === "new-thread" || split) createThreadInProject(position, split);
+      })();
+    },
+    [createThreadInProject],
+  );
+
+  // Holding the new-thread button picks it up; dropping it on the chat area
+  // opens the new thread there.
+  const handleCreateThreadPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      const position = { x: event.clientX, y: event.clientY };
+      beginSplitPointerDrag(event, {
+        target: null,
+        label: `${uiText("New thread")} · ${project.displayName}`,
+        holdMs: NEW_THREAD_HOLD_MS,
+        onDrop: (point) => createThreadInProject(position, { kind: "drop", point }),
+      });
+    },
+    [createThreadInProject, project.displayName],
+  );
+
   const handleProjectButtonContextMenu = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -1805,6 +1971,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           };
         };
 
+        for (const item of NEW_THREAD_SPLIT_MENU_ITEMS) {
+          const split = newThreadSplitForMenuId(item.id);
+          actionHandlers.set(item.id, () =>
+            createThreadInProject({ x: event.clientX, y: event.clientY }, split),
+          );
+        }
+
         actionHandlers.set("project-settings", () => {
           if (isMobile) setOpenMobile(false);
           void router.navigate({
@@ -1815,10 +1988,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const clicked = await api.contextMenu.show(
           [
-            buildTargetedItem("rename", "Rename", {
-              isDisabled: (member) =>
-                !readEnvironmentScope(member.environmentId, AuthOrchestrationOperateScope),
-            }),
+            ...NEW_THREAD_SPLIT_MENU_ITEMS,
+            {
+              ...buildTargetedItem("rename", "Rename", {
+                isDisabled: (member) =>
+                  !readEnvironmentScope(member.environmentId, AuthOrchestrationOperateScope),
+              }),
+              separatorBefore: true,
+            },
             buildTargetedItem("grouping", "Group into..."),
             buildTargetedItem("copy-path", "Copy Path"),
             { id: "project-settings", label: "Project settings", icon: "settings" },
@@ -1843,6 +2020,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
     [
       copyPathToClipboard,
+      createThreadInProject,
       handleRemoveProject,
       isMobile,
       openProjectGroupingDialog,
@@ -2093,86 +2271,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     ],
   );
 
-  const createThreadForProjectMember = useCallback(
-    (member: SidebarProjectGroupMember) => {
-      if (isMobile) {
-        setOpenMobile(false);
-      }
-      void (async () => {
-        // No options: branch, worktree, and env mode come from the user's
-        // configured defaults, never from the currently viewed thread.
-        const result = await settlePromise(() =>
-          handleNewThread(scopeProjectRef(member.environmentId, member.id)),
-        );
-        if (result._tag === "Failure") {
-          const error = squashAtomCommandFailure(result);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not create thread",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-        }
-      })();
-    },
-    [handleNewThread, isMobile, setOpenMobile],
-  );
-
-  const handleCreateThreadClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (project.memberProjects.length === 1) {
-        createThreadForProjectMember(project.memberProjects[0]!);
-        return;
-      }
-
-      void (async () => {
-        const api = readLocalApi();
-        if (!api) {
-          return;
-        }
-        const clickedResult = await settlePromise(() =>
-          api.contextMenu.show(
-            project.memberProjects.map((member) => ({
-              id: member.physicalProjectKey,
-              label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
-            })),
-            {
-              x: event.clientX,
-              y: event.clientY,
-            },
-          ),
-        );
-        if (clickedResult._tag === "Failure") {
-          const error = squashAtomCommandFailure(clickedResult);
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not choose environment",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-          return;
-        }
-        const clicked = clickedResult.value;
-        if (!clicked) {
-          return;
-        }
-        const targetMember = project.memberProjects.find(
-          (member) => member.physicalProjectKey === clicked,
-        );
-        if (!targetMember) {
-          return;
-        }
-        createThreadForProjectMember(targetMember);
-      })();
-    },
-    [createThreadForProjectMember, project.groupedProjectCount, project.memberProjects],
-  );
-
   const attemptArchiveThread = useCallback(
     async (threadRef: ScopedThreadRef) => {
       if (!checkTaskPermission(threadRef.environmentId)) return;
@@ -2348,6 +2446,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           ...(thread.branch
             ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
             : []),
+          {
+            id: "open-split-right",
+            label: "Open to the right",
+            icon: "columns-2",
+            disabled: !canOpenThreadInSplitPane(threadRef),
+          },
+          {
+            id: "open-split-down",
+            label: "Open below",
+            icon: "rows-2",
+            disabled: !canOpenThreadInSplitPane(threadRef),
+          },
           { id: "rename", label: "Rename thread", disabled: !canOperateThread },
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
@@ -2366,6 +2476,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         ],
         position,
       );
+
+      if (clicked === "open-split-right" || clicked === "open-split-down") {
+        openThreadInSplitPane(threadRef, clicked === "open-split-right" ? "right" : "bottom");
+        return;
+      }
 
       if (clicked === "project-settings") {
         if (isMobile) setOpenMobile(false);
@@ -2581,6 +2696,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   data-testid="new-thread-button"
                   className={SIDEBAR_ICON_ACTION_BUTTON_CLASS}
                   onClick={handleCreateThreadClick}
+                  onContextMenu={handleCreateThreadContextMenu}
+                  onPointerDown={handleCreateThreadPointerDown}
                 >
                   <SquarePenIcon className="size-3.5" />
                 </button>

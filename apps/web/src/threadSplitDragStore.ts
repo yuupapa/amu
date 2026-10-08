@@ -9,11 +9,18 @@ import { create } from "zustand";
 import type { ThreadRouteTarget } from "./threadRoutes";
 
 interface ThreadSplitDragStore {
+  /** Null when dragging a thread that does not exist yet (a held new-thread button). */
   target: ThreadRouteTarget | null;
+  /** Card title for a drag without a thread. */
+  label: string | null;
   point: { x: number; y: number } | null;
   /** True while the pointer is beside the sidebar list rather than over it. */
   outside: boolean;
-  start: (target: ThreadRouteTarget, getListBounds: () => DOMRect | null) => void;
+  start: (
+    target: ThreadRouteTarget | null,
+    getListBounds: () => DOMRect | null,
+    label?: string,
+  ) => void;
   end: () => void;
 }
 
@@ -21,9 +28,10 @@ let detachPointerListener: (() => void) | null = null;
 
 export const useThreadSplitDragStore = create<ThreadSplitDragStore>()((set) => ({
   target: null,
+  label: null,
   point: null,
   outside: false,
-  start: (target, getListBounds) => {
+  start: (target, getListBounds, label) => {
     detachPointerListener?.();
     const onPointerMove = (event: PointerEvent) => {
       const bounds = getListBounds();
@@ -33,11 +41,11 @@ export const useThreadSplitDragStore = create<ThreadSplitDragStore>()((set) => (
     };
     window.addEventListener("pointermove", onPointerMove, true);
     detachPointerListener = () => window.removeEventListener("pointermove", onPointerMove, true);
-    set({ target, point: null, outside: false });
+    set({ target, label: label ?? null, point: null, outside: false });
   },
   end: () => {
     detachPointerListener?.();
     detachPointerListener = null;
-    set({ target: null, point: null, outside: false });
+    set({ target: null, label: null, point: null, outside: false });
   },
 }));

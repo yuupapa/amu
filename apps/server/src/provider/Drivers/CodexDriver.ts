@@ -200,7 +200,11 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           enabled,
           config,
         },
-        { onUsageLimits: (update) => snapshot.applyUsageLimits(update) },
+        {
+          onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+          // Amu: keeps Amu's threads in one folder of the Codex app.
+          threadSectionName: "Amu",
+        },
       ).pipe(
         Effect.mapError(
           (cause) =>

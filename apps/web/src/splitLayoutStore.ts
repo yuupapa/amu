@@ -32,6 +32,13 @@ import type { ThreadRouteTarget } from "./threadRoutes";
 
 export const SPLIT_LAYOUT_STORAGE_KEY = "amu:split-layout:v1";
 
+const PENDING_PLACEMENT_MS = 5_000;
+let pendingRoutePlacement: {
+  paneId: string;
+  zone: SplitPlacement | "center";
+  expiresAt: number;
+} | null = null;
+
 function newPaneId(): string {
   return randomUUID();
 }
@@ -61,6 +68,13 @@ interface SplitLayoutStore {
   ) => boolean;
   /** Adds an empty pane next to the focused one. Returns false when full. */
   splitFocusedPane: (placement: SplitPlacement) => boolean;
+  /**
+   * The next thread the route opens lands at `zone` of `paneId` instead of
+   * replacing the focused pane. Set right before creating a new thread; it
+   * lapses after a few seconds so a creation that never navigates cannot
+   * redirect a later sidebar click.
+   */
+  placeNextRouteTarget: (paneId: string, zone: SplitPlacement | "center") => void;
   /** Makes the focused pane follow the route (sidebar clicks, new threads). */
   syncRouteTarget: (target: ThreadRouteTarget) => void;
   setPaneTarget: (paneId: string, target: ThreadRouteTarget | null) => void;
@@ -124,7 +138,15 @@ export const useSplitLayoutStore = create<SplitLayoutStore>()(
         set({ layout: next });
         return true;
       },
+      placeNextRouteTarget: (paneId, zone) => {
+        pendingRoutePlacement = { paneId, zone, expiresAt: Date.now() + PENDING_PLACEMENT_MS };
+      },
       syncRouteTarget: (target) => {
+        const pending = pendingRoutePlacement;
+        pendingRoutePlacement = null;
+        if (pending && pending.expiresAt > Date.now()) {
+          if (get().placeThread(target, pending.paneId, pending.zone)) return;
+        }
         const { layout } = get();
         const existing = findSplitPaneByTarget(layout, target);
         if (existing) {

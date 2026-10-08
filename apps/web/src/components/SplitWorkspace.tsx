@@ -476,6 +476,37 @@ export function commitThreadSplitDrop(
   return true;
 }
 
+/**
+ * Makes the next thread the route opens (a new thread about to be created)
+ * open beside the focused pane, or says why it cannot.
+ */
+export function prepareNewThreadInSplitPane(placement: SplitPlacement): boolean {
+  const { layout } = useSplitLayoutStore.getState();
+  if (countSplitPanes(layout) >= MAX_SPLIT_PANES) {
+    showSplitFullToast();
+    return false;
+  }
+  useSplitLayoutStore.getState().placeNextRouteTarget(layout.focusedPaneId, placement);
+  return true;
+}
+
+/**
+ * Like {@link commitThreadSplitDrop} for a thread not created yet: when the
+ * pointer ended over the chat area, the next thread the route opens lands
+ * there. Returns false when it ended elsewhere or the layout is full.
+ */
+export function prepareNewThreadSplitDrop(point: { x: number; y: number }): boolean {
+  const drop = resolveThreadSplitDrop(point);
+  if (!drop) return false;
+  const { layout } = useSplitLayoutStore.getState();
+  if (drop.zone !== "center" && countSplitPanes(layout) >= MAX_SPLIT_PANES) {
+    showSplitFullToast();
+    return false;
+  }
+  useSplitLayoutStore.getState().placeNextRouteTarget(drop.paneId, drop.zone);
+  return true;
+}
+
 function showSplitFullToast() {
   toastManager.add(
     stackedThreadToast({
@@ -489,11 +520,12 @@ function showSplitFullToast() {
 /** Highlights where a thread dragged from the sidebar would land. */
 export function SplitDropOverlay() {
   const target = useThreadSplitDragStore((state) => state.target);
+  const label = useThreadSplitDragStore((state) => state.label);
   const point = useThreadSplitDragStore((state) => state.point);
   const outside = useThreadSplitDragStore((state) => state.outside);
   const paneCount = useSplitLayoutStore((state) => countSplitPanes(state.layout));
   const shell = useThreadShell(target?.kind === "server" ? target.threadRef : null);
-  if (!target || !point || !outside) return null;
+  if ((!target && label === null) || !point || !outside) return null;
   const drop = resolveThreadSplitDrop(point);
   const blocked = drop !== null && drop.zone !== "center" && paneCount >= MAX_SPLIT_PANES;
   const hint =
@@ -513,7 +545,7 @@ export function SplitDropOverlay() {
       >
         {/* A saved title, shown as stored like in the sidebar, even when it reads "New thread". */}
         <div className="truncate text-xs font-medium" translate="no">
-          {shell?.title ?? ""}
+          {label ?? shell?.title ?? ""}
         </div>
         <div className={cn("text-2xs", blocked ? "text-destructive" : "text-muted-foreground")}>
           {hint}
