@@ -195,4 +195,7 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   "Usage: Open": "使用量：開く",
   "Usage: Period: Past 24h": "使用量：期間：過去 24 時間",
   "Usage: Tokens": "使用量：トークン",
+
+  // Grok sign-in from Settings → Providers (GrokAuth.ts)
+  "Install and sign in": "入れてログイン",
 };

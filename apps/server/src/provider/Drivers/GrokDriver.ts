@@ -1,8 +1,9 @@
-import { GrokSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { GrokSettings, ProviderDriverKind, ProviderSetupError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import { makeGrokAuth } from "../GrokAuth.ts";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
@@ -108,13 +109,20 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         driverKind: DRIVER_KIND,
         instanceId,
       });
-      const stampIdentity = withInstanceIdentity({
+      const stampInstanceIdentity = withInstanceIdentity({
         instanceId,
         driverKind: DRIVER_KIND,
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
       });
+      // Amu: Settings → Providers can install the CLI and sign in (GrokAuth.ts).
+      const stampIdentity: typeof stampInstanceIdentity = (draft) =>
+        stampInstanceIdentity({
+          ...draft,
+          setup: { canAuthenticate: true, canInstall: false },
+          auth: { ...draft.auth, canLogout: draft.auth.status === "authenticated" },
+        });
       const effectiveConfig = { ...config, enabled } satisfies GrokSettings;
       const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
         resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
@@ -198,6 +206,36 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
             }),
         ),
       );
+      const auth = yield* makeGrokAuth({
+        instanceId,
+        binaryPath: effectiveConfig.binaryPath,
+        environment: processEnv,
+        onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
+          snapshot.refresh.pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderSetupError({
+                  instanceId,
+                  operation: "verify",
+                  detail: "Grok の状態を確かめられませんでした。",
+                  cause,
+                }),
+            ),
+            Effect.flatMap((provider) =>
+              !signedIn || provider.auth.status === "authenticated"
+                ? Effect.void
+                : Effect.fail(
+                    new ProviderSetupError({
+                      instanceId,
+                      operation: "verify",
+                      detail:
+                        provider.message ??
+                        "Grok のログインを確かめられませんでした。もう一度押してください。",
+                    }),
+                  ),
+            ),
+          ),
+      });
       const snapshotForCwd = (workspaceCwd: string) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot
@@ -224,6 +262,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         displayName,
         accentColor,
         enabled,
+        auth: auth.controller,
         snapshot,
         snapshotForCwd,
         orchestrationAdapter,

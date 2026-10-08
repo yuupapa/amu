@@ -93,6 +93,8 @@ export function ProviderAuthenticationSection({
           : `Sign in on ${environmentLabel}.`;
   const statusMessage = auth?.phase === "failed" ? auth.message : null;
   const disabled = readOnly || pending || query.error !== null || isDiscovering;
+  // Amu: signing in to Grok installs its CLI first when it is missing (GrokAuth.ts).
+  const installsOnSignIn = provider.driver === "grok" && !provider.installed;
   const draftId = `${auth?.flowId ?? ""}:${interaction?.id ?? ""}`;
   const values = draft.id === draftId ? draft.values : {};
   const url =
@@ -276,7 +278,12 @@ export function ProviderAuthenticationSection({
               <Button
                 size="sm"
                 variant="outline"
-                disabled={disabled || !provider.enabled || !provider.installed || !auth}
+                disabled={
+                  disabled ||
+                  !provider.enabled ||
+                  (!provider.installed && !installsOnSignIn) ||
+                  !auth
+                }
                 onClick={() =>
                   void run(() =>
                     start({
@@ -291,11 +298,13 @@ export function ProviderAuthenticationSection({
                   )
                 }
               >
-                {signedIn
-                  ? "Change account"
-                  : auth?.phase === "failed" || auth?.phase === "cancelled"
-                    ? "Retry sign-in"
-                    : "Sign in"}
+                {installsOnSignIn
+                  ? "Install and sign in"
+                  : signedIn
+                    ? "Change account"
+                    : auth?.phase === "failed" || auth?.phase === "cancelled"
+                      ? "Retry sign-in"
+                      : "Sign in"}
               </Button>
             ) : null}
             {!active && signedIn && (provider.auth.canLogout ?? provider.setup?.canAuthenticate) ? (
