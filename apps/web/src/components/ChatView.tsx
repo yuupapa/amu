@@ -8799,7 +8799,12 @@ export default function ChatView(props: ChatViewProps) {
             activeProject,
             projects: readProjects(),
             // A thread listed under another project counts as that project's work.
-            threads: applyThreadFolders(readThreadShells(), currentThreadFolders(), readProjects()),
+            threads: applyThreadFolders(
+              readThreadShells(),
+              currentThreadFolders(),
+              readProjects(),
+              primaryEnvironment?.environmentId ?? null,
+            ),
             isScratch: isScratchForAutoFolder,
           })
         : null,

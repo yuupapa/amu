@@ -26,6 +26,8 @@ const PATH = "/api/amu/thread-folders";
 
 let entries: Entries = {};
 let loaded = false;
+/** Bumped by every save, so a read that started before it cannot undo it. */
+let saves = 0;
 const listeners = new Set<() => void>();
 const notify = () => {
   for (const listener of listeners) listener();
@@ -55,8 +57,11 @@ async function request(init?: { body: unknown }): Promise<Entries> {
 
 /** Reads the choices again (on start and when the window comes back to the front). */
 export async function refreshThreadFolders(): Promise<void> {
+  const savesAtStart = saves;
   try {
-    entries = await request();
+    const read = await request();
+    if (saves !== savesAtStart) return;
+    entries = read;
     loaded = true;
     notify();
   } catch {
@@ -66,7 +71,9 @@ export async function refreshThreadFolders(): Promise<void> {
 
 /** Lists `threadId` under `projectId`, or under its own project again with null. */
 export async function moveThreadInList(threadId: string, projectId: string | null): Promise<void> {
+  saves += 1;
   entries = await request({ body: { threadId, projectId } });
+  saves += 1;
   notify();
 }
 
@@ -99,21 +106,39 @@ type ThreadLike = {
 type ProjectLike = { readonly id: string; readonly environmentId: string };
 
 /**
- * The threads as the sidebar lists them: one with a chosen project shows
- * under it, when that project is still there on the same machine.
+ * The project a thread is listed under: the chosen one when it is still there
+ * on the same machine, else its own. The choices are this Mac's (the primary
+ * environment's), so threads of other machines are always listed as they are.
  */
+export function listedProjectIdLookup<P extends string>(
+  chosen: Entries,
+  projects: ReadonlyArray<{ readonly id: P; readonly environmentId: string }>,
+  primaryEnvironmentId: string | null,
+): (thread: { readonly id: string; readonly environmentId: string; readonly projectId: P }) => P {
+  if (Object.keys(chosen).length === 0 || primaryEnvironmentId === null)
+    return (thread) => thread.projectId;
+  const known = new Map<string, P>();
+  for (const project of projects)
+    if (project.environmentId === primaryEnvironmentId) known.set(project.id, project.id);
+  return (thread) => {
+    if (thread.environmentId !== primaryEnvironmentId) return thread.projectId;
+    const chosenId = chosen[thread.id];
+    return (chosenId !== undefined ? known.get(chosenId) : undefined) ?? thread.projectId;
+  };
+}
+
+/** The threads with the project they are listed under, for counting work (Auto's folders). */
 export function applyThreadFolders<T extends ThreadLike>(
   threads: ReadonlyArray<T>,
   chosen: Entries,
   projects: ReadonlyArray<ProjectLike>,
+  primaryEnvironmentId: string | null,
 ): ReadonlyArray<T> {
-  if (Object.keys(chosen).length === 0) return threads;
-  const known = new Set(projects.map((project) => `${project.environmentId}:${project.id}`));
+  const listed = listedProjectIdLookup<string>(chosen, projects, primaryEnvironmentId);
   let changed = false;
   const result = threads.map((thread) => {
-    const projectId = chosen[thread.id];
-    if (!projectId || projectId === thread.projectId) return thread;
-    if (!known.has(`${thread.environmentId}:${projectId}`)) return thread;
+    const projectId = listed(thread);
+    if (projectId === thread.projectId) return thread;
     changed = true;
     return { ...thread, projectId } as T;
   });

@@ -1,4 +1,6 @@
 import * as Mime from "effect/http/Mime";
+import * as ByteSize from "effect/ByteSize";
+import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -466,6 +468,20 @@ export const layerAssetRoute = HttpRouter.add(
   }),
 );
 
+/**
+ * Amu routes: the request body, read with a cap so an oversized (or chunked)
+ * body is refused while it is read, not after. Null when it is too large.
+ */
+const readCappedBody = (request: HttpServerRequest.HttpServerRequest, maxBytes: number) => {
+  const declared = Number(request.headers["content-length"] ?? "0");
+  if (Number.isFinite(declared) && declared > maxBytes) return Effect.succeed(null);
+  return request.text.pipe(
+    Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(maxBytes)),
+    Effect.map((text) => (Buffer.byteLength(text) > maxBytes ? null : text)),
+    Effect.orElseSucceed(() => null),
+  );
+};
+
 // Amu: Luna picks the model for the first request of a thread (docs/user/luna-auto.md).
 export type LunaAutoRouteOptions = {
   /** The connecting peer's address; the Host header alone can be set to anything. */
@@ -498,8 +514,8 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
               { error: "オートはこのMacのローカルのAmuで利用してください。" },
               { status: 403 },
             );
-          const body = yield* request.text;
-          if (Buffer.byteLength(body) > 64_000)
+          const body = yield* readCappedBody(request, 64_000);
+          if (body === null)
             return HttpServerResponse.jsonUnsafe(
               { error: "入力サイズが上限を超えています。" },
               { status: 400 },
@@ -667,8 +683,8 @@ export const makeCliReleaseNotesRouteLayer = (options: LunaAutoRouteOptions = {}
               { error: "このMacのローカルのAmuで利用してください。" },
               { status: 403 },
             );
-          const body = yield* request.text;
-          if (Buffer.byteLength(body) > 4_000)
+          const body = yield* readCappedBody(request, 4_000);
+          if (body === null)
             return HttpServerResponse.jsonUnsafe(
               { error: "入力が大きすぎます。" },
               { status: 400 },
@@ -748,8 +764,8 @@ export const layerThreadFoldersRoute = Layer.unwrap(
       Effect.gen(function* () {
         yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const body = yield* request.text;
-        if (Buffer.byteLength(body) > 4_000)
+        const body = yield* readCappedBody(request, 4_000);
+        if (body === null)
           return HttpServerResponse.jsonUnsafe({ error: "入力が大きすぎます。" }, { status: 400 });
         const data = yield* Schema.decodeEffect(
           Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),

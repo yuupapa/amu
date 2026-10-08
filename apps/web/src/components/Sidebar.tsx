@@ -288,7 +288,7 @@ import {
   useManualProjectGroups,
 } from "../amu/projectGroups";
 import { useScratchProject } from "../hooks/useScratchProject";
-import { applyThreadFolders, ThreadFolderDialog, useThreadFolders } from "../amu/threadFolders";
+import { listedProjectIdLookup, ThreadFolderDialog, useThreadFolders } from "../amu/threadFolders";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -322,8 +322,11 @@ const inboxReturns = createInboxReturnTracker();
 
 /** Amu: "一覧のフォルダーを変える…" right after the project items. */
 function withListFolderItem(
+  onThisMac: boolean,
   items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>>,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
+  // The choices are kept on this Mac, so only its own threads offer it.
+  if (!onThisMac) return items;
   const item: ContextMenuItem<ThreadActionMenuId> = {
     id: "amu-list-folder",
     label: "一覧のフォルダーを変える…",
@@ -1174,6 +1177,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
   project: EnvironmentProject | null;
+  /** Amu: the project the thread is listed under, for its icon (amu/threadFolders.tsx). */
+  listedProject?: EnvironmentProject | null;
   projectDisplayName: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   timestampFormat: TimestampFormat;
@@ -1864,7 +1869,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
               )}
             >
-              {props.project ? <ProjectFavicon project={props.project} className="size-4" /> : null}
+              {(props.listedProject ?? props.project) ? (
+                <ProjectFavicon
+                  project={(props.listedProject ?? props.project)!}
+                  className="size-4"
+                />
+              ) : null}
             </span>
             {draftIndicator}
             {title}
@@ -2023,8 +2033,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           <div className="relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}
-              {props.project ? (
-                <ProjectFavicon project={props.project} className="size-4 shrink-0" />
+              {(props.listedProject ?? props.project) ? (
+                <ProjectFavicon
+                  project={(props.listedProject ?? props.project)!}
+                  className="size-4 shrink-0"
+                />
               ) : null}
               {props.projectDisplayName ? (
                 <span
@@ -2253,6 +2266,8 @@ function latestRunDiff(
 const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   thread: SidebarThreadSummary;
   project: EnvironmentProject | null;
+  /** Amu: the project the thread is listed under, for its icon (amu/threadFolders.tsx). */
+  listedProject?: EnvironmentProject | null;
   projectDisplayName: string | null;
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
@@ -2364,8 +2379,11 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
             />
           }
         >
-          {props.project ? (
-            <ProjectFavicon project={props.project} className="size-4 shrink-0" />
+          {(props.listedProject ?? props.project) ? (
+            <ProjectFavicon
+              project={(props.listedProject ?? props.project)!}
+              className="size-4 shrink-0"
+            />
           ) : null}
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-2.5">
@@ -2413,12 +2431,14 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threadShells = useThreadShells();
+  const threads = useThreadShells();
+  const primaryEnvironmentIdForFolders = usePrimaryEnvironmentId();
   // Amu: a thread may be listed under another project (amu/threadFolders.tsx).
+  // Only the listing uses it; every action on the thread uses its own project.
   const threadFolders = useThreadFolders();
-  const threads = useMemo(
-    () => applyThreadFolders(threadShells, threadFolders, projects),
-    [projects, threadFolders, threadShells],
+  const listedProjectIdOf = useMemo(
+    () => listedProjectIdLookup(threadFolders, projects, primaryEnvironmentIdForFolders),
+    [primaryEnvironmentIdForFolders, projects, threadFolders],
   );
   const [threadFolderDialog, setThreadFolderDialog] = useState<{
     thread: { id: string; title: string; environmentId: string; ownProjectId: string };
@@ -2850,7 +2870,7 @@ export default function Sidebar() {
     const preciseNow = new Date().toISOString();
     // Subagent child threads live in the parent's Agents surface, not the
     // sidebar roster (v2 models them as real threads with lineage).
-    const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys);
+    const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys, listedProjectIdOf);
     inboxReturns.observe(workingShelfEnabled ? threads : null);
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
@@ -2951,6 +2971,7 @@ export default function Sidebar() {
       snoozeNow: preciseNow,
     };
   }, [
+    listedProjectIdOf,
     nowMinute,
     optimisticDrop,
     scopedProjectKeys,
@@ -4707,17 +4728,19 @@ export default function Sidebar() {
         const isPinned = thread.pinnedAt != null;
         // Presets resolve at menu-open time (same as the popover).
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
+        const listedProjectId = listedProjectIdOf(thread);
         const threadProjectGroup =
           projectGroupsRef.current.find((project) =>
             project.memberProjectRefs.some(
               (projectRef) =>
                 projectRef.environmentId === thread.environmentId &&
-                projectRef.projectId === thread.projectId,
+                projectRef.projectId === listedProjectId,
             ),
           ) ?? null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             withListFolderItem(
+              thread.environmentId === primaryEnvironmentIdForFolders,
               buildThreadActionMenuItems({
                 canOperate: readEnvironmentScope(
                   threadRef.environmentId,
@@ -4783,21 +4806,20 @@ export default function Sidebar() {
           case "project-settings":
             if (threadProjectGroup) openProjectSettings(threadProjectGroup);
             return;
-          case "amu-list-folder":
+          case "amu-list-folder": {
+            // The thread's own project as it is now, not as listed.
+            const own = readThreadShell(threadRef) ?? thread;
             setThreadFolderDialog({
               thread: {
-                id: thread.id,
-                title: thread.title,
-                environmentId: thread.environmentId,
-                ownProjectId:
-                  threadShells.find(
-                    (shell) =>
-                      shell.id === thread.id && shell.environmentId === thread.environmentId,
-                  )?.projectId ?? thread.projectId,
+                id: own.id,
+                title: own.title,
+                environmentId: own.environmentId,
+                ownProjectId: own.projectId,
               },
-              shownUnder: thread.projectId,
+              shownUnder: listedProjectIdOf(own),
             });
             return;
+          }
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
@@ -4960,6 +4982,7 @@ export default function Sidebar() {
       })();
     },
     [
+      listedProjectIdOf,
       archiveThread,
       attemptPin,
       attemptSettle,
@@ -5114,6 +5137,8 @@ export default function Sidebar() {
           projects={projects
             .filter(
               (project) =>
+                // Its own project stays a choice, also a no-project folder, to go back to it.
+                project.id === threadFolderDialog.thread.ownProjectId ||
                 !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
             )
             .map((project) => ({
@@ -5320,9 +5345,14 @@ export default function Sidebar() {
                         project={
                           projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
                         }
+                        listedProject={
+                          projectByKey.get(
+                            `${thread.environmentId}:${listedProjectIdOf(thread)}`,
+                          ) ?? null
+                        }
                         projectDisplayName={
                           projectDisplayNameByKey.get(
-                            `${thread.environmentId}:${thread.projectId}`,
+                            `${thread.environmentId}:${listedProjectIdOf(thread)}`,
                           ) ?? null
                         }
                         environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
@@ -5486,9 +5516,14 @@ export default function Sidebar() {
                               projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
                               null
                             }
+                            listedProject={
+                              projectByKey.get(
+                                `${thread.environmentId}:${listedProjectIdOf(thread)}`,
+                              ) ?? null
+                            }
                             projectDisplayName={
                               projectDisplayNameByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
+                                `${thread.environmentId}:${listedProjectIdOf(thread)}`,
                               ) ?? null
                             }
                             providerEntryByInstanceId={
