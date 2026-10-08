@@ -60,10 +60,19 @@ export function grokHomeFolder(environment: NodeJS.ProcessEnv): string {
   const folder = configured
     ? NodePath.resolve(home, configured.replace(/^~(?=$|\/)/u, home))
     : NodePath.join(home, ".grok");
-  try {
-    return NodeFS.realpathSync(folder);
-  } catch {
-    return folder;
+  // The nearest folder that exists is resolved, so the key is the same before
+  // and after the CLI creates the rest.
+  const missing: string[] = [];
+  let existing = folder;
+  for (;;) {
+    try {
+      return NodePath.join(NodeFS.realpathSync(existing), ...missing.reverse());
+    } catch {
+      const parent = NodePath.dirname(existing);
+      if (parent === existing) return folder;
+      missing.push(NodePath.basename(existing));
+      existing = parent;
+    }
   }
 }
 
@@ -85,7 +94,8 @@ export function findExecutable(command: string, environment: NodeJS.ProcessEnv):
   return null;
 }
 
-type Run = { code: number; output: string };
+/** `output` is stdout and stderr together, as shown; `stdout` alone is for reading results. */
+type Run = { code: number; output: string; stdout: string };
 
 /**
  * Runs a command in its own process group, passing its output along. A time
@@ -102,8 +112,9 @@ export function runCommand(input: {
 }) {
   return Effect.callback<Run, Error>((resume) => {
     let output = "";
+    let stdout = "";
     let closed = false;
-    const closedListeners = new Set<() => void>();
+    let stopping: Promise<void> | null = null;
     const child = NodeChildProcess.spawn(input.command, [...input.args], {
       env: input.environment,
       stdio: ["ignore", "pipe", "pipe"],
@@ -117,41 +128,60 @@ export function runCommand(input: {
         // Already gone.
       }
     };
-    const stop = () => {
-      signal("SIGTERM");
-      setTimeout(() => signal("SIGKILL"), STOP_GRACE_MS).unref();
+    /** Whether anything of the group is still running (a child can outlive the command). */
+    const groupAlive = () => {
+      if (child.pid === undefined) return !closed;
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
     };
+    /** TERM, then KILL after a moment; resolves once the whole group is gone. */
+    const stop = () =>
+      (stopping ??= new Promise<void>((done) => {
+        signal("SIGTERM");
+        const CHECK_MS = 50;
+        let waited = 0;
+        const check = () => {
+          if (!groupAlive()) return done();
+          waited += CHECK_MS;
+          if (waited >= STOP_GRACE_MS) signal("SIGKILL");
+          // KILL cannot be ignored; past this the group is a zombie at most.
+          if (waited >= STOP_GRACE_MS + 1_000) return done();
+          setTimeout(check, CHECK_MS).unref();
+        };
+        check();
+      }));
     const take = (data: Buffer) => {
       const chunk = data.toString("utf8");
       output = (output + chunk).slice(-TERMINAL_OUTPUT_MAX);
       input.onOutput?.(chunk, output);
     };
-    child.stdout.on("data", take);
+    child.stdout.on("data", (data: Buffer) => {
+      stdout = (stdout + data.toString("utf8")).slice(-TERMINAL_OUTPUT_MAX);
+      take(data);
+    });
     child.stderr.on("data", take);
-    const timer = setTimeout(stop, input.timeoutMs);
+    const timer = setTimeout(() => void stop(), input.timeoutMs);
     child.once("error", (cause) => {
       clearTimeout(timer);
       closed = true;
-      for (const listener of closedListeners) listener();
       resume(Effect.fail(cause));
     });
     child.once("close", (code) => {
       clearTimeout(timer);
       closed = true;
-      for (const listener of closedListeners) listener();
-      resume(Effect.succeed({ code: code ?? 1, output }));
+      // After a time limit, the result waits until the rest of the group is gone too.
+      void (stopping ?? Promise.resolve()).then(() =>
+        resume(Effect.succeed({ code: code ?? 1, output, stdout })),
+      );
     });
-    return Effect.promise(
-      () =>
-        new Promise<void>((done) => {
-          clearTimeout(timer);
-          if (closed) return done();
-          closedListeners.add(done);
-          stop();
-          // Gives up waiting a little after the kill; the group is gone by then.
-          setTimeout(done, STOP_GRACE_MS + 1_000).unref();
-        }),
-    );
+    return Effect.promise(() => {
+      clearTimeout(timer);
+      return stop();
+    });
   });
 }
 
@@ -182,8 +212,8 @@ export const makeGrokAuth = Effect.fn("makeGrokAuth")(function* (options: {
       timeoutMs: 30_000,
     }).pipe(
       Effect.map((prefix) =>
-        prefix.code === 0 && prefix.output.trim()
-          ? findExecutable(NodePath.join(prefix.output.trim(), "bin", "grok"), options.environment)
+        prefix.code === 0 && prefix.stdout.trim()
+          ? findExecutable(NodePath.join(prefix.stdout.trim(), "bin", "grok"), options.environment)
           : null,
       ),
       Effect.orElseSucceed(() => null),
@@ -218,12 +248,11 @@ export const makeGrokAuth = Effect.fn("makeGrokAuth")(function* (options: {
         outputOffset += text.length;
         transcript = (transcript + text).slice(-TERMINAL_OUTPUT_MAX);
         runFork(
-          context.setInteraction({
-            type: "terminal",
-            id: "install",
-            output: transcript,
-            outputOffset,
-          }),
+          context.setInteraction(
+            { type: "terminal", id: "install", output: transcript, outputOffset },
+            // Only shows npm's output: typing and the terminal's size are not used.
+            () => Effect.void,
+          ),
         );
       };
       show(`Grok Build CLI を入れています（${GROK_NPM_PACKAGE}）…\n\n`);

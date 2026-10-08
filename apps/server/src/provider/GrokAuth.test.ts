@@ -70,6 +70,14 @@ describe("grokHomeFolder", () => {
       expect(grokHomeFolder({ HOME: home, GROK_HOME: "~/other" })).toBe(
         NodePath.join(home, "other"),
       );
+      // A folder not created yet under a link names the same place as after.
+      NodeFS.mkdirSync(NodePath.join(home, "real"));
+      NodeFS.symlinkSync(NodePath.join(home, "real"), NodePath.join(home, "alias"));
+      const linked = { HOME: home, GROK_HOME: NodePath.join(home, "alias", "profile") };
+      const before = grokHomeFolder(linked);
+      NodeFS.mkdirSync(NodePath.join(home, "real", "profile"));
+      expect(before).toBe(NodePath.join(home, "real", "profile"));
+      expect(grokHomeFolder(linked)).toBe(before);
     } finally {
       NodeFS.rmSync(home, { recursive: true, force: true });
     }
@@ -109,6 +117,45 @@ describe("runCommand", () => {
     }
   });
 
+  it("waits until a child that ignores SIGTERM and left the output is gone", async () => {
+    const folder = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "grok-run-"));
+    const pidFile = NodePath.join(folder, "child.pid");
+    try {
+      const program = Effect.gen(function* () {
+        const fiber = yield* runCommand({
+          command: "/bin/sh",
+          args: [
+            "-c",
+            `(trap '' TERM; exec sleep 30) </dev/null >/dev/null 2>&1 & echo $! > ${pidFile}; wait`,
+          ],
+          environment: { PATH: "/usr/bin:/bin" },
+          timeoutMs: 60_000,
+        }).pipe(Effect.forkChild);
+        while (!NodeFS.existsSync(pidFile) || NodeFS.readFileSync(pidFile, "utf8").trim() === "")
+          yield* Effect.sleep("20 millis");
+        yield* Fiber.interrupt(fiber);
+      });
+      await Effect.runPromise(program);
+      const child = Number(NodeFS.readFileSync(pidFile, "utf8").trim());
+      expect(() => process.kill(child, 0)).toThrow();
+    } finally {
+      NodeFS.rmSync(folder, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  it("keeps stdout apart from warnings on stderr", async () => {
+    const result = await Effect.runPromise(
+      runCommand({
+        command: "/bin/sh",
+        args: ["-c", "echo 'npm warn something' >&2; echo /opt/prefix"],
+        environment: { PATH: "/usr/bin:/bin" },
+        timeoutMs: 10_000,
+      }),
+    );
+    expect(result.stdout.trim()).toBe("/opt/prefix");
+    expect(result.output).toContain("npm warn something");
+  });
+
   it("passes each new piece of output along with the latest text", async () => {
     const chunks: string[] = [];
     const result = await Effect.runPromise(
@@ -120,7 +167,7 @@ describe("runCommand", () => {
         onOutput: (chunk) => chunks.push(chunk),
       }),
     );
-    expect(result).toEqual({ code: 0, output: "onetwo" });
+    expect(result).toEqual({ code: 0, output: "onetwo", stdout: "onetwo" });
     expect(chunks.join("")).toBe("onetwo");
   });
 });

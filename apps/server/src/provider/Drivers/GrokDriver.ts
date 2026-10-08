@@ -117,12 +117,16 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       // Amu: Settings → Providers can install the CLI and sign in (GrokAuth.ts).
-      const stampIdentity: typeof stampInstanceIdentity = (draft) =>
-        stampInstanceIdentity({
+      // An XAI_API_KEY in the environment wins over the CLI's login, so with
+      // one there is nothing to sign in or out of here (as for Cursor).
+      const stampIdentity: typeof stampInstanceIdentity = (draft) => {
+        const cliLogin = draft.auth.type !== "api_key";
+        return stampInstanceIdentity({
           ...draft,
-          setup: { canAuthenticate: true, canInstall: false },
-          auth: { ...draft.auth, canLogout: draft.auth.status === "authenticated" },
+          setup: { canAuthenticate: cliLogin, canInstall: false },
+          auth: { ...draft.auth, canLogout: cliLogin && draft.auth.status === "authenticated" },
         });
+      };
       const effectiveConfig = { ...config, enabled } satisfies GrokSettings;
       const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
         resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
