@@ -15,7 +15,10 @@ import {
   type ComposerHandleRef,
   useComposerHandleContext,
 } from "../composerHandleContext";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "../workspaceTitlebar";
+import {
+  COLLAPSED_SIDEBAR_TITLEBAR_HEIGHT_CLASS,
+  COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+} from "../workspaceTitlebar";
 import { ThreadRouteView } from "./ThreadRouteView";
 import { SidebarInset } from "./ui/sidebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -245,6 +248,7 @@ function SplitPane(props: {
           parentDirection={props.parentDirection}
           // The window's top-left corner holds the sidebar toggle (and the
           // traffic lights) when the sidebar is collapsed.
+          atWindowTop={props.rect.top === 0}
           atWindowTopLeft={props.rect.left === 0 && props.rect.top === 0}
         />
         <div className="relative min-h-0 flex-1">
@@ -313,6 +317,7 @@ function SplitPaneHeader(props: {
   target: ThreadRouteTarget | null;
   focused: boolean;
   parentDirection: "row" | "column" | null;
+  atWindowTop: boolean;
   atWindowTopLeft: boolean;
 }) {
   const shell = useThreadShell(props.target?.kind === "server" ? props.target.threadRef : null);
@@ -334,6 +339,7 @@ function SplitPaneHeader(props: {
       className={cn(
         "flex h-7 shrink-0 items-center gap-1 border-b px-2 text-xs",
         props.focused ? "bg-accent/60 text-foreground" : "text-muted-foreground",
+        props.atWindowTop && COLLAPSED_SIDEBAR_TITLEBAR_HEIGHT_CLASS,
         props.atWindowTopLeft && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
       )}
     >
