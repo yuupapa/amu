@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { ScopedProjectRef } from "@t3tools/contracts";
 
 import { Button } from "../components/ui/button";
 import {
@@ -13,6 +14,8 @@ import {
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 import { resolvePrimaryEnvironmentHttpUrl } from "../environments/primary/target";
 import { cn } from "../lib/utils";
+import { useProjects, useThreadShells } from "../state/entities";
+import { usePrimaryEnvironmentId } from "../state/environments";
 
 /**
  * Amu: show a thread under another project in the sidebar (docs/user/thread-sidebar.md).
@@ -139,6 +142,32 @@ export function listedProjectIdLookup<P extends string>(
     const chosenId = chosen[thread.id];
     return (chosenId !== undefined ? known.get(chosenId) : undefined) ?? thread.projectId;
   };
+}
+
+/** listedProjectIdLookup for this client's projects and choices. */
+export function useListedProjectIdOf() {
+  const chosen = useThreadFolders();
+  const projects = useProjects();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  return useMemo(
+    () => listedProjectIdLookup(chosen, projects, primaryEnvironmentId),
+    [chosen, primaryEnvironmentId, projects],
+  );
+}
+
+/** The threads listed under these projects (the project-tree sidebar's rows). */
+export function useListedThreadShells(refs: ReadonlyArray<ScopedProjectRef>) {
+  const threads = useThreadShells();
+  const listedProjectIdOf = useListedProjectIdOf();
+  const keys = useMemo(
+    () => new Set(refs.map((ref) => `${ref.environmentId}:${ref.projectId}`)),
+    [refs],
+  );
+  return useMemo(
+    () =>
+      threads.filter((thread) => keys.has(`${thread.environmentId}:${listedProjectIdOf(thread)}`)),
+    [keys, listedProjectIdOf, threads],
+  );
 }
 
 /** The threads with the project they are listed under, for counting work (Auto's folders). */

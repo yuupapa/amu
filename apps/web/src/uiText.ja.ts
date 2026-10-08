@@ -246,7 +246,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Open source licenses": "オープンソースライセンス",
   "Plan mode (legacy)": "計画モード（旧設定）",
   "Context window indicator (legacy)": "コンテキスト表示（旧設定）",
-  "Sidebar (legacy)": "サイドバー（旧設定）",
+  "Sidebar (legacy)": "プロジェクトごとの一覧",
   "Include app text": "アプリ内の文字を含める",
   "Capture shortcut": "キャプチャのショートカット",
   "Capture sound": "キャプチャ音",
@@ -1097,7 +1097,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Shows context window usage as a circular indicator in the composer.":
     "入力欄にコンテキスト使用量を円形の指標で表示します。",
   "Restore per-project thread trees instead of the default flat sidebar.":
-    "プロジェクトごとにスレッドをまとめる以前のサイドバー表示を使います。",
+    "左の一覧を、プロジェクトごとのフォルダーにまとめて表示します。オフにすると、すべての会話を新しい順に並べます。",
   Organization: "整理",
   "Combine matching repositories across environments.":
     "複数の環境にある同じリポジトリをまとめて表示します。",

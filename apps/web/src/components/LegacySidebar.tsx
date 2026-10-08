@@ -90,11 +90,19 @@ import { isMacPlatform } from "../lib/utils";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import {
+  readProject,
   readThreadShell,
   useProjects,
   useThreadShells,
   useThreadShellsForProjectRefs,
 } from "../state/entities";
+import {
+  ThreadFolderDialog,
+  useListedProjectIdOf,
+  useListedThreadShells,
+} from "../amu/threadFolders";
+import { useScratchProject } from "../hooks/useScratchProject";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useThreadDiscoveredPorts } from "../portDiscoveryState";
@@ -1281,7 +1289,20 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
   });
   const openPrLink = useOpenPrLink();
-  const sidebarThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
+  // Amu: the rows are the threads listed under this project (amu/threadFolders.tsx);
+  // removing the project still counts and clears the threads that work in it.
+  const ownThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
+  const ownThreadsRef = useRef(ownThreads);
+  ownThreadsRef.current = ownThreads;
+  const sidebarThreads = useListedThreadShells(project.memberProjectRefs);
+  const [threadFolderDialog, setThreadFolderDialog] = useState<{
+    thread: { id: string; title: string; environmentId: string; ownProjectId: string };
+    shownUnder: string;
+  } | null>(null);
+  const listedProjectIdOf = useListedProjectIdOf();
+  const allProjectsForFolders = useProjects();
+  const primaryEnvironmentIdForFolders = usePrimaryEnvironmentId();
+  const { scratchWorkspaceRootFor } = useScratchProject();
   const sidebarThreadByKey = useMemo(
     () =>
       new Map(
@@ -1345,7 +1366,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     const counts = new Map<string, number>(
       project.memberProjects.map((member) => [member.physicalProjectKey, 0] as const),
     );
-    for (const thread of projectThreads) {
+    for (const thread of ownThreads) {
       const member = memberProjectByScopedKey.get(
         scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
       );
@@ -1355,7 +1376,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       counts.set(member.physicalProjectKey, (counts.get(member.physicalProjectKey) ?? 0) + 1);
     }
     return counts;
-  }, [memberProjectByScopedKey, project.memberProjects, projectThreads]);
+  }, [memberProjectByScopedKey, project.memberProjects, ownThreads]);
 
   const { projectStatus, visibleProjectThreads, orderedProjectThreadKeys } = useMemo(() => {
     const lastVisitedAtByThreadKey = new Map(
@@ -1563,7 +1584,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const draftStore = useComposerDraftStore.getState();
       releaseProjectDraftUploads(
         memberProjectRef,
-        sidebarThreads
+        ownThreadsRef.current
           .filter(
             (thread) =>
               thread.environmentId === member.environmentId && thread.projectId === member.id,
@@ -1577,7 +1598,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       draftStore.clearProjectDraftThreadId(memberProjectRef);
       return result;
     },
-    [deleteProject, sidebarThreads],
+    [deleteProject],
   );
 
   const handleRemoveProject = useCallback(
@@ -1607,9 +1628,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   });
                   if (!checkTaskPermission(member.environmentId)) return;
 
-                  const latestProjectThreads = Array.from(
-                    sidebarThreadByKeyRef.current.values(),
-                  ).filter(
+                  const latestProjectThreads = ownThreadsRef.current.filter(
                     (thread) =>
                       thread.environmentId === memberProjectRef.environmentId &&
                       thread.projectId === memberProjectRef.projectId,
@@ -2316,11 +2335,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       const threadKey = scopedThreadKey(threadRef);
       const thread = sidebarThreadByKeyRef.current.get(threadKey) ?? null;
       if (!thread) return;
-      const threadProject = memberProjectByScopedKey.get(
-        scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-      );
-      const threadWorkspacePath =
-        thread.worktreePath ?? threadProject?.workspaceRoot ?? project.workspaceRoot ?? null;
+      // The thread's own project, also when it is listed under this one.
+      const threadProject =
+        memberProjectByScopedKey.get(
+          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+        ) ?? readProject(scopeProjectRef(thread.environmentId, thread.projectId));
+      const threadWorkspacePath = thread.worktreePath ?? threadProject?.workspaceRoot ?? null;
       const canOperateThread = readEnvironmentScope(
         thread.environmentId,
         AuthOrchestrationOperateScope,
@@ -2335,6 +2355,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "project-settings", label: "Project settings" },
+          ...(thread.environmentId === primaryEnvironmentIdForFolders
+            ? [{ id: "amu-list-folder", label: "一覧のフォルダーを変える…", icon: "folder" }]
+            : []),
           {
             id: "delete",
             label: "Delete",
@@ -2351,6 +2374,20 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         void router.navigate({
           to: "/projects/$projectKey",
           params: { projectKey: project.projectKey },
+        });
+        return;
+      }
+
+      if (clicked === "amu-list-folder") {
+        const own = readThreadShell(threadRef) ?? thread;
+        setThreadFolderDialog({
+          thread: {
+            id: own.id,
+            title: own.title,
+            environmentId: own.environmentId,
+            ownProjectId: own.projectId,
+          },
+          shownUnder: listedProjectIdOf(own),
         });
         return;
       }
@@ -2434,6 +2471,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
     },
     [
+      listedProjectIdOf,
+      primaryEnvironmentIdForFolders,
       appSettingsConfirmThreadDelete,
       copyPathToClipboard,
       copyThreadIdToClipboard,
@@ -2719,6 +2758,26 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogFooter>
         </DialogPopup>
       </Dialog>
+      {threadFolderDialog ? (
+        <ThreadFolderDialog
+          key={`${threadFolderDialog.thread.environmentId}:${threadFolderDialog.thread.id}`}
+          thread={threadFolderDialog.thread}
+          shownUnder={threadFolderDialog.shownUnder}
+          projects={allProjectsForFolders
+            .filter(
+              (candidate) =>
+                candidate.id === threadFolderDialog.thread.ownProjectId ||
+                !isScratchProject(candidate, scratchWorkspaceRootFor(candidate.environmentId)),
+            )
+            .map((candidate) => ({
+              id: candidate.id,
+              environmentId: candidate.environmentId,
+              name: candidate.title,
+              workspaceRoot: candidate.workspaceRoot,
+            }))}
+          onClose={() => setThreadFolderDialog(null)}
+        />
+      ) : null}
     </>
   );
 });
@@ -3230,6 +3289,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 export default function LegacySidebar() {
   const projects = useProjects();
   const sidebarThreads = useThreadShells();
+  // Amu: group and sort threads by the project they are listed under.
+  const listedProjectIdOf = useListedProjectIdOf();
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
@@ -3390,10 +3451,11 @@ export default function LegacySidebar() {
   const threadsByProjectKey = useMemo(() => {
     const next = new Map<string, SidebarThreadSummary[]>();
     for (const thread of sidebarThreads) {
+      const listedProjectId = listedProjectIdOf(thread);
       const physicalKey =
         projectPhysicalKeyByScopedRef.get(
-          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-        ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+          scopedProjectKey(scopeProjectRef(thread.environmentId, listedProjectId)),
+        ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, listedProjectId));
       const logicalKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
       const existing = next.get(logicalKey);
       if (existing) {
@@ -3403,7 +3465,7 @@ export default function LegacySidebar() {
       }
     }
     return next;
-  }, [sidebarThreads, physicalToLogicalKey, projectPhysicalKeyByScopedRef]);
+  }, [listedProjectIdOf, sidebarThreads, physicalToLogicalKey, projectPhysicalKeyByScopedRef]);
   const getCurrentSidebarShortcutContext = useCallback(
     () => ({
       terminalFocus: isTerminalFocused(),
@@ -3521,10 +3583,11 @@ export default function LegacySidebar() {
       id: project.projectKey,
     }));
     const sortableThreads = visibleThreads.map((thread) => {
+      const listedProjectId = listedProjectIdOf(thread);
       const physicalKey =
         projectPhysicalKeyByScopedRef.get(
-          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-        ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+          scopedProjectKey(scopeProjectRef(thread.environmentId, listedProjectId)),
+        ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, listedProjectId));
       return {
         ...thread,
         projectId: (physicalToLogicalKey.get(physicalKey) ?? physicalKey) as ProjectId,
@@ -3539,6 +3602,7 @@ export default function LegacySidebar() {
       return resolvedProject ? [resolvedProject] : [];
     });
   }, [
+    listedProjectIdOf,
     sidebarProjectSortOrder,
     physicalToLogicalKey,
     projectPhysicalKeyByScopedRef,
