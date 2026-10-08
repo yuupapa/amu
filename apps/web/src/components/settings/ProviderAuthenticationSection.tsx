@@ -79,11 +79,14 @@ export function ProviderAuthenticationSection({
       ? "Starting sign-in…"
       : auth?.phase === "verifying"
         ? "Checking your account…"
-        : interaction?.type === "terminal"
-          ? "Complete sign-in in the terminal below."
-          : interaction?.type === "credentials"
-            ? "Enter your credentials below."
-            : "Finish signing in in your browser."
+        : interaction?.type === "terminal" && provider.driver === "grok"
+          ? // Amu: Grok's terminal only shows npm installing the CLI (GrokAuth.ts).
+            "Installing the Grok Build CLI…"
+          : interaction?.type === "terminal"
+            ? "Complete sign-in in the terminal below."
+            : interaction?.type === "credentials"
+              ? "Enter your credentials below."
+              : "Finish signing in in your browser."
     : signedIn
       ? "Signed in."
       : isDiscovering

@@ -220,6 +220,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
             instanceId,
             binaryPath: effectiveConfig.binaryPath,
             environment: processEnv,
+            onInstalled: snapshot.refresh.pipe(Effect.ignore),
             onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
               snapshot.refresh.pipe(
                 Effect.mapError(

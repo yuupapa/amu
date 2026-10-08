@@ -192,6 +192,8 @@ export const makeGrokAuth = Effect.fn("makeGrokAuth")(function* (options: {
   readonly environment: NodeJS.ProcessEnv;
   /** After signing in or out: refresh the provider so the app sees the change. */
   readonly onChanged: (signedIn: boolean) => Effect.Effect<void, ProviderSetupError>;
+  /** After installing the CLI: refresh the provider, so it shows as installed even if sign-in stops here. */
+  readonly onInstalled: Effect.Effect<void>;
 }) {
   const failure = (operation: string, detail: string, cause?: unknown) =>
     new ProviderSetupError({
@@ -273,7 +275,10 @@ export const makeGrokAuth = Effect.fn("makeGrokAuth")(function* (options: {
           "Grok Build CLI を入れられませんでした。ターミナルで npm install -g @xai-official/grok を試してください。",
         );
       const found = grokCommand();
-      if (found) return found;
+      if (found) {
+        yield* options.onInstalled;
+        return found;
+      }
       const fromPrefix = yield* grokInNpmPrefix(npm);
       return yield* fromPrefix
         ? notOnPath(fromPrefix)

@@ -198,4 +198,15 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
 
   // Grok sign-in from Settings → Providers (GrokAuth.ts)
   "Install and sign in": "入れてログイン",
+  Account: "アカウント",
+  "Retry sign-in": "もう一度ログイン",
+  "Starting sign-in…": "ログインを始めています…",
+  "Checking your account…": "アカウントを確かめています…",
+  "Installing the Grok Build CLI…": "Grok Build CLI を入れています…",
+  "Complete sign-in in the terminal below.": "下のターミナルでログインを完了してください。",
+  "Signed in.": "ログインしています。",
+  "Open browser": "ブラウザーで開く",
+  // "Enter code <code> in your browser." is three text nodes.
+  "Enter code": "ブラウザーでコード",
+  "in your browser.": "を入力します。",
 };
