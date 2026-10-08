@@ -833,8 +833,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      user. Bundled faces load on demand from themeFonts.css (themePalette.ts). */
   html[data-theme-id="amu"] {
     --font-sans:
-      "Zen Maru Gothic", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui,
-      sans-serif !important;
+      "Zen Maru Gothic", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", Meiryo,
+      "Segoe UI", system-ui, sans-serif !important;
     --font-display: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", sans-serif;
     --stage-art-top: #2f8f80;
     --stage-art-mid: #1f6f66;
@@ -859,8 +859,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      row and send button lives unlayered at the end of this file. */
   html[data-theme-id="amu-cyber"] {
     --font-sans:
-      "JetBrains Mono", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui,
-      sans-serif !important;
+      "JetBrains Mono", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", Meiryo,
+      "Segoe UI", system-ui, sans-serif !important;
     --font-display: "JetBrains Mono", ui-monospace, monospace;
     --font-label: "JetBrains Mono", ui-monospace, monospace;
     --display-tracking: 0.02em;
