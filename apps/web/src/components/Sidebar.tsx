@@ -279,6 +279,14 @@ import {
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
+import {
+  AMU_GROUP_SCOPE_PREFIX,
+  AmuProjectGroupBar,
+  buildAmuProjectGroups,
+  useManualProjectGroups,
+} from "../amu/projectGroups";
+import { useScratchProject } from "../hooks/useScratchProject";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { MiddleTruncate } from "./ui/middle-truncate";
@@ -2593,17 +2601,45 @@ export default function Sidebar() {
   // app restarts keep it.
   const projectScopeKey = useUiStateStore((store) => store.sidebarProjectScopeKey);
   const setProjectScopeKey = useUiStateStore((store) => store.setSidebarProjectScopeKey);
+  // Amu: groups of projects (amu/projectGroups.tsx) share the project filter.
+  const { scratchWorkspaceRootFor } = useScratchProject();
+  const manualProjectGroups = useManualProjectGroups();
+  const amuGroupableProjects = useMemo(
+    () =>
+      projectGroups
+        .filter(
+          (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
+        )
+        .map((project) => ({
+          projectKey: project.projectKey,
+          displayName: project.displayName,
+          workspaceRoot: project.workspaceRoot,
+        })),
+    [projectGroups, scratchWorkspaceRootFor],
+  );
+  const amuProjectGroups = useMemo(
+    () => buildAmuProjectGroups(amuGroupableProjects, manualProjectGroups),
+    [amuGroupableProjects, manualProjectGroups],
+  );
+  const scopedAmuGroup = useMemo(
+    () =>
+      projectScopeKey?.startsWith(AMU_GROUP_SCOPE_PREFIX)
+        ? (amuProjectGroups.find((group) => group.scopeKey === projectScopeKey) ?? null)
+        : null,
+    [amuProjectGroups, projectScopeKey],
+  );
   // {value, label} items let Base UI drive the combobox selection contract
   // while the popup search filters the same collection.
   const projectScopeItems = useMemo(
     () => [
       { value: "all", label: "All projects" },
+      ...amuProjectGroups.map((group) => ({ value: group.scopeKey, label: group.name })),
       ...projectGroups.map((project) => ({
         value: project.projectKey,
         label: project.displayName,
       })),
     ],
-    [projectGroups],
+    [amuProjectGroups, projectGroups],
   );
   // Same-named projects on two machines are only told apart by where they
   // live, so rows on another machine carry its icon once the catalog spans
@@ -2650,26 +2686,43 @@ export default function Sidebar() {
         : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
     [projectGroups, projectScopeKey],
   );
-  const scopedProjectKeys = useMemo(
-    () =>
-      scopedProjectGroup === null
-        ? null
-        : new Set(
-            scopedProjectGroup.memberProjectRefs.map(
+  const scopedProjectKeys = useMemo(() => {
+    const members =
+      scopedAmuGroup !== null
+        ? projectGroups.filter((project) => scopedAmuGroup.projectKeys.includes(project.projectKey))
+        : scopedProjectGroup !== null
+          ? [scopedProjectGroup]
+          : null;
+    return members === null
+      ? null
+      : new Set(
+          members.flatMap((project) =>
+            project.memberProjectRefs.map(
               (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
             ),
           ),
-    [scopedProjectGroup],
-  );
+        );
+  }, [projectGroups, scopedAmuGroup, scopedProjectGroup]);
   // A persisted scope whose project is gone falls back to all projects, but
   // only after every catalog environment has a live project snapshot. Cached
   // or disconnected environments cannot establish that the project is gone.
   const allProjectSnapshotsReady = useAllEnvironmentProjectSnapshotsReady();
   useEffect(() => {
-    if (projectScopeKey !== null && allProjectSnapshotsReady && scopedProjectGroup === null) {
+    if (
+      projectScopeKey !== null &&
+      allProjectSnapshotsReady &&
+      scopedProjectGroup === null &&
+      scopedAmuGroup === null
+    ) {
       setProjectScopeKey(null);
     }
-  }, [allProjectSnapshotsReady, projectScopeKey, scopedProjectGroup, setProjectScopeKey]);
+  }, [
+    allProjectSnapshotsReady,
+    projectScopeKey,
+    scopedAmuGroup,
+    scopedProjectGroup,
+    setProjectScopeKey,
+  ]);
   // Count-only subscription: the parent needs "are there draft rows" for the
   // empty state, while SidebarDraftBlock owns the per-keystroke content
   // subscription. Selecting a number keeps typing in a draft composer from
@@ -5168,6 +5221,12 @@ export default function Sidebar() {
               searchResultCount={threadSearchResults.length}
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
+            />
+            <AmuProjectGroupBar
+              groups={amuProjectGroups}
+              projects={amuGroupableProjects}
+              scopeKey={projectScopeKey}
+              onScopeChange={setProjectScopeKey}
             />
           </SidebarGroup>
         }

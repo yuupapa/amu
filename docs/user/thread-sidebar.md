@@ -43,6 +43,15 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+## プロジェクトのグループ（Amu）
+
+検索欄の下に「すべて」とグループの丸いボタンが並びます。グループを押すと、そのグループに入っているプロジェクトの会話だけが一覧に出ます。「すべて」で元に戻ります。プロジェクトの絞り込みメニュー（検索欄の右のフォルダーのボタン）にも、同じグループが出ます。
+
+- **自動のグループ**: 同じ親フォルダーにあるプロジェクトが 2 つ以上あると、そのフォルダーの名前でグループができます。日付だけのフォルダー（Codex の `~/Documents/Codex/2026-10-01/…` など）や、「Documents」「共有ドライブ」のような一般的な名前のフォルダーは飛ばして、その上のフォルダーの名前を使います。
+- **手で作るグループ**: 「＋」を押すと、名前を付けてプロジェクトを選べます。グループのボタンを右クリックすると、名前とプロジェクトを変えたり、グループを解いたりできます。自動のグループを右クリックして保存すると、手で作ったグループとして残ります。1 つのプロジェクトが入れる手作りのグループは 1 つだけで、手作りのグループに入れたプロジェクトは自動のグループから外れます。
+
+グループはこのアプリの中に保存します。ほかの端末やブラウザーとは共有しません。オートが作業フォルダーを選んで新しいプロジェクトを足すと（[オートでモデルを選ぶ](./luna-auto.md#作業フォルダーも選ぶ)）、同じ親フォルダーのプロジェクトと自動でまとまります。
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
