@@ -648,4 +648,18 @@ describe("MCP market fixes from review round 1", () => {
     expect(await adding).toContain("取りやめ");
     expect(market.store.server("context7")).toBeUndefined();
   });
+
+  it("lets one conversation open its servers at the same time", async () => {
+    await connectLinear();
+    await market.connect("context7");
+    const servers = market.serversForSession({ ...session("together"), driver: "codex" });
+    expect(servers.length).toBe(2);
+    // Six requests at once over two servers from one credential.
+    const results = await Promise.all(
+      [...servers, ...servers, ...servers].map((server, id) =>
+        call(server.url, server.authorizationHeader, { jsonrpc: "2.0", id, method: "tools/list" }),
+      ),
+    );
+    expect(results.every((result) => result.status !== 429)).toBe(true);
+  });
 });

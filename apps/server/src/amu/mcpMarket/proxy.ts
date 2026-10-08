@@ -43,8 +43,14 @@ export interface ProxyHooks {
 }
 
 const MAX_BODY_BYTES = 4_000_000;
-const MAX_STREAMS_PER_SERVER = 8;
-const MAX_STREAMS_PER_CREDENTIAL = 4;
+/**
+ * Open upstream requests: per server across every conversation, and per
+ * conversation for one server. One credential covers all of a conversation's
+ * servers, and an AI opens several at once when its session starts (a stream
+ * and an initialize per server), so the conversation limit is per server.
+ */
+const MAX_STREAMS_PER_SERVER = 32;
+const MAX_STREAMS_PER_SESSION_SERVER = 6;
 /** While restricted, only these may go through; tools/call never. */
 const RESTRICTED_METHODS = new Set(["initialize", "ping", "tools/list"]);
 const REQUEST_HEADERS = ["content-type", "accept", "mcp-protocol-version", "last-event-id"];
@@ -231,7 +237,7 @@ export class McpMarketProxy {
     if (
       this.streamCount((streamKey) => streamKey.endsWith(`:${serverId}`)) >=
         MAX_STREAMS_PER_SERVER ||
-      this.streamCount((streamKey) => streamKey.startsWith(`${key}:`)) >= MAX_STREAMS_PER_CREDENTIAL
+      this.streamCount((streamKey) => streamKey === sessionKey) >= MAX_STREAMS_PER_SESSION_SERVER
     ) {
       answer("同時に開いている接続が多すぎます。少し待ってください。", 429);
       return;
