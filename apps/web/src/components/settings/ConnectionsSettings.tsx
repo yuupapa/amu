@@ -70,6 +70,8 @@ import { cn } from "../../lib/utils";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
+import { forgetScreenForRestart, rememberScreenForRestart } from "../../amu/restartReturn";
+import { PhoneConnectHelp } from "../../amu/phoneConnectHelp";
 import {
   applyWslEnableSelection,
   canRevokeOtherClients,
@@ -1008,6 +1010,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             <Button size="xs" variant="ghost" onClick={handleCopyCode}>
               Copy code only
             </Button>
+            <PhoneConnectHelp pairingUrl={qrPairingUrl} />
           </div>
           {canRenderQrForSelection ? (
             <div className="w-fit shrink-0 self-center rounded-xl bg-white p-3 sm:self-start">
@@ -2409,12 +2412,15 @@ export function ConnectionsSettings() {
         return;
       setIsUpdatingDesktopServerExposure(true);
       setDesktopServerExposureMutationError(null);
+      // Amu: the change restarts the app; open this page again afterwards.
+      rememberScreenForRestart();
       try {
         await desktopBridge.setServerExposureMode(checked ? "network-accessible" : "local-only");
         refreshDesktopNetworkAccessState();
         setIsDesktopServerExposureDialogOpen(false);
         setIsUpdatingDesktopServerExposure(false);
       } catch (error) {
+        forgetScreenForRestart();
         const message =
           error instanceof Error ? error.message : "Failed to update network exposure.";
         setIsDesktopServerExposureDialogOpen(false);

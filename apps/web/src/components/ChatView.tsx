@@ -168,6 +168,7 @@ import { isMacPlatform, newProjectId } from "../lib/utils";
 import { findProjectByPath, inferProjectTitleFromPath } from "../lib/projectPaths";
 import { projectEnvironment } from "../state/projects";
 import { buildAutoFolderContext, folderDisplayName, waitUntil } from "../amu/autoFolder";
+import { applyThreadFolders, currentThreadFolders } from "../amu/threadFolders";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -8797,7 +8798,8 @@ export default function ChatView(props: ChatViewProps) {
         ? buildAutoFolderContext({
             activeProject,
             projects: readProjects(),
-            threads: readThreadShells(),
+            // A thread listed under another project counts as that project's work.
+            threads: applyThreadFolders(readThreadShells(), currentThreadFolders(), readProjects()),
             isScratch: isScratchForAutoFolder,
           })
         : null,

@@ -670,6 +670,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerAttachmentUploadRoute,
     ServerHttp.layerLunaAutoRoute,
     ServerHttp.layerCliReleaseNotesRoute,
+    ServerHttp.layerThreadFoldersRoute,
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,

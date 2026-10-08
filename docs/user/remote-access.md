@@ -62,6 +62,12 @@ created in Settings can only be copied from the client that created them while
 its Connections page stays open. If you leave or reload that page, create
 another link to share.
 
+### スマホでつながらないとき（Amu）
+
+ネットワークアクセスを切り替えると Amu は再起動しますが、再起動したあとは **設定 → 接続** の画面に戻ります。Amu の更新で再起動したときも、元の画面に戻ります。
+
+ペアリングリンクの QR コードの下にある「スマホでつながらないとき」を開くと、順に試すことが出ます。まずスマホのブラウザー（Android は Chrome、iPhone は Safari）で、リンクから受付番号を除いた住所（例: `http://192.168.11.25:5233`）を開きます。Amu の画面が出れば、スマホから Mac まで届いています。もう一度 QR コードを読んでください。この住所も開けないときは、Wi-Fi のゲスト用ネットワークや、ルーターの「端末間の通信を制限する」設定（プライバシーセパレーターなど）が原因のことがあります。Wi-Fi を変えられないときは、Mac とスマホの両方に Tailscale を入れて「Tailscale HTTPS」を使うと、Android でも iPhone でも、外出先からでもつながります。
+
 ### Reach one machine several ways
 
 A machine can have more than one route: LAN, Tailscale, a public URL, SSH, or

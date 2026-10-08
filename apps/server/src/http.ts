@@ -55,6 +55,7 @@ import {
 import { autoChoices, LUNA_JUDGE_NAMES } from "@t3tools/shared/lunaAuto";
 import { cliReleaseNotes, hasCliReleaseNotes } from "./luna/CliReleaseNotes.ts";
 import { judgeFoldersFromRequest } from "./luna/WorkFolderRequest.ts";
+import { isThreadFolderId, readThreadFolders, setThreadFolder } from "./luna/ThreadFolders.ts";
 import { findCursorAgent, LunaDecisionBroker, type JudgeTarget } from "./luna/LunaDecision.ts";
 import {
   lunaPreflightBlocked,
@@ -728,6 +729,53 @@ export const makeCliReleaseNotesRouteLayer = (options: LunaAutoRouteOptions = {}
   );
 
 export const layerCliReleaseNotesRoute = makeCliReleaseNotesRouteLayer();
+
+// Amu: which project a thread is listed under in the sidebar (docs/user/thread-sidebar.md).
+export const layerThreadFoldersRoute = Layer.unwrap(
+  Effect.gen(function* () {
+    const serverConfig = yield* ServerConfig.ServerConfig;
+    const read = HttpRouter.add(
+      "GET",
+      "/api/amu/thread-folders",
+      Effect.gen(function* () {
+        yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+        return HttpServerResponse.jsonUnsafe({ result: readThreadFolders(serverConfig.stateDir) });
+      }),
+    );
+    const write = HttpRouter.add(
+      "POST",
+      "/api/amu/thread-folders",
+      Effect.gen(function* () {
+        yield* authenticateRawRouteWithScope(AuthOrchestrationOperateScope);
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const body = yield* request.text;
+        if (Buffer.byteLength(body) > 4_000)
+          return HttpServerResponse.jsonUnsafe({ error: "入力が大きすぎます。" }, { status: 400 });
+        const data = yield* Schema.decodeEffect(
+          Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+        )(body).pipe(Effect.orElseSucceed(() => null));
+        if (
+          !data ||
+          !isThreadFolderId(data.threadId) ||
+          !(data.projectId === null || isThreadFolderId(data.projectId))
+        )
+          return HttpServerResponse.jsonUnsafe({ error: "形式が不正です。" }, { status: 400 });
+        const threadId = data.threadId,
+          projectId = data.projectId;
+        return yield* Effect.try({
+          try: () => setThreadFolder(serverConfig.stateDir, threadId, projectId),
+          catch: () => "保存できませんでした。",
+        }).pipe(
+          Effect.map((result) => HttpServerResponse.jsonUnsafe({ result })),
+          Effect.catch((message) =>
+            Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 500 })),
+          ),
+        );
+      }),
+    );
+    return Layer.mergeAll(read, write);
+  }),
+);
 
 export const layerAttachmentUploadRoute = HttpRouter.add(
   "POST",

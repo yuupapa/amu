@@ -31,7 +31,9 @@ export type ThreadActionMenuId =
   | "copy-branch"
   | "copy-thread-id"
   | "archive"
-  | "delete";
+  | "delete"
+  /** Amu: the project the thread is listed under (amu/threadFolders.tsx). */
+  | "amu-list-folder";
 
 export type DraftActionMenuId =
   | "copy"

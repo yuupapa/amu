@@ -177,7 +177,9 @@ import {
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
   threadActionRequiresOperate,
+  type ThreadActionMenuId,
 } from "./threadActionMenu.logic";
+import type { ContextMenuItem } from "@t3tools/contracts";
 import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
@@ -286,6 +288,7 @@ import {
   useManualProjectGroups,
 } from "../amu/projectGroups";
 import { useScratchProject } from "../hooks/useScratchProject";
+import { applyThreadFolders, ThreadFolderDialog, useThreadFolders } from "../amu/threadFolders";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -316,6 +319,21 @@ const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 // Working beta: when this client saw each thread leave the Working shelf.
 // Module scope keeps the inbox order across routes that unmount the sidebar.
 const inboxReturns = createInboxReturnTracker();
+
+/** Amu: "一覧のフォルダーを変える…" right after the project items. */
+function withListFolderItem(
+  items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>>,
+): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
+  const item: ContextMenuItem<ThreadActionMenuId> = {
+    id: "amu-list-folder",
+    label: "一覧のフォルダーを変える…",
+    icon: "folder",
+  };
+  const index = items.findIndex((candidate) => candidate.id === "project-settings");
+  return index < 0
+    ? [...items, { ...item, separatorBefore: true }]
+    : [...items.slice(0, index + 1), item, ...items.slice(index + 1)];
+}
 
 function canOperateThreads(
   threads: ReadonlyArray<Pick<SidebarThreadSummary, "environmentId">>,
@@ -2395,7 +2413,17 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
+  const threadShells = useThreadShells();
+  // Amu: a thread may be listed under another project (amu/threadFolders.tsx).
+  const threadFolders = useThreadFolders();
+  const threads = useMemo(
+    () => applyThreadFolders(threadShells, threadFolders, projects),
+    [projects, threadFolders, threadShells],
+  );
+  const [threadFolderDialog, setThreadFolderDialog] = useState<{
+    thread: { id: string; title: string; environmentId: string; ownProjectId: string };
+    shownUnder: string;
+  } | null>(null);
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -4689,35 +4717,37 @@ export default function Sidebar() {
           ) ?? null;
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            buildThreadActionMenuItems({
-              canOperate: readEnvironmentScope(
-                threadRef.environmentId,
-                AuthOrchestrationOperateScope,
-              ),
-              branch: thread.branch ?? null,
-              projectFilter: threadProjectGroup
-                ? {
-                    label: threadProjectGroup.displayName,
-                    isActive: projectScopeKey === threadProjectGroup.projectKey,
-                  }
-                : null,
-              isPinned,
-              isSettled,
-              autoSettleEnabled: thread.autoSettleDisabledAt == null,
-              isSnoozed,
-              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              isRegeneratingTitle,
-              isRunning: !threadRuntimeCanArchive(thread.runtime),
-              supports: {
-                settlement: supportsSettlement,
-                autoSettleOptOut: supportsAutoSettleOptOut,
-                snooze: supportsSnooze,
-                pinning: supportsPinning,
-                titleRegeneration: supportsTitleRegeneration,
-              },
-              snoozePresets,
-              splitView: { canOpen: canOpenThreadInSplitPane(threadRef) },
-            }),
+            withListFolderItem(
+              buildThreadActionMenuItems({
+                canOperate: readEnvironmentScope(
+                  threadRef.environmentId,
+                  AuthOrchestrationOperateScope,
+                ),
+                branch: thread.branch ?? null,
+                projectFilter: threadProjectGroup
+                  ? {
+                      label: threadProjectGroup.displayName,
+                      isActive: projectScopeKey === threadProjectGroup.projectKey,
+                    }
+                  : null,
+                isPinned,
+                isSettled,
+                autoSettleEnabled: thread.autoSettleDisabledAt == null,
+                isSnoozed,
+                canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+                isRegeneratingTitle,
+                isRunning: !threadRuntimeCanArchive(thread.runtime),
+                supports: {
+                  settlement: supportsSettlement,
+                  autoSettleOptOut: supportsAutoSettleOptOut,
+                  snooze: supportsSnooze,
+                  pinning: supportsPinning,
+                  titleRegeneration: supportsTitleRegeneration,
+                },
+                snoozePresets,
+                splitView: { canOpen: canOpenThreadInSplitPane(threadRef) },
+              }),
+            ),
             position,
           ),
         );
@@ -4752,6 +4782,21 @@ export default function Sidebar() {
             return;
           case "project-settings":
             if (threadProjectGroup) openProjectSettings(threadProjectGroup);
+            return;
+          case "amu-list-folder":
+            setThreadFolderDialog({
+              thread: {
+                id: thread.id,
+                title: thread.title,
+                environmentId: thread.environmentId,
+                ownProjectId:
+                  threadShells.find(
+                    (shell) =>
+                      shell.id === thread.id && shell.environmentId === thread.environmentId,
+                  )?.projectId ?? thread.projectId,
+              },
+              shownUnder: thread.projectId,
+            });
             return;
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
@@ -5062,6 +5107,24 @@ export default function Sidebar() {
   return (
     <>
       <ThreadContextDragGhost />
+      {threadFolderDialog ? (
+        <ThreadFolderDialog
+          thread={threadFolderDialog.thread}
+          shownUnder={threadFolderDialog.shownUnder}
+          projects={projects
+            .filter(
+              (project) =>
+                !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
+            )
+            .map((project) => ({
+              id: project.id,
+              environmentId: project.environmentId,
+              name: project.title,
+              workspaceRoot: project.workspaceRoot,
+            }))}
+          onClose={() => setThreadFolderDialog(null)}
+        />
+      ) : null}
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         className="min-h-full"

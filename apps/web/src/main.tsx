@@ -16,8 +16,12 @@ import {
 } from "./lib/windowControlsOverlay";
 import { AppRoot } from "./AppRoot";
 import { clearChunkReloadGuard, reloadOnceForChunkLoadError } from "./lib/chunkReloadGuard";
+import { restoreScreenAfterRestart } from "./amu/restartReturn";
 
 prepareProviderAuthDelivery();
+
+// Amu: after a restart Amu asked for, open the screen it was on.
+if (isElectron) restoreScreenAfterRestart();
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
