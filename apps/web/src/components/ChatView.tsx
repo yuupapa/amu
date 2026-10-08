@@ -164,7 +164,10 @@ import {
 import { flushSync } from "react-dom";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { assistantCitationFromLocation } from "../lib/assistantCitationNavigation";
-import { isMacPlatform } from "../lib/utils";
+import { isMacPlatform, newProjectId } from "../lib/utils";
+import { findProjectByPath, inferProjectTitleFromPath } from "../lib/projectPaths";
+import { projectEnvironment } from "../state/projects";
+import { buildAutoFolderContext, folderDisplayName, waitUntil } from "../amu/autoFolder";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -428,6 +431,10 @@ import {
   useThreadShell,
   useThreadRefs,
   useThreadVisibleTurnItems,
+  readProject,
+  readProjects,
+  readThreadShells,
+  waitForProject,
   waitForThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
@@ -8680,6 +8687,59 @@ export default function ChatView(props: ChatViewProps) {
   };
 
   // Amu: Auto (Luna) picks the model for the first request; see amu/useLunaAuto.tsx.
+  // Amu: Auto may start the request in the folder it belongs to (amu/autoFolder.ts).
+  const createProjectForAutoFolder = useAtomCommand(projectEnvironment.create, {
+    reportFailure: false,
+  });
+  const activeProjectIdRef = useRef<string | null>(null);
+  activeProjectIdRef.current = activeProject?.id ?? null;
+  const isScratchForAutoFolder = (project: NonNullable<typeof activeProject>) =>
+    isScratchProject(project, scratchWorkspaceRootFor(project.environmentId));
+  const moveDraftToAutoFolder = async (
+    answer: { kind: "path"; path: string } | { kind: "new" },
+  ): Promise<string | null> => {
+    const project = activeProject;
+    if (!draftId || !project) return null;
+    const environmentId = project.environmentId;
+    let target: NonNullable<typeof activeProject> | null;
+    if (answer.kind === "new") {
+      target = await openScratchProject(environmentId);
+    } else {
+      target =
+        findProjectByPath(
+          readProjects().filter((candidate) => candidate.environmentId === environmentId),
+          answer.path,
+        ) ?? null;
+      if (!target) {
+        const projectId = newProjectId();
+        const created = await createProjectForAutoFolder({
+          environmentId,
+          input: {
+            projectId,
+            title: inferProjectTitleFromPath(answer.path),
+            workspaceRoot: answer.path,
+            createWorkspaceRootIfMissing: false,
+            defaultModelSelection: null,
+          },
+        });
+        if (created._tag === "Failure") return null;
+        target =
+          (await waitForProject(scopeProjectRef(environmentId, projectId)).catch(() => null)) ??
+          readProject(scopeProjectRef(environmentId, projectId));
+      }
+    }
+    if (!target || target.id === project.id) return null;
+    setLogicalProjectDraftThreadId(
+      deriveLogicalProjectKeyFromSettings(target, projectGroupingSettings),
+      scopeProjectRef(target.environmentId, target.id),
+      draftId,
+    );
+    // The send that follows reads the draft's project from this view.
+    const moved = await waitUntil(() => activeProjectIdRef.current === target.id);
+    if (!moved) return null;
+    return answer.kind === "new" ? "新しいフォルダー" : folderDisplayName(target.workspaceRoot);
+  };
+
   const lunaAuto = useLunaAuto({
     routeThreadKey,
     onPrimaryEnvironment: environmentId === primaryEnvironment?.environmentId,
@@ -8705,6 +8765,17 @@ export default function ChatView(props: ChatViewProps) {
         replaceOptions: true,
       });
     },
+    folderContext: () =>
+      isLocalDraftThread && draftId
+        ? buildAutoFolderContext({
+            activeProject,
+            projects: readProjects(),
+            threads: readThreadShells(),
+            isScratch: isScratchForAutoFolder,
+          })
+        : null,
+    moveToFolder: (answer) =>
+      answer.kind === "current" ? Promise.resolve(null) : moveDraftToAutoFolder(answer),
   });
 
   // Amu: say before the next send that it hands the conversation to another AI.

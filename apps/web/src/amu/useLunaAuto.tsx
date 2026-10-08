@@ -22,6 +22,7 @@ import {
   issueLunaTicket,
   lunaAutoDecide,
   lunaAutoRequest,
+  type AutoFolderAnswer,
   readAutoRecord,
   runLunaAuto,
   type AutoTicket,
@@ -69,6 +70,18 @@ export type LunaAutoInputs = {
   readonly currentThreadRef: () => ScopedThreadRef | null;
   /** Keep Luna's pick in that thread's composer, so its next message stays on it. */
   readonly rememberPick: (thread: ScopedThreadRef, selection: ModelSelection) => void;
+  /**
+   * The current folder and Amu's projects, so Auto can also pick where the
+   * request belongs; null when this draft cannot move (see amu/autoFolder.ts).
+   */
+  readonly folderContext: () => AutoFolderContext | null;
+  /** Moves the draft to the picked folder; resolves to its name, or null when it stays. */
+  readonly moveToFolder: (answer: AutoFolderAnswer) => Promise<string | null>;
+};
+
+export type AutoFolderContext = {
+  readonly current: string | null;
+  readonly projects: ReadonlyArray<{ path: string; titles: string[]; updatedAt: string }>;
 };
 
 type Prepared = { decision: AutoDecision; choice: AutoChoice; ticket: AutoTicket };
@@ -232,6 +245,9 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
         const id = await issueLunaTicket(controller.signal);
         current.id = id;
         let judge: string | null = null;
+        let folderAnswer: AutoFolderAnswer | null = null;
+        let folderName: string | null = null;
+        const folders = live.current.folderContext();
         const decision = await runLunaAuto({
           thread: key,
           id,
@@ -245,13 +261,20 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
                 action: "decide",
                 prompt: promptSnapshot,
                 models: choices.map((c) => ({ instanceId: c.instanceId, model: c.model })),
+                ...(folders ? { folders } : {}),
               },
               controller.signal,
             );
             judge = answer.judge;
+            folderAnswer = answer.folder;
             return answer.result;
           },
           send: async (decision, choice, ticket) => {
+            // Start in the folder the request belongs to. If moving fails, the
+            // draft stays where it is and the send goes on there.
+            if (folderAnswer && folderAnswer.kind !== "current") {
+              folderName = await live.current.moveToFolder(folderAnswer).catch(() => null);
+            }
             prepared.current = { decision, choice, ticket };
             dispatched.current = null;
             try {
@@ -280,7 +303,9 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
             busy: false,
             text: `オート${judge ? `（${judge}が判定）` : ""}：${picked?.name ?? decision.model}・${
               effortLabel ? uiText(effortLabel) : decision.effort
-            } — ${decision.reason.replace(/[。．.]+$/u, "")}`,
+            } — ${decision.reason.replace(/[。．.]+$/u, "")}${
+              folderName ? `（フォルダー：${folderName}）` : ""
+            }`,
           });
         }
       } catch (error) {

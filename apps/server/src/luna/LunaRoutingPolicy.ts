@@ -10,7 +10,7 @@ import { LUNA_JUDGE_ORDER, type AutoChoice, type LunaJudgeKind } from "@t3tools/
  * `luna-routing.json` in the server's state folder replaces the defaults:
  *
  *   { "preferred": ["claude-opus-5-5", …], "fallback": ["grok-4.7"], "guidance": "…",
- *     "judges": ["claude", "codex", "cursor"] }
+ *     "judges": ["claude", "codex", "cursor"], "autoFolder": true }
  */
 export type LunaRoutingPolicy = {
   /** Models Luna chooses from. */
@@ -21,6 +21,8 @@ export type LunaRoutingPolicy = {
   readonly guidance: string;
   /** Which AIs judge, first one first (see LUNA_JUDGE_ORDER). */
   readonly judges: ReadonlyArray<LunaJudgeKind>;
+  /** Whether Auto also picks the work folder from earlier work (luna/WorkFolders.ts). */
+  readonly autoFolder: boolean;
 };
 
 export const DEFAULT_LUNA_ROUTING_POLICY: LunaRoutingPolicy = {
@@ -46,6 +48,7 @@ export const DEFAULT_LUNA_ROUTING_POLICY: LunaRoutingPolicy = {
     "- 上のどれも一覧に無いときだけ grok-4.7 を選ぶ。",
   ].join("\n"),
   judges: LUNA_JUDGE_ORDER,
+  autoFolder: true,
 };
 
 function readPolicyFile(stateDir: string): LunaRoutingPolicy | null {
@@ -70,6 +73,7 @@ function readPolicyFile(stateDir: string): LunaRoutingPolicy | null {
     fallback,
     guidance,
     judges: judges.length > 0 ? [...new Set(judges)] : LUNA_JUDGE_ORDER,
+    autoFolder: record.autoFolder !== false,
   };
 }
 

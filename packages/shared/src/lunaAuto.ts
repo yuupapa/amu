@@ -24,7 +24,16 @@ export type AutoChoice = {
   effortId: string | null;
   efforts: string[];
 };
-export type AutoDecision = { model: string; effort: string; reason: string };
+export type AutoDecision = {
+  model: string;
+  effort: string;
+  reason: string;
+  /** Only when work folders were offered: a folder id, "current" or "new". */
+  folder?: string;
+};
+/** What the judge may answer for the work folder, besides a folder's id. */
+export const AUTO_FOLDER_CURRENT = "current";
+export const AUTO_FOLDER_NEW = "new";
 
 /** Use the same advertised descriptors as manual selection; no invented effort values. */
 export function autoChoices(providers: ReadonlyArray<ServerProvider>): AutoChoice[] {
@@ -60,6 +69,7 @@ export function autoChoices(providers: ReadonlyArray<ServerProvider>): AutoChoic
 export function validateAutoDecision(
   value: unknown,
   choices: ReadonlyArray<AutoChoice>,
+  folderIds?: ReadonlyArray<string>,
 ): AutoDecision {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("オートの判定形式が不正です。");
@@ -67,7 +77,11 @@ export function validateAutoDecision(
   const model = v.model,
     effort = v.effort;
   if (
-    Object.keys(v).sort().join(",") !== "effort,model,reason" ||
+    Object.keys(v).sort().join(",") !==
+      (folderIds ? "effort,folder,model,reason" : "effort,model,reason") ||
+    (folderIds !== undefined &&
+      (typeof v.folder !== "string" ||
+        ![...folderIds, AUTO_FOLDER_CURRENT, AUTO_FOLDER_NEW].includes(v.folder))) ||
     typeof v.model !== "string" ||
     typeof v.effort !== "string" ||
     typeof v.reason !== "string" ||
@@ -81,18 +95,34 @@ export function validateAutoDecision(
     throw new Error(
       "オートが選んだモデル・思考の強さ・理由を確認できません。手動で選んで送信してください。",
     );
-  return { model: v.model, effort: v.effort, reason: v.reason.trim() };
+  return {
+    model: v.model,
+    effort: v.effort,
+    reason: v.reason.trim(),
+    ...(folderIds ? { folder: v.folder as string } : {}),
+  };
 }
 
-export function autoOutputSchema(choices: ReadonlyArray<AutoChoice>) {
+export function autoOutputSchema(
+  choices: ReadonlyArray<AutoChoice>,
+  folderIds?: ReadonlyArray<string>,
+) {
   return {
     type: "object",
     additionalProperties: false,
-    required: ["model", "effort", "reason"],
+    required: folderIds ? ["model", "effort", "reason", "folder"] : ["model", "effort", "reason"],
     properties: {
       model: { type: "string", enum: choices.map((c) => c.model) },
       effort: { type: "string", enum: [...new Set(choices.flatMap((c) => c.efforts))] },
       reason: { type: "string" },
+      ...(folderIds
+        ? {
+            folder: {
+              type: "string",
+              enum: [...folderIds, AUTO_FOLDER_CURRENT, AUTO_FOLDER_NEW],
+            },
+          }
+        : {}),
     },
   };
 }

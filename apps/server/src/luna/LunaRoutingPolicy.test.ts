@@ -61,6 +61,7 @@ describe("loadLunaRoutingPolicy", () => {
         fallback: [],
         guidance: "short",
         judges: ["claude", "codex", "cursor"],
+        autoFolder: true,
       });
       NodeFS.writeFileSync(NodePath.join(directory, "luna-routing.json"), "{ broken");
       expect(loadLunaRoutingPolicy(directory)).toBe(DEFAULT_LUNA_ROUTING_POLICY);

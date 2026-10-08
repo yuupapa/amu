@@ -4,7 +4,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { ServerProvider, ProviderInstanceConfigMap } from "@t3tools/contracts";
-import type { AutoChoice } from "@t3tools/shared/lunaAuto";
+import { autoOutputSchema, validateAutoDecision, type AutoChoice } from "@t3tools/shared/lunaAuto";
 import * as Schema from "effect/Schema";
 import {
   acceptClaudeJudgeEvent,
@@ -94,6 +94,37 @@ describe("Auto judges in order", () => {
       () => 1_000,
     );
     await expect(broker.decide(broker.issue(), input([]))).rejects.toThrow("使えるAI");
+  });
+});
+
+describe("picking the work folder too", () => {
+  const folders = { ids: ["f1", "f2"], view: { current: "~/a", folders: [] } };
+
+  it("asks for a folder id, current or new, and checks the answer", () => {
+    const schema = autoOutputSchema(choices, folders.ids);
+    expect(schema.required).toContain("folder");
+    expect(schema.properties.folder?.enum).toEqual(["f1", "f2", "current", "new"]);
+    expect(validateAutoDecision({ ...decision, folder: "f2" }, choices, folders.ids)).toEqual({
+      ...decision,
+      folder: "f2",
+    });
+    expect(() =>
+      validateAutoDecision({ ...decision, folder: "f9" }, choices, folders.ids),
+    ).toThrow();
+    expect(() => validateAutoDecision(decision, choices, folders.ids)).toThrow();
+    // Without folders on offer, an answer carrying one is refused as before.
+    expect(() => validateAutoDecision({ ...decision, folder: "f1" }, choices)).toThrow();
+  });
+
+  it("passes the folders to every judge and checks the folder in its answer", async () => {
+    const judge = vi.fn(async (target: JudgeTarget) =>
+      target.kind === "claude" ? decision : { ...decision, folder: "f1" },
+    );
+    const broker = new LunaDecisionBroker(judge, () => 1_000);
+    const verdict = await broker.decide(broker.issue(), { ...input([haiku, luna]), folders });
+    // Haiku left the folder out, so Luna judged.
+    expect(verdict).toEqual({ decision: { ...decision, folder: "f1" }, judge: "Luna" });
+    expect(judge.mock.calls[0]?.[1].folders).toEqual(folders);
   });
 });
 

@@ -54,6 +54,7 @@ import {
 } from "./httpCors.ts";
 import { autoChoices, LUNA_JUDGE_NAMES } from "@t3tools/shared/lunaAuto";
 import { cliReleaseNotes, hasCliReleaseNotes } from "./luna/CliReleaseNotes.ts";
+import { judgeFoldersFromRequest } from "./luna/WorkFolderRequest.ts";
 import { findCursorAgent, LunaDecisionBroker, type JudgeTarget } from "./luna/LunaDecision.ts";
 import {
   lunaPreflightBlocked,
@@ -607,6 +608,10 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
             );
           const id = data.id,
             prompt = data.prompt;
+          // Earlier work folders, when the client asks Auto to pick the folder too.
+          const folders = policy.autoFolder
+            ? judgeFoldersFromRequest(data.folders, serverConfig.stateDir)
+            : null;
           // Keep the original rejection message; the default catcher replaces it with a generic UnknownError.
           return yield* Effect.tryPromise({
             try: () =>
@@ -615,12 +620,17 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
                 choices: routedChoices,
                 guidance: policy.guidance,
                 judges,
+                ...(folders ? { folders: folders.judge } : {}),
               }),
             catch: (error) =>
               error instanceof Error ? error.message : "Lunaの結果が不明です。自動再送はしません。",
           }).pipe(
-            Effect.map((verdict) =>
-              HttpServerResponse.jsonUnsafe({ result: verdict.decision, judge: verdict.judge }),
+            Effect.map(({ decision: { folder, ...decision }, judge }) =>
+              HttpServerResponse.jsonUnsafe({
+                result: decision,
+                judge,
+                folder: folders && folder !== undefined ? folders.resolve(folder) : null,
+              }),
             ),
             Effect.catch((message) =>
               Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 400 })),

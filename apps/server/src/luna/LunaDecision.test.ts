@@ -229,6 +229,10 @@ describe.skipIf(installedCodex.status !== 0)(
                   if (v.type === "turn.started") {
                     started = true;
                     child.kill("SIGKILL");
+                    // The npm launcher's native child can keep stdout open while it
+                    // retries without credentials, so do not wait for "close".
+                    clearTimeout(timer);
+                    resolve({ lines, stderr });
                   }
                 }
             });

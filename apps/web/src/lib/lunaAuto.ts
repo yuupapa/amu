@@ -78,23 +78,38 @@ export async function lunaAutoRequest(body: unknown, signal?: AbortSignal): Prom
   return (await lunaAutoCall(body, signal)).result;
 }
 
+/** Where Auto starts the request (see apps/server/src/luna/WorkFolderRequest.ts). */
+export type AutoFolderAnswer =
+  | { kind: "path"; path: string }
+  | { kind: "current" }
+  | { kind: "new" };
+
+function readFolderAnswer(value: unknown): AutoFolderAnswer | null {
+  if (!value || typeof value !== "object") return null;
+  const answer = value as { kind?: unknown; path?: unknown };
+  if (answer.kind === "current" || answer.kind === "new") return { kind: answer.kind };
+  if (answer.kind === "path" && typeof answer.path === "string" && answer.path.startsWith("/"))
+    return { kind: "path", path: answer.path };
+  return null;
+}
+
 /** A judgement, with the name of the AI that made it (Haiku, Luna or Composer). */
 export async function lunaAutoDecide(
   body: unknown,
   signal?: AbortSignal,
-): Promise<{ result: unknown; judge: string | null }> {
+): Promise<{ result: unknown; judge: string | null; folder: AutoFolderAnswer | null }> {
   const answer = await lunaAutoCall(body, signal);
   const judge =
     typeof answer.judge === "string" && /^[A-Za-z0-9 .-]{1,40}$/.test(answer.judge)
       ? answer.judge
       : null;
-  return { result: answer.result, judge };
+  return { result: answer.result, judge, folder: readFolderAnswer(answer.folder) };
 }
 
 function lunaAutoCall(
   body: unknown,
   signal?: AbortSignal,
-): Promise<{ result?: unknown; judge?: unknown }> {
+): Promise<{ result?: unknown; judge?: unknown; folder?: unknown }> {
   return amuLocalPost("/api/luna-auto", body, signal, {
     notLocal: "オートはこのMacのローカルのAmuで利用してください。",
     unknown: "オートの結果が不明です。自動再送はしません。",
@@ -110,7 +125,7 @@ export async function amuLocalPost(
   body: unknown,
   signal: AbortSignal | undefined,
   messages: { notLocal: string; unknown: string },
-): Promise<{ result?: unknown; judge?: unknown }> {
+): Promise<{ result?: unknown; judge?: unknown; folder?: unknown }> {
   const url = resolvePrimaryEnvironmentHttpUrl(path);
   const target = new URL(url);
   if (
@@ -133,6 +148,7 @@ export async function amuLocalPost(
   const result = (await response.json()) as {
     result?: unknown;
     judge?: unknown;
+    folder?: unknown;
     error?: string;
     cancelled?: boolean;
   };
