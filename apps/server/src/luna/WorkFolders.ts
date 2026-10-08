@@ -266,11 +266,17 @@ export function collectWorkFolders(input: {
   for (const item of input.found.toSorted((a, b) => b.atMs - a.atMs))
     add(item.path, item.atMs, [item.hint]);
   const kept = [...byPath.entries()].filter(([path]) => isWorkFolder(path, input.excluded));
-  // A folder inside another one (an output folder of a project) is that project's work.
+  // A folder inside another one (an output folder of a project) is that
+  // project's work, unless it is a project of its own: an Amu project or a
+  // Git checkout.
   const paths = kept.map(([path]) => path);
+  const amuPaths = new Set(input.amuProjects.map((project) => realFolder(project.path)));
+  const ownProject = (path: string) =>
+    amuPaths.has(path) || NodeFS.existsSync(NodePath.join(path, ".git"));
   return kept
     .filter(
       ([path]) =>
+        ownProject(path) ||
         !paths.some((other) => other !== path && path.startsWith(`${other}${NodePath.sep}`)),
     )
     .toSorted(([, a], [, b]) => b.lastUsedMs - a.lastUsedMs)

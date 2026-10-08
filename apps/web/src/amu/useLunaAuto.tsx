@@ -77,9 +77,14 @@ export type LunaAutoInputs = {
   readonly folderContext: () => AutoFolderContext | null;
   /**
    * Moves the draft to the picked folder; resolves to its name, or null when
-   * it stays. Nothing moves once `signal` is aborted.
+   * it stays. Nothing moves once `signal` is aborted or the request changed.
    */
-  readonly moveToFolder: (answer: AutoFolderAnswer, signal: AbortSignal) => Promise<string | null>;
+  readonly moveToFolder: (
+    answer: AutoFolderAnswer,
+    signal: AbortSignal,
+    /** Whether the request and its settings are still the ones judged. */
+    unchanged: () => boolean,
+  ) => Promise<string | null>;
 };
 
 export type AutoFolderContext = {
@@ -277,7 +282,7 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
             // draft stays where it is and the send goes on there.
             if (folderAnswer && folderAnswer.kind !== "current") {
               folderName = await live.current
-                .moveToFolder(folderAnswer, ticket.signal)
+                .moveToFolder(folderAnswer, ticket.signal, unchanged)
                 .catch(() => null);
               if (ticket.signal.aborted) return false;
             }

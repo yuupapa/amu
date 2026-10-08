@@ -145,6 +145,26 @@ describe("work folders from earlier work", () => {
       expect(folders.map((folder) => folder.path)).toEqual([project]);
     }));
 
+  it("keeps a project of its own inside another folder: a Git checkout or an Amu project", () =>
+    withTemp((root) => {
+      const repos = NodePath.join(root, "repos");
+      const app = NodePath.join(repos, "app");
+      const site = NodePath.join(repos, "site");
+      NodeFS.mkdirSync(NodePath.join(app, ".git"), { recursive: true });
+      NodeFS.mkdirSync(site, { recursive: true });
+      const folders = collectWorkFolders({
+        amuProjects: [{ path: site, titles: [], updatedAtMs: 1 }],
+        found: [
+          { path: repos, atMs: 3, hint: "全体" },
+          { path: app, atMs: 2, hint: "アプリ" },
+        ],
+        excluded: [],
+      });
+      expect(folders.map((folder) => folder.path).toSorted()).toEqual(
+        [repos, app, site].toSorted(),
+      );
+    }));
+
   it("refuses a link into a refused folder", () =>
     withTemp((root) => {
       const amuData = NodePath.join(root, "amu-runtime");
