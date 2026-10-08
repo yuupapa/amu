@@ -625,6 +625,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
   {
+    id: "mcp-market",
+    title: "MCP",
+    to: "/settings/integrations",
+    searchTerms: [
+      "mcp マーケット 連携 vercel supabase linear hyperframes topview context7 追加 ログイン",
+    ],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",
