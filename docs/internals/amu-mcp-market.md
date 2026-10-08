@@ -153,6 +153,13 @@ the user to log in again in Amu.
 
 ## Proxy
 
+Implementation note: the proxy and the login callback run on their own HTTP server on
+127.0.0.1 (port 47823, else any free port), not on the Amu server port, so Tailscale
+serving and paired devices cannot reach them at all; the settings routes
+(`GET|POST /api/amu/mcp-market`) stay on the Amu server. The per-session credential is
+minted the first time an adapter asks for a provider MCP session's servers and is dropped
+by the same `McpSessionRegistry` revoke calls that end that session's t3-code credential.
+
 `POST | GET | DELETE /api/amu/mcp-proxy/<id>` on loopback.
 
 - **Credential:** its own bearer, created together with the provider MCP session that the
