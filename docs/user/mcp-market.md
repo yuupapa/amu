@@ -32,7 +32,9 @@ Context7 はログインが要らないので、押すとすぐに追加され�
 
 ## 一覧に出るサービス
 
-Amu でのログインと、Claude・Codex からの呼び出しを確かめ終えたサービスだけが一覧に出ます。候補は Vercel、HyperFrames、Supabase、Linear、topview、Context7 です。
+Amu でのログインと、Claude・Codex からの呼び出しを確かめ終えたサービスだけが一覧に出ます。いまは Context7、Vercel、HyperFrames、Supabase、Linear、topview の6つです。
+
+HyperFrames は HeyGen のアカウントでログインします。承認のあとにプランを選ぶ画面が出たら「フリー」を選べば進めます。なお HeyGen の決まりで、Claude や Codex のような手元の AI からは、動画を作る `compose` と書き出す `render_video` は使えません。プロジェクトの一覧などを見る道具が中心です。
 
 ## 会話の中での名前
 

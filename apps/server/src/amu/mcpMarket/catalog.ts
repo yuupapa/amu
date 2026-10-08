@@ -63,7 +63,9 @@ export const MCP_MARKET_CATALOG: ReadonlyArray<McpMarketEntry> = [
       scopes: ["openid", "profile", "email"],
       allowedOrigins: ["https://mcp.heygen.com", "https://api2.heygen.com"],
     },
-    verified: false,
+    // Verified 2026-10-08: browser login (HeyGen, Free plan), initialize, tools/list,
+    // and list_projects from a Claude and a Codex thread through the proxy.
+    verified: true,
   },
   {
     id: "supabase",
