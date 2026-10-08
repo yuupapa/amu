@@ -56,7 +56,8 @@ export const MCP_MARKET_CATALOG: ReadonlyArray<McpMarketEntry> = [
     id: "hyperframes",
     name: "HyperFrames",
     description: "HeyGen の HyperFrames で、HTML から動画を作ります。",
-    url: "https://mcp.heygen.com/mcp/hyperframes",
+    // The address without the slash answers 307, and the market follows no redirects.
+    url: "https://mcp.heygen.com/mcp/hyperframes/",
     auth: {
       kind: "oauth-dcr",
       scopes: ["openid", "profile", "email"],
