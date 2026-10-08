@@ -32,6 +32,8 @@ interface Fake {
   rejectNext: boolean;
   /** Answer initialize and tools/list as an event stream that stays open. */
   holdStreams: boolean;
+  /** The Mcp-Session-Id initialize hands out. */
+  sessionId: string;
   /** Called when a refresh request arrives, before it is answered. */
   onRefresh?: () => void;
 }
@@ -54,6 +56,7 @@ async function startFake(): Promise<Fake> {
     refreshes: 0,
     rejectNext: false,
     holdStreams: false,
+    sessionId: "up-session-1",
   };
   const issue = () => {
     const access = `at-${NodeCrypto.randomUUID()}`;
@@ -170,7 +173,7 @@ async function startFake(): Promise<Fake> {
                 serverInfo: { name: "fake" },
               },
             },
-            { "Mcp-Session-Id": "up-session-1" },
+            { "Mcp-Session-Id": fake.sessionId },
           );
         if (message.method === "notifications/initialized") {
           response.writeHead(202).end();
@@ -661,5 +664,24 @@ describe("MCP market fixes from review round 1", () => {
       ),
     );
     expect(results.every((result) => result.status !== 429)).toBe(true);
+  });
+
+  it("keeps a long upstream session id working (Supabase uses token-like ids)", async () => {
+    fake.sessionId = `long-${"x".repeat(1_500)}`;
+    const server = await connectLinear();
+    const init = await call(server.url, server.authorizationHeader, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {},
+    });
+    expect(init.session).toBe(fake.sessionId);
+    const listed = await call(
+      server.url,
+      server.authorizationHeader,
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      fake.sessionId,
+    );
+    expect(listed.status).toBe(200);
   });
 });

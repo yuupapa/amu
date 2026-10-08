@@ -51,6 +51,7 @@ const MAX_BODY_BYTES = 4_000_000;
  */
 const MAX_STREAMS_PER_SERVER = 32;
 const MAX_STREAMS_PER_SESSION_SERVER = 6;
+const MAX_SESSION_ID_LENGTH = 8_192;
 /** While restricted, only these may go through; tools/call never. */
 const RESTRICTED_METHODS = new Set(["initialize", "ping", "tools/list"]);
 const REQUEST_HEADERS = ["content-type", "accept", "mcp-protocol-version", "last-event-id"];
@@ -394,11 +395,15 @@ export class McpMarketProxy {
         const value = upstream.headers[name];
         if (typeof value === "string") out[name] = value;
       }
+      // The AI gets a session id only if it is recorded for its credential,
+      // so the two always agree (some servers use long, token-like ids).
       const upstreamSession = upstream.headers["mcp-session-id"];
-      if (typeof upstreamSession === "string" && upstreamSession.length <= 500) {
-        const known = this.sessions.get(sessionKey) ?? new Set<string>();
-        known.add(upstreamSession);
-        this.sessions.set(sessionKey, known);
+      if (typeof upstreamSession === "string") {
+        if (upstreamSession.length <= MAX_SESSION_ID_LENGTH) {
+          const known = this.sessions.get(sessionKey) ?? new Set<string>();
+          known.add(upstreamSession);
+          this.sessions.set(sessionKey, known);
+        } else delete out["mcp-session-id"];
       }
       if (request.method === "DELETE" && typeof sessionId === "string")
         this.sessions.get(sessionKey)?.delete(sessionId);
