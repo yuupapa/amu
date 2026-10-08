@@ -32,6 +32,8 @@ interface Fake {
   rejectNext: boolean;
   /** Answer initialize and tools/list as an event stream that stays open. */
   holdStreams: boolean;
+  /** Called when a refresh request arrives, before it is answered. */
+  onRefresh?: () => void;
 }
 
 const read = (request: NodeHttp.IncomingMessage) =>
@@ -111,6 +113,7 @@ async function startFake(): Promise<Fake> {
         }
         if (form.get("grant_type") === "refresh_token") {
           fake.refreshes += 1;
+          fake.onRefresh?.();
           const old = form.get("refresh_token") ?? "";
           if (!fake.refreshTokens.delete(old)) return send(400, { error: "invalid_grant" });
           return send(200, issue());
@@ -553,31 +556,43 @@ describe("MCP market fixes from review round 1", () => {
     expect(await approve(authorizationUrl)).toContain("つながりました");
   }, 15_000);
 
-  it("leaves a server out for an AI whose own settings already use the name", async () => {
-    await connectLinear();
-    const claudeHome = NodePath.join(folder, "claude-home");
-    NodeFS.mkdirSync(claudeHome);
-    NodeFS.writeFileSync(
-      NodePath.join(claudeHome, ".claude.json"),
-      JSON.stringify({
-        mcpServers: { "amu-mcp-linear": { type: "http", url: "https://example.com" } },
-      }),
-    );
-    const previous = process.env.CLAUDE_CONFIG_DIR;
-    process.env.CLAUDE_CONFIG_DIR = claudeHome;
-    try {
-      await new Promise((r) => setTimeout(r, 0));
-      const { userTakenMarketNames } = await import("./conflicts.ts");
-      expect(
-        userTakenMarketNames("claudeAgent", process.env, Date.now() + 60_000).has("amu-mcp-linear"),
-      ).toBe(true);
-      const forClaude = market.serversForSession({ ...session("claude-1"), driver: "claudeAgent" });
-      const forCodex = market.serversForSession({ ...session("codex-1"), driver: "codex" });
-      expect(forClaude.map((item) => item.id)).not.toContain("linear");
-      expect(forCodex.map((item) => item.id)).toContain("linear");
-    } finally {
-      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-      else process.env.CLAUDE_CONFIG_DIR = previous;
-    }
+  it("stops a tool call whose thread entered plan mode while the token was refreshed", async () => {
+    const server = await connectLinear();
+    fake.accessTokens.clear();
+    fake.onRefresh = () => {
+      allowed = false;
+    };
+    const called = await call(server.url, server.authorizationHeader, {
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/call",
+      params: { name: "list_issues" },
+    });
+    expect((called.body.error as { message: string }).message).toContain("計画モード");
+    // Only the first attempt went out (refused with 401); the retry did not.
+    expect(fake.seen.filter((request) => request.body?.includes('"tools/call"'))).toHaveLength(1);
+  });
+
+  it("answers every request of a batch when a login is needed", async () => {
+    const server = await connectLinear();
+    fake.accessTokens.clear();
+    fake.refreshTokens.clear();
+    const response = await fetch(server.url, {
+      method: "POST",
+      headers: { Authorization: server.authorizationHeader, "Content-Type": "application/json" },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", id: 10, method: "tools/list" },
+        { jsonrpc: "2.0", id: 20, method: "tools/list" },
+      ]),
+    });
+    const answers = (await response.json()) as Array<{ id: number }>;
+    expect(answers.map((answer) => answer.id)).toEqual([10, 20]);
+  });
+
+  it("names servers with this installation's own suffix", async () => {
+    const server = await connectLinear();
+    expect(server.name).toMatch(/^amu-mcp-linear-[a-f0-9]{6}$/u);
+    const [again] = market.mintForSession(session("session-3")) ?? [];
+    expect(again!.name).toBe(server.name);
   });
 });

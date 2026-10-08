@@ -1,6 +1,5 @@
 // @effect-diagnostics globalDate:off - a card's expiry is shown against the wall clock.
 import { findMcpMarketEntry, MCP_MARKET_CATALOG, mcpMarketServerName } from "./catalog.ts";
-import { userTakenMarketNames } from "./conflicts.ts";
 import { checkMcpServer } from "./mcpClient.ts";
 import { McpMarketLoginError, McpMarketOAuth } from "./oauth.ts";
 import { McpMarketProxy, type ProxyCredential, type ProxyHooks } from "./proxy.ts";
@@ -28,8 +27,6 @@ export interface McpMarketCard {
   readonly verified: boolean;
   readonly status: McpMarketStatus;
   readonly addedAt: string | null;
-  /** AIs left out because the user's own settings already use the name. */
-  readonly nameTakenIn: ReadonlyArray<"Claude" | "Codex">;
 }
 
 /** What a provider MCP session gets: one entry per added server. */
@@ -125,14 +122,6 @@ export class McpMarket {
         verified: entry.verified,
         status,
         addedAt: server?.addedAt ?? null,
-        nameTakenIn: [
-          ...(userTakenMarketNames("claudeAgent").has(mcpMarketServerName(entry.id))
-            ? (["Claude"] as const)
-            : []),
-          ...(userTakenMarketNames("codex").has(mcpMarketServerName(entry.id))
-            ? (["Codex"] as const)
-            : []),
-        ],
       };
     });
   }
@@ -190,18 +179,17 @@ export class McpMarket {
     session: Omit<ProxyCredential, "servers">,
   ): ReadonlyArray<McpMarketSessionServer> | undefined {
     const state = this.store.readState();
-    const taken = userTakenMarketNames(session.driver);
     const servers = new Map<string, number>();
     for (const entry of MCP_MARKET_CATALOG) {
       const server = state.servers[entry.id];
-      if (server && offered(entry) && !taken.has(mcpMarketServerName(entry.id)))
-        servers.set(entry.id, server.generation);
+      if (server && offered(entry)) servers.set(entry.id, server.generation);
     }
     if (servers.size === 0) return undefined;
     const token = this.proxy.mint({ ...session, servers });
+    const suffix = this.store.installSuffix();
     return [...servers.keys()].map((id) => ({
       id,
-      name: mcpMarketServerName(id),
+      name: mcpMarketServerName(id, suffix),
       url: `${this.proxy.origin}/mcp/${id}`,
       authorizationHeader: `Bearer ${token}`,
     }));

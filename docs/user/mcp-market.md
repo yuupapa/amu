@@ -34,9 +34,9 @@ Context7 はログインが要らないので、押すとすぐに追加され�
 
 Amu でのログインと、Claude・Codex からの呼び出しを確かめ終えたサービスだけが一覧に出ます。候補は Vercel、HyperFrames、Supabase、Linear、topview、Context7 です。
 
-## 同じ名前の設定があるとき
+## 会話の中での名前
 
-Amu が使う名前は `amu-mcp-<サービス>` です。ご自身の Claude（`~/.claude.json`）や Codex（`~/.codex/config.toml`）の設定に同じ名前の MCP サーバーがあるときは、その AI では Amu のものを使わず、ご自身の設定を残します。欄にもその旨が出ます。
+Claude と Codex の会話では、追加したサービスが `amu-mcp-<サービス>-<6 文字>` という名前で見えます（例：`amu-mcp-linear-3fa2c1`）。最後の 6 文字はこの Mac の Amu ごとに決まるので、ご自身の Claude や Codex の設定にある MCP サーバーと名前が重なることはありません。
 
 ## 使える AI
 

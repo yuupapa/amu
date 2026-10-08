@@ -22,7 +22,6 @@ interface Card {
   verified: boolean;
   status: Status;
   addedAt: string | null;
-  nameTakenIn: string[];
 }
 
 const PATH = "/api/amu/mcp-market";
@@ -172,12 +171,6 @@ export function McpMarketSettings() {
             description={
               <>
                 {card.description}
-                {card.nameTakenIn.length > 0 ? (
-                  <span className="mt-1 block text-warning-foreground">
-                    {card.nameTakenIn.join("・")} の設定に同じ名前（amu-mcp-{card.id}
-                    ）のサーバーがあるため、{card.nameTakenIn.join("・")} では使っていません。
-                  </span>
-                ) : null}
                 {message?.id === card.id ? (
                   <span className="mt-1 block text-foreground">{message.text}</span>
                 ) : null}

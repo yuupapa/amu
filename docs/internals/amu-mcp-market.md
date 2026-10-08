@@ -211,8 +211,9 @@ Authorization } }`. Not added to `allowedTools`, so Claude's permission mode app
 Authorization } }` (Codex's own shape), sent at start, resume and fork from the session.
   A loaded thread is not resumed again for a market change (the manager skips resume when
   loaded); it picks the change up when Amu next opens its session.
-- Names under `amu-mcp-` are reserved; if the user's own Claude or Codex config already has
-  that name, Amu skips its entry and shows it on the card.
+- Names are `amu-mcp-<id>-<install suffix>`, the suffix six random hex digits made once per
+  installation (implementation round 2), so they cannot match a name in the user's own
+  Claude or Codex settings, which Amu would otherwise replace.
 
 ## Out of v1
 

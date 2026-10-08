@@ -26,6 +26,8 @@ interface StateFile {
   readonly servers: Readonly<Record<string, McpMarketServerState>>;
   /** The last generation handed out per server, kept after a remove. */
   readonly generations: Readonly<Record<string, number>>;
+  /** Random per installation; part of the MCP server names (catalog.ts). */
+  readonly installSuffix?: string;
 }
 
 export interface McpMarketSecret {
@@ -119,6 +121,9 @@ export class McpMarketStore {
         revision: Number.isSafeInteger(value.revision) ? value.revision! : 0,
         servers,
         generations,
+        ...(typeof value.installSuffix === "string" && /^[a-f0-9]{6}$/u.test(value.installSuffix)
+          ? { installSuffix: value.installSuffix }
+          : {}),
       };
     } catch {
       return emptyState();
@@ -128,6 +133,15 @@ export class McpMarketStore {
   private writeState(state: StateFile): void {
     NodeFS.mkdirSync(this.stateDir, { recursive: true });
     writeAtomic(NodePath.join(this.stateDir, STATE_FILE), JSON.stringify(state));
+  }
+
+  /** This installation's name suffix, made once and kept. */
+  installSuffix(): string {
+    const state = this.readState();
+    if (state.installSuffix) return state.installSuffix;
+    const installSuffix = NodeCrypto.randomBytes(3).toString("hex");
+    this.writeState({ ...state, installSuffix });
+    return installSuffix;
   }
 
   /** The server's state when it is added, else undefined. */
@@ -141,7 +155,7 @@ export class McpMarketStore {
     const generation = (state.generations[id] ?? 0) + 1;
     const server = { addedAt: now.toISOString(), generation };
     this.writeState({
-      version: 1,
+      ...state,
       revision: state.revision + 1,
       servers: { ...state.servers, [id]: server },
       generations: { ...state.generations, [id]: generation },

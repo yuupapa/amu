@@ -105,9 +105,13 @@ export const MCP_MARKET_CATALOG: ReadonlyArray<McpMarketEntry> = [
 export const findMcpMarketEntry = (id: string): McpMarketEntry | undefined =>
   MCP_MARKET_CATALOG.find((entry) => entry.id === id);
 
-/** The name an entry gets in a Claude or Codex MCP config. Reserved for Amu. */
-export const mcpMarketServerName = (id: string) => `amu-mcp-${id}`;
-export const MCP_MARKET_SERVER_PREFIX = "amu-mcp-";
+/**
+ * The name an entry gets in a Claude or Codex MCP config. The suffix is
+ * random per Amu installation, so it cannot be a name the user's own
+ * settings already use (which Amu would otherwise replace).
+ */
+export const mcpMarketServerName = (id: string, installSuffix: string) =>
+  `amu-mcp-${id}-${installSuffix}`;
 
 /** Whether `url` is HTTPS and on one of the entry's allowed origins. */
 export function isAllowedMarketUrl(entry: McpMarketEntry, url: string): boolean {

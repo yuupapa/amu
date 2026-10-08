@@ -8,6 +8,7 @@ import {
   McpMarketUnavailable,
   type AccessToken,
   type McpMarketOAuth,
+  type TokenUse,
 } from "./oauth.ts";
 import { MARKET_USER_AGENT, type MarketTransport } from "./safeFetch.ts";
 
@@ -195,46 +196,35 @@ export class McpMarketProxy {
     const bound = credential.servers.get(serverId);
     if (bound === undefined || this.oauth.currentGeneration(serverId) !== bound) {
       request.resume();
-      this.reply(response, undefined, `${entry.name} は Amu の設定で外されています。`, 404);
+      this.reply(response, [], false, `${entry.name} は Amu の設定で外されています。`, 404);
       return;
     }
     const body = request.method === "POST" ? await readBody(request, MAX_BODY_BYTES) : undefined;
     if (request.method === "POST" && body === undefined) {
-      this.reply(response, undefined, "送る内容が大きすぎます。", 413);
+      this.reply(response, [], false, "送る内容が大きすぎます。", 413);
       return;
     }
     const messages = body === undefined ? [] : parseMessages(body);
     if (body !== undefined && messages === undefined) {
-      this.reply(response, undefined, "形式が不正です。", 400);
+      this.reply(response, [], false, "形式が不正です。", 400);
       return;
     }
-    const firstId = messages?.find((message) => "id" in message)?.id;
-    if (
-      messages &&
-      messages.some(
-        (message) => typeof message.method === "string" && !isRestrictedOk(message.method),
-      ) &&
-      !(await this.hooks.allowsOutsideActions(credential))
-    ) {
-      // Every request in the body gets its own answer; notifications get none.
-      const text = `この会話のモード（計画モードや読み取り専用）では ${entry.name} のツールは使えません。普通のモードに切り替えてください。`;
-      const answers = messages
-        .filter((message) => typeof message.method === "string" && "id" in message)
-        .map((message) => jsonRpcError(message.id, text));
-      if (answers.length === 0) {
-        response.writeHead(202).end();
-        return;
-      }
-      response
-        .writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" })
-        .end(JSON.stringify(isBatch(body!) ? answers : answers[0]));
+    const batch = body !== undefined && isBatch(body);
+    const answer = (text: string, status = 200) =>
+      this.reply(response, messages ?? [], batch, text, status);
+    const needsPolicy = (messages ?? []).some(
+      (message) => typeof message.method === "string" && !isRestrictedOk(message.method),
+    );
+    const restrictedText = `この会話のモード（計画モードや読み取り専用）では ${entry.name} のツールは使えません。普通のモードに切り替えてください。`;
+    if (needsPolicy && !(await this.hooks.allowsOutsideActions(credential))) {
+      answer(restrictedText);
       return;
     }
     const sessionKey = `${key}:${serverId}`;
     const sessionId = request.headers["mcp-session-id"];
     if (sessionId !== undefined) {
       if (typeof sessionId !== "string" || !this.sessions.get(sessionKey)?.has(sessionId)) {
-        this.reply(response, firstId, "この MCP セッションは使えません。", 404);
+        answer("この MCP セッションは使えません。", 404);
         return;
       }
     }
@@ -243,17 +233,51 @@ export class McpMarketProxy {
         MAX_STREAMS_PER_SERVER ||
       this.streamCount((streamKey) => streamKey.startsWith(`${key}:`)) >= MAX_STREAMS_PER_CREDENTIAL
     ) {
-      this.reply(response, firstId, "同時に開いている接続が多すぎます。少し待ってください。", 429);
+      answer("同時に開いている接続が多すぎます。少し待ってください。", 429);
       return;
     }
-    await this.forward({ request, response, entry, key, bound, sessionKey, body, firstId });
+    await this.forward({
+      request,
+      response,
+      entry,
+      key,
+      credential,
+      bound,
+      sessionKey,
+      body,
+      needsPolicy,
+      answer,
+      restrictedText,
+    });
   }
 
-  private reply(response: NodeHttp.ServerResponse, id: unknown, message: string, status = 200) {
+  /**
+   * An error for every request in the body (an array for a batch), nothing
+   * for notifications; a GET or DELETE gets one error with a null id.
+   */
+  private reply(
+    response: NodeHttp.ServerResponse,
+    messages: ReadonlyArray<Message>,
+    batch: boolean,
+    text: string,
+    status = 200,
+  ) {
     if (response.headersSent) return response.destroy();
+    const requests = messages.filter(
+      (message) => typeof message.method === "string" && "id" in message,
+    );
+    if (messages.length > 0 && requests.length === 0) {
+      response.writeHead(202).end();
+      return;
+    }
+    const answers = requests.map((message) => jsonRpcError(message.id, text));
     response
       .writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" })
-      .end(JSON.stringify(jsonRpcError(id, message)));
+      .end(
+        JSON.stringify(
+          messages.length === 0 ? jsonRpcError(null, text) : batch ? answers : answers[0],
+        ),
+      );
   }
 
   private async forward(input: {
@@ -261,19 +285,22 @@ export class McpMarketProxy {
     response: NodeHttp.ServerResponse;
     entry: McpMarketEntry;
     key: string;
+    credential: ProxyCredential;
     bound: number;
     sessionKey: string;
     body: Buffer | undefined;
-    firstId: unknown;
+    needsPolicy: boolean;
+    answer: (text: string, status?: number) => void;
+    restrictedText: string;
   }) {
-    const { request, response, entry, key, bound, sessionKey, body, firstId } = input;
+    const { request, response, entry, key, credential, bound, sessionKey, body, answer } = input;
     const headers: Record<string, string> = {
       "User-Agent": MARKET_USER_AGENT,
       "Accept-Encoding": "identity",
     };
     for (const name of REQUEST_HEADERS) {
       const value = request.headers[name];
-      if (Array.isArray(value)) return this.reply(response, firstId, "形式が不正です。", 400);
+      if (Array.isArray(value)) return answer("形式が不正です。", 400);
       if (typeof value === "string") headers[name] = value;
     }
     const sessionId = request.headers["mcp-session-id"];
@@ -293,29 +320,43 @@ export class McpMarketProxy {
         resolve();
       }),
     );
-    // Checked again right before every send: a remove (and re-add) may have
-    // happened while the body was arriving or a refresh ran.
-    const stillBound = () =>
-      this.credentials.has(key) && this.oauth.currentGeneration(entry.id) === bound;
-    const send = (token: AccessToken | undefined) => {
-      if (!stillBound()) return Promise.reject(new McpMarketRemoved());
-      return this.transport(entry, {
-        method: request.method as "POST" | "GET" | "DELETE",
-        url: entry.url,
-        headers: { ...headers, ...(token ? { Authorization: `Bearer ${token.token}` } : {}) },
-        ...(body === undefined ? {} : { body }),
-        signal: abort.signal,
-      });
+    // What the last send used, so a failure is recorded only for it.
+    let used: TokenUse | undefined;
+    // Checked again right before every send: the add (a remove and re-add),
+    // and the thread's mode, may have changed while the body arrived or a
+    // refresh ran.
+    const send = async (token: AccessToken | undefined) => {
+      if (!this.credentials.has(key) || this.oauth.currentGeneration(entry.id) !== bound)
+        throw new McpMarketRemoved();
+      if (token && token.generation !== bound) throw new McpMarketRemoved();
+      if (input.needsPolicy && !(await this.hooks.allowsOutsideActions(credential)))
+        throw new McpMarketRestricted();
+      used = token
+        ? {
+            generation: token.generation,
+            authVersion: token.authVersion,
+            tokenGeneration: token.tokenGeneration,
+          }
+        : undefined;
+      try {
+        return await this.transport(entry, {
+          method: request.method as "POST" | "GET" | "DELETE",
+          url: entry.url,
+          headers: { ...headers, ...(token ? { Authorization: `Bearer ${token.token}` } : {}) },
+          ...(body === undefined ? {} : { body }),
+          signal: abort.signal,
+        });
+      } catch (cause) {
+        throw new McpMarketSendFailed(cause);
+      }
     };
     try {
       let token = entry.auth.kind === "none" ? undefined : await this.oauth.accessToken(entry.id);
-      if (token && token.generation !== bound) throw new McpMarketRemoved();
       let upstream = await send(token);
       // One retry after a plain 401: upstream did not process the request.
       if (upstream.statusCode === 401 && token) {
         upstream.resume();
         token = await this.oauth.afterUnauthorized(entry.id, token);
-        if (token.generation !== bound) throw new McpMarketRemoved();
         upstream = await send(token);
         if (upstream.statusCode === 401) {
           upstream.resume();
@@ -332,7 +373,7 @@ export class McpMarketProxy {
         upstream.resume();
         throw new McpMarketUnavailable();
       }
-      this.oauth.noteReachable(entry.id, bound, status < 500);
+      this.oauth.noteReachableFor(entry.id, bound, used, status < 500);
       const out: Record<string, string> = {};
       for (const name of RESPONSE_HEADERS) {
         const value = upstream.headers[name];
@@ -353,17 +394,15 @@ export class McpMarketProxy {
     } catch (cause) {
       if (abort.signal.aborted) return;
       if (cause instanceof McpMarketRemoved)
-        return this.reply(response, firstId, `${entry.name} は Amu の設定で外されています。`, 404);
-      const needsLogin = cause instanceof McpMarketNeedsLogin;
-      if (!needsLogin) this.oauth.noteReachable(entry.id, bound, false);
-      this.reply(
-        response,
-        firstId,
-        needsLogin
-          ? `Amu の 設定 → MCP で ${entry.name} にもう一度ログインしてください。`
-          : `${entry.name} に一時的につながりません。少ししてからもう一度試してください。`,
-        needsLogin ? 200 : 502,
-      );
+        return answer(`${entry.name} は Amu の設定で外されています。`, 404);
+      if (cause instanceof McpMarketRestricted) return answer(input.restrictedText);
+      if (cause instanceof McpMarketNeedsLogin)
+        return answer(`Amu の 設定 → MCP で ${entry.name} にもう一度ログインしてください。`);
+      // Only a failed send of this request counts against the server; the
+      // OAuth side records its own failures with their own checks.
+      if (cause instanceof McpMarketSendFailed || cause instanceof McpMarketUnavailable)
+        this.oauth.noteReachableFor(entry.id, bound, used, false);
+      answer(`${entry.name} に一時的につながりません。少ししてからもう一度試してください。`, 502);
     } finally {
       done();
     }
@@ -371,6 +410,12 @@ export class McpMarketProxy {
 }
 
 class McpMarketRemoved extends Error {}
+class McpMarketRestricted extends Error {}
+class McpMarketSendFailed extends Error {
+  constructor(cause: unknown) {
+    super("send failed", { cause });
+  }
+}
 
 const isBatch = (body: Buffer) => body.toString("utf8").trimStart().startsWith("[");
 

@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off - PKCE and state come from node:crypto; login attempts expire by wall clock.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - PKCE and state come from node:crypto; login attempts expire by wall clock.
 import * as NodeCrypto from "node:crypto";
 
 import { findMcpMarketEntry, isAllowedMarketUrl, type McpMarketEntry } from "./catalog.ts";
@@ -6,6 +6,7 @@ import { checkMcpServer, initializeBody, postMcp } from "./mcpClient.ts";
 import {
   MARKET_USER_AGENT,
   readMarketResponse,
+  type MarketRequest,
   type MarketResponse,
   type MarketTransport,
 } from "./safeFetch.ts";
@@ -28,6 +29,8 @@ import type { McpMarketSecret, McpMarketStore } from "./store.ts";
 const ATTEMPT_LIFETIME_MS = 10 * 60_000;
 const METADATA_MAX_BYTES = 256_000;
 const REFRESH_SKEW_MS = 60_000;
+/** One OAuth request, headers and body together. */
+const OAUTH_DEADLINE_MS = 20_000;
 
 export class McpMarketLoginError extends Error {}
 
@@ -117,17 +120,28 @@ export class McpMarketOAuth {
     this.now = now;
   }
 
+  /** One OAuth exchange, headers and body together, within OAUTH_DEADLINE_MS. */
+  private async exchange(entry: McpMarketEntry, request: Omit<MarketRequest, "signal">) {
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), OAUTH_DEADLINE_MS);
+    try {
+      return await readMarketResponse(
+        await this.transport(entry, { ...request, signal: deadline.signal }),
+        METADATA_MAX_BYTES,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private async getJson(entry: McpMarketEntry, url: string) {
     if (!isAllowedMarketUrl(entry, url))
       throw new McpMarketLoginError("ログインの手順に、許可していない接続先が含まれていました。");
-    const response = await readMarketResponse(
-      await this.transport(entry, {
-        method: "GET",
-        url,
-        headers: { Accept: "application/json", "User-Agent": MARKET_USER_AGENT },
-      }),
-      METADATA_MAX_BYTES,
-    );
+    const response = await this.exchange(entry, {
+      method: "GET",
+      url,
+      headers: { Accept: "application/json", "User-Agent": MARKET_USER_AGENT },
+    });
     return response.status === 200 ? json(response) : undefined;
   }
 
@@ -139,20 +153,17 @@ export class McpMarketOAuth {
   ) {
     if (!isAllowedMarketUrl(entry, url))
       throw new McpMarketLoginError("ログインの手順に、許可していない接続先が含まれていました。");
-    return await readMarketResponse(
-      await this.transport(entry, {
-        method: "POST",
-        url,
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-          "User-Agent": MARKET_USER_AGENT,
-          ...(basic ? { Authorization: `Basic ${basic}` } : {}),
-        },
-        body: new URLSearchParams(form).toString(),
-      }),
-      METADATA_MAX_BYTES,
-    );
+    return await this.exchange(entry, {
+      method: "POST",
+      url,
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        "User-Agent": MARKET_USER_AGENT,
+        ...(basic ? { Authorization: `Basic ${basic}` } : {}),
+      },
+      body: new URLSearchParams(form).toString(),
+    });
   }
 
   /** Protected-resource metadata → authorization-server metadata. */
@@ -238,25 +249,22 @@ export class McpMarketOAuth {
         : "client_secret_basic";
     if (!isAllowedMarketUrl(entry, server.registrationEndpoint))
       throw new McpMarketLoginError("ログインの手順に、許可していない接続先が含まれていました。");
-    const response = await readMarketResponse(
-      await this.transport(entry, {
-        method: "POST",
-        url: server.registrationEndpoint,
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "User-Agent": MARKET_USER_AGENT,
-        },
-        body: JSON.stringify({
-          client_name: "Amu",
-          redirect_uris: [redirectUri],
-          grant_types: ["authorization_code", "refresh_token"],
-          response_types: ["code"],
-          token_endpoint_auth_method: method,
-        }),
+    const response = await this.exchange(entry, {
+      method: "POST",
+      url: server.registrationEndpoint,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": MARKET_USER_AGENT,
+      },
+      body: JSON.stringify({
+        client_name: "Amu",
+        redirect_uris: [redirectUri],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: method,
       }),
-      METADATA_MAX_BYTES,
-    );
+    });
     const body = json(response);
     const clientId = text(body?.client_id);
     if ((response.status !== 200 && response.status !== 201) || !clientId)
@@ -434,6 +442,28 @@ export class McpMarketOAuth {
     if (this.currentGeneration(serverId) !== generation) return;
     if (reachable) this.unreachable.delete(serverId);
     else this.unreachable.set(serverId, generation);
+  }
+
+  /**
+   * The same, for a request that used `used`: recorded only while that token
+   * is still the stored one, so a late failure from before a login is ignored.
+   */
+  noteReachableFor(
+    serverId: string,
+    generation: number,
+    used: TokenUse | undefined,
+    reachable: boolean,
+  ): void {
+    if (used !== undefined) {
+      const secret = this.store.secret(serverId);
+      if (
+        used.generation !== generation ||
+        secret?.authVersion !== used.authVersion ||
+        secret.tokenGeneration !== used.tokenGeneration
+      )
+        return;
+    }
+    this.noteReachable(serverId, generation, reachable);
   }
 
   /** The server's generation while it is added. */
