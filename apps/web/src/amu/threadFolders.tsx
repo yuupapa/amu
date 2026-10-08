@@ -1,12 +1,4 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ScopedProjectRef } from "@t3tools/contracts";
 
 import { Button } from "../components/ui/button";
@@ -203,22 +195,6 @@ export function useListedThreadShells(refs: ReadonlyArray<ScopedProjectRef>) {
     [keys, listedProjectIdOf, threads],
   );
 }
-
-/**
- * The project-tree sidebar's rows, grouped once for the whole list by the
- * project each thread is listed under (key: the sidebar's project key).
- * Provided by LegacySidebar; each project row reads its own list.
- */
-export const ListedThreadsContext = createContext<ReadonlyMap<
-  string,
-  ReadonlyArray<unknown>
-> | null>(null);
-
-export function useListedThreadsFor<T>(projectKey: string): ReadonlyArray<T> {
-  const map = useContext(ListedThreadsContext);
-  return (map?.get(projectKey) ?? EMPTY) as ReadonlyArray<T>;
-}
-const EMPTY: ReadonlyArray<never> = [];
 
 /** Keeps a project's previous array when its threads did not change, so its row does not redraw. */
 export function keepUnchangedLists<T>(

@@ -96,13 +96,7 @@ import {
   useThreadShells,
   useThreadShellsForProjectRefs,
 } from "../state/entities";
-import {
-  keepUnchangedLists,
-  ListedThreadsContext,
-  ThreadFolderDialog,
-  useListedProjectIdOf,
-  useListedThreadsFor,
-} from "../amu/threadFolders";
+import { keepUnchangedLists, ThreadFolderDialog, useListedProjectIdOf } from "../amu/threadFolders";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -251,6 +245,7 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   easing: "ease-out",
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
+const NO_LISTED_THREADS: ReadonlyArray<SidebarThreadSummary> = [];
 const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> = {
   repository: "Group by repository",
   repository_path: "Group by repository path",
@@ -1172,6 +1167,8 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
 
 interface SidebarProjectItemProps {
   project: SidebarProjectSnapshot;
+  /** The threads listed under this project; the same array while they do not change. */
+  listedThreads: ReadonlyArray<SidebarThreadSummary>;
   isThreadListExpanded: boolean;
   activeRouteThreadKey: string | null;
   openPullRequestsInRightPanel: boolean;
@@ -1296,7 +1293,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const ownThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
   const ownThreadsRef = useRef(ownThreads);
   ownThreadsRef.current = ownThreads;
-  const sidebarThreads = useListedThreadsFor<SidebarThreadSummary>(project.projectKey);
+  const sidebarThreads = props.listedThreads;
   const [threadFolderDialog, setThreadFolderDialog] = useState<{
     thread: { id: string; title: string; environmentId: string; ownProjectId: string };
     shownUnder: string;
@@ -3048,6 +3045,7 @@ interface SidebarProjectsContentProps {
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   markThreadUnread: ReturnType<typeof useThreadActions>["markThreadUnread"];
   sortedProjects: readonly SidebarProjectSnapshot[];
+  listedThreadsByProjectKey: ReadonlyMap<string, ReadonlyArray<SidebarThreadSummary>>;
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
   routeThreadKey: string | null;
@@ -3091,6 +3089,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     deleteThread,
     markThreadUnread,
     sortedProjects,
+    listedThreadsByProjectKey,
     expandedThreadListsByProject,
     activeRouteProjectKey,
     routeThreadKey,
@@ -3221,6 +3220,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                     {(dragHandleProps) => (
                       <SidebarProjectItem
                         project={project}
+                        listedThreads={
+                          listedThreadsByProjectKey.get(project.projectKey) ?? NO_LISTED_THREADS
+                        }
                         isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
                         activeRouteThreadKey={
                           activeRouteProjectKey === project.projectKey ? routeThreadKey : null
@@ -3255,6 +3257,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               <SidebarProjectListRow
                 key={project.projectKey}
                 project={project}
+                listedThreads={
+                  listedThreadsByProjectKey.get(project.projectKey) ?? NO_LISTED_THREADS
+                }
                 isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
                 activeRouteThreadKey={
                   activeRouteProjectKey === project.projectKey ? routeThreadKey : null
@@ -3599,17 +3604,20 @@ export default function LegacySidebar() {
       ...project,
       id: project.projectKey,
     }));
-    const sortableThreads = visibleThreads.map((thread) => {
-      const listedProjectId = listedProjectIdOf(thread);
-      const physicalKey =
-        projectPhysicalKeyByScopedRef.get(
-          scopedProjectKey(scopeProjectRef(thread.environmentId, listedProjectId)),
-        ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, listedProjectId));
-      return {
-        ...thread,
-        projectId: (physicalToLogicalKey.get(physicalKey) ?? physicalKey) as ProjectId,
-      };
-    });
+    const sortableThreads = visibleThreads
+      // Subagent threads have no row here, so they do not move a project either.
+      .filter((thread) => thread.lineage.relationshipToParent !== "subagent")
+      .map((thread) => {
+        const listedProjectId = listedProjectIdOf(thread);
+        const physicalKey =
+          projectPhysicalKeyByScopedRef.get(
+            scopedProjectKey(scopeProjectRef(thread.environmentId, listedProjectId)),
+          ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, listedProjectId));
+        return {
+          ...thread,
+          projectId: (physicalToLogicalKey.get(physicalKey) ?? physicalKey) as ProjectId,
+        };
+      });
     return sortProjectsForSidebar(
       sortableProjects,
       sortableThreads,
@@ -3946,7 +3954,7 @@ export default function LegacySidebar() {
   }, []);
 
   return (
-    <ListedThreadsContext.Provider value={threadsByProjectKey}>
+    <>
       {prewarmedSidebarThreadRefs.map((threadRef) => (
         <SidebarThreadDetailPrewarmer key={scopedThreadKey(threadRef)} threadRef={threadRef} />
       ))}
@@ -3975,6 +3983,7 @@ export default function LegacySidebar() {
         deleteThread={deleteThread}
         markThreadUnread={markThreadUnread}
         sortedProjects={sortedProjects}
+        listedThreadsByProjectKey={threadsByProjectKey}
         expandedThreadListsByProject={expandedThreadListsByProject}
         activeRouteProjectKey={activeRouteProjectKey}
         routeThreadKey={routeThreadKey}
@@ -3992,6 +4001,6 @@ export default function LegacySidebar() {
         projectsLength={projects.length}
       />
       <SidebarChromeFooter />
-    </ListedThreadsContext.Provider>
+    </>
   );
 }

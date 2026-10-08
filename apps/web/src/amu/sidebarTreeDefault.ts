@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 import {
   getClientSettings,
-  persistClientSettingsPatch,
+  persistClientSettingsUpdate,
   useClientSettingsHydrated,
 } from "../hooks/useSettings";
 
@@ -38,7 +38,8 @@ export function useSidebarTreeByDefault(): void {
       return;
     }
     running = true;
-    void persistClientSettingsPatch({ legacySidebarEnabled: true })
+    // This save reports failure, so the flag is written only once it is on disk.
+    void persistClientSettingsUpdate((current) => ({ ...current, legacySidebarEnabled: true }))
       .then(markDone, () => undefined)
       .finally(() => {
         running = false;
