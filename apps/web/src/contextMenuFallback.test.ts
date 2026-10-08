@@ -247,6 +247,25 @@ describe("showContextMenuFallback", () => {
     await expect(selectionPromise).resolves.toBe("rename");
   });
 
+  it("reports the highlighted item and clears it when the menu closes", async () => {
+    const highlights: Array<string | null> = [];
+    const selectionPromise = showContextMenuFallback(
+      [
+        { id: "right", label: "Open to the right" },
+        { id: "below", label: "Open below" },
+      ],
+      undefined,
+      (id) => highlights.push(id),
+    );
+
+    findButton("Open to the right")?.dispatchEvent(new MouseEvent("mouseenter"));
+    findButton("Open below")?.dispatchEvent(new MouseEvent("mouseenter"));
+    dismissContextMenu();
+
+    await expect(selectionPromise).resolves.toBeNull();
+    expect(highlights).toEqual(["right", null, "below", null]);
+  });
+
   it("ignores a click from the gesture that opened the menu", async () => {
     let enablePointerSelection: ((time: number) => void) | undefined;
     vi.stubGlobal("requestAnimationFrame", (callback: (time: number) => void) => {

@@ -84,7 +84,22 @@ describe("LocalApi", () => {
     const items = [{ id: "rename", label: "Rename" }] as const;
 
     await expect(createLocalApi().contextMenu.show(items, { x: 4, y: 5 })).resolves.toBe("rename");
-    expect(showContextMenuFallbackMock).toHaveBeenCalledWith(items, { x: 4, y: 5 });
+    expect(showContextMenuFallbackMock).toHaveBeenCalledWith(items, { x: 4, y: 5 }, undefined);
+  });
+
+  it("draws a menu that reports highlights in the page, even on desktop", async () => {
+    const showContextMenu = vi.fn();
+    testWindow().desktopBridge = { showContextMenu } as unknown as DesktopBridge;
+    showContextMenuFallbackMock.mockResolvedValue("right");
+    const { createLocalApi } = await import("./localApi");
+    const items = [{ id: "right", label: "Open to the right" }] as const;
+    const onHighlight = vi.fn();
+
+    await expect(createLocalApi().contextMenu.show(items, undefined, onHighlight)).resolves.toBe(
+      "right",
+    );
+    expect(showContextMenuFallbackMock).toHaveBeenCalledWith(items, undefined, onHighlight);
+    expect(showContextMenu).not.toHaveBeenCalled();
   });
 
   it("dismisses an open browser context menu without a desktop bridge", async () => {

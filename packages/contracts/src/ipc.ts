@@ -1349,6 +1349,12 @@ export interface LocalApi {
     show: <T extends string>(
       items: readonly ContextMenuItem<T>[],
       position?: { x: number; y: number },
+      /**
+       * Called with the item under the pointer or keyboard focus, and with
+       * null when none is. Passing it draws the menu in the page, even on
+       * desktop, because a native menu does not report its highlighted item.
+       */
+      onHighlight?: (id: T | null) => void,
     ) => Promise<T | null>;
     close: () => Promise<void>;
   };

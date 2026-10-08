@@ -144,11 +144,13 @@ import {
   canOpenThreadInSplitPane,
   commitThreadSplitDrop,
   openThreadInSplitPane,
-  prepareNewThreadInSplitPane,
-  prepareNewThreadSplitDrop,
+  canPlaceNewThreadSplit,
+  newThreadSplitAt,
+  prepareNewThreadSplit,
+  previewSplitPlacement,
+  type NewThreadSplit,
 } from "./SplitWorkspace";
 import { beginSplitPointerDrag } from "./splitPointerDrag";
-import type { SplitPlacement } from "../splitLayout.logic";
 import { uiText } from "~/uiText";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { Kbd } from "./ui/kbd";
@@ -262,10 +264,6 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
   separate: "Keep separate",
 };
 /** Where a new thread opens instead of replacing the focused pane. */
-type NewThreadSplit =
-  | { kind: "beside"; placement: SplitPlacement }
-  | { kind: "drop"; point: { x: number; y: number } };
-
 /** How long the new-thread button is held before it can be dragged to the chat area. */
 const NEW_THREAD_HOLD_MS = 350;
 
@@ -279,6 +277,17 @@ function newThreadSplitForMenuId(id: string | null): NewThreadSplit | undefined 
   if (id === "new-thread-split-right") return { kind: "beside", placement: "right" };
   if (id === "new-thread-split-down") return { kind: "beside", placement: "bottom" };
   return undefined;
+}
+
+/** Previews in the chat area where a highlighted split menu item would open. */
+function previewSplitMenuItem(id: string | null) {
+  previewSplitPlacement(
+    id === "new-thread-split-right" || id === "open-split-right"
+      ? "right"
+      : id === "new-thread-split-down" || id === "open-split-down"
+        ? "bottom"
+        : null,
+  );
 }
 
 const SIDEBAR_ICON_ACTION_BUTTON_CLASS =
@@ -296,17 +305,27 @@ function clampSidebarThreadPreviewCount(value: number): SidebarThreadPreviewCoun
   ) as SidebarThreadPreviewCount;
 }
 
+/**
+ * Names one folder of a grouped project in a menu: its title and the end of
+ * its path, which is what tells the folders apart (a full path is cut off
+ * before it gets there). The machine is named only when the folders are on
+ * different machines.
+ */
 function formatProjectMemberActionLabel(
   member: SidebarProjectGroupMember,
   groupedProjectCount: number,
+  members: readonly SidebarProjectGroupMember[],
 ): string {
   if (groupedProjectCount <= 1) {
     return member.title;
   }
 
-  return member.environmentLabel
-    ? `${member.environmentLabel} — ${member.workspaceRoot}`
-    : member.workspaceRoot;
+  const folder = member.workspaceRoot.split(/[\\/]/).filter(Boolean).slice(-2).join("/");
+  const label = `${member.title} — …/${folder}`;
+  const machines = new Set(members.map((other) => other.environmentLabel ?? ""));
+  return machines.size > 1 && member.environmentLabel
+    ? `${member.environmentLabel} · ${label}`
+    : label;
 }
 
 function projectExpansionPreferenceKeys(project: SidebarProjectSnapshot): string[] {
@@ -1776,13 +1795,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   // new-thread button was dropped, instead of replacing the focused pane.
   const createThreadForProjectMember = useCallback(
     (member: SidebarProjectGroupMember, split?: NewThreadSplit) => {
-      if (split !== undefined) {
-        const prepared =
-          split.kind === "beside"
-            ? prepareNewThreadInSplitPane(split.placement)
-            : prepareNewThreadSplitDrop(split.point);
-        if (!prepared) return;
-      }
+      if (split !== undefined && !prepareNewThreadSplit(split)) return;
       if (isMobile) {
         setOpenMobile(false);
       }
@@ -1810,6 +1823,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   /** Creates a thread in this project, asking which member when it groups several. */
   const createThreadInProject = useCallback(
     (position: { x: number; y: number }, split?: NewThreadSplit) => {
+      if (split && !canPlaceNewThreadSplit(split)) return;
       if (project.memberProjects.length === 1) {
         createThreadForProjectMember(project.memberProjects[0]!, split);
         return;
@@ -1824,7 +1838,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           api.contextMenu.show(
             project.memberProjects.map((member) => ({
               id: member.physicalProjectKey,
-              label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
+              label: formatProjectMemberActionLabel(
+                member,
+                project.groupedProjectCount,
+                project.memberProjects,
+              ),
             })),
             position,
           ),
@@ -1873,7 +1891,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       void (async () => {
         const api = readLocalApi();
         if (!api) return;
-        const clicked = await api.contextMenu.show(NEW_THREAD_SPLIT_MENU_ITEMS, position);
+        const clicked = await api.contextMenu.show(
+          NEW_THREAD_SPLIT_MENU_ITEMS,
+          position,
+          previewSplitMenuItem,
+        );
         const split = newThreadSplitForMenuId(clicked);
         if (clicked === "new-thread" || split) createThreadInProject(position, split);
       })();
@@ -1890,7 +1912,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         target: null,
         label: `${uiText("New thread")} · ${project.displayName}`,
         holdMs: NEW_THREAD_HOLD_MS,
-        onDrop: (point) => createThreadInProject(position, { kind: "drop", point }),
+        onDrop: (point) => {
+          const split = newThreadSplitAt(point);
+          if (split) createThreadInProject(position, split);
+        },
       });
     },
     [createThreadInProject, project.displayName],
@@ -1932,7 +1957,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
           return {
             id,
-            label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
+            label: formatProjectMemberActionLabel(
+              member,
+              project.groupedProjectCount,
+              project.memberProjects,
+            ),
             ...(options?.destructive ? { destructive: true } : {}),
             ...(options?.disabled ? { disabled: true } : {}),
           };
@@ -2009,6 +2038,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             x: event.clientX,
             y: event.clientY,
           },
+          previewSplitMenuItem,
         );
 
         if (!clicked) {
@@ -2475,6 +2505,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           },
         ],
         position,
+        previewSplitMenuItem,
       );
 
       if (clicked === "open-split-right" || clicked === "open-split-down") {
@@ -3151,6 +3182,7 @@ interface SidebarProjectsContentProps {
   threadPreviewCount: SidebarThreadPreviewCount;
   updateSettings: ReturnType<typeof useUpdateClientSettings>;
   openAddProject: () => void;
+  openNewThreadPicker: (split?: NewThreadSplit) => void;
   isManualProjectSorting: boolean;
   projectDnDSensors: ReturnType<typeof useSensors>;
   projectCollisionDetection: CollisionDetection;
@@ -3195,6 +3227,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     threadPreviewCount,
     updateSettings,
     openAddProject,
+    openNewThreadPicker,
     isManualProjectSorting,
     projectDnDSensors,
     projectCollisionDetection,
@@ -3223,6 +3256,42 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     attachProjectListAutoAnimateRef,
     projectsLength,
   } = props;
+
+  // The header's new-thread button splits like a project's: right-click to
+  // choose a side, or hold it and drop it on the chat area. The picker then
+  // asks where the thread goes.
+  const handleNewThreadPickerContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      const position = { x: event.clientX, y: event.clientY };
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) return;
+        const clicked = await api.contextMenu.show(
+          NEW_THREAD_SPLIT_MENU_ITEMS,
+          position,
+          previewSplitMenuItem,
+        );
+        const split = newThreadSplitForMenuId(clicked);
+        if (clicked === "new-thread" || split) openNewThreadPicker(split);
+      })();
+    },
+    [openNewThreadPicker],
+  );
+  const handleNewThreadPickerPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      beginSplitPointerDrag(event, {
+        target: null,
+        label: uiText("New thread"),
+        holdMs: NEW_THREAD_HOLD_MS,
+        onDrop: (point) => {
+          const split = newThreadSplitAt(point);
+          if (split) openNewThreadPicker(split);
+        },
+      });
+    },
+    [openNewThreadPicker],
+  );
 
   const handleProjectSortOrderChange = useCallback(
     (sortOrder: SidebarProjectSortOrder) => {
@@ -3291,6 +3360,23 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
           <span className="text-xs font-medium text-sidebar-muted-foreground/80">Projects</span>
           <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="icon-xs"
+                    variant="ghost-muted"
+                    aria-label="New thread"
+                    onClick={() => openNewThreadPicker()}
+                    onContextMenu={handleNewThreadPickerContextMenu}
+                    onPointerDown={handleNewThreadPickerPointerDown}
+                  />
+                }
+              >
+                <SquarePenIcon className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipPopup side="right">New thread</TooltipPopup>
+            </Tooltip>
             <ProjectSortMenu
               projectSortOrder={projectSortOrder}
               threadSortOrder={threadSortOrder}
@@ -3447,6 +3533,15 @@ export default function LegacySidebar() {
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
     [],
+  );
+  // Asks where the new thread goes: a project or no project.
+  const openNewThreadPicker = useCallback(
+    (split?: NewThreadSplit) => {
+      if (split && !canPlaceNewThreadSplit(split)) return;
+      if (isMobile) setOpenMobile(false);
+      openCommandPalette({ open: "new-thread-in", ...(split ? { newThreadSplit: split } : {}) });
+    },
+    [isMobile, setOpenMobile],
   );
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<string>
@@ -4089,6 +4184,7 @@ export default function LegacySidebar() {
         threadPreviewCount={sidebarThreadPreviewCount}
         updateSettings={updateSettings}
         openAddProject={openAddProjectCommandPalette}
+        openNewThreadPicker={openNewThreadPicker}
         isManualProjectSorting={isManualProjectSorting}
         projectDnDSensors={projectDnDSensors}
         projectCollisionDetection={projectCollisionDetection}

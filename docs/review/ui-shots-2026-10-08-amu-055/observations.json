@@ -1,0 +1,42 @@
+[
+  {
+    "id": "S1 thread right-click preview",
+    "result": "completed",
+    "obs": "preview shown=1, below box={\"x\":256,\"y\":400,\"width\":1024,\"height\":400}, preview after click=0, panes=2"
+  },
+  {
+    "id": "S2 header pen right-click split",
+    "result": "completed",
+    "obs": "preview shown=1, panes after picking No project=2, url=/draft/b26c04bd-df8d-4953-aac3-03c2ca47227d"
+  },
+  {
+    "id": "S3 cancel then normal click",
+    "result": "completed",
+    "obs": "panes after Esc + normal click=1, after second click=1"
+  },
+  {
+    "id": "S4 hold-drag project new thread",
+    "result": "completed",
+    "obs": "drop highlight=1, panes=2"
+  },
+  {
+    "id": "S5 header pen hold-drag",
+    "result": "completed",
+    "obs": "drop highlight=1, panes=2"
+  },
+  {
+    "id": "S6 grouped project chooser",
+    "result": "completed",
+    "obs": "labels=[\"Cursorで開く\",\"\",\"プロジェクトのスクリプトを追加\",\"Gitを初期化\",\"Previous agents (38)\",\"t3code-v2（Amu 開発） — …/task/t3code-v2\",\"server — …/apps/server\"]"
+  },
+  {
+    "id": "S7 full layout",
+    "result": "completed",
+    "obs": "panes=4, red preview=1, picker opened even though full=false, toast=1, panes after=4"
+  },
+  {
+    "id": "S8 phone width picker",
+    "result": "completed",
+    "obs": "picker open=true"
+  }
+]

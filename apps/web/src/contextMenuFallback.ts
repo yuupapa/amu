@@ -231,6 +231,7 @@ export function dismissContextMenu(): void {
 export function showContextMenuFallback<T extends string>(
   items: readonly ContextMenuItem<T>[],
   position?: { x: number; y: number },
+  onHighlight?: (id: T | null) => void,
 ): Promise<T | null> {
   return new Promise<T | null>((resolve) => {
     const previouslyFocusedElement =
@@ -247,6 +248,7 @@ export function showContextMenuFallback<T extends string>(
         return;
       }
       isDisposed = true;
+      onHighlight?.(null);
       if (activeContextMenuDismiss === dismiss) {
         activeContextMenuDismiss = null;
       }
@@ -433,10 +435,12 @@ export function showContextMenuFallback<T extends string>(
           button.addEventListener("focus", () => {
             isFocused = true;
             updateHighlight();
+            if (!isDisposed) onHighlight?.(hasChildren ? null : item.id);
           });
           button.addEventListener("blur", () => {
             isFocused = false;
             updateHighlight();
+            if (!isDisposed) onHighlight?.(null);
           });
 
           if (hasChildren) {

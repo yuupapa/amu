@@ -128,7 +128,8 @@ import {
   isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
-import { onOpenCommandPalette } from "../commandPaletteBus";
+import { onOpenCommandPalette, takePendingNewThreadSplit } from "../commandPaletteBus";
+import { prepareNewThreadSplit } from "./SplitWorkspace";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
@@ -469,6 +470,12 @@ function projectFavicon(project: Project) {
   return <ProjectFavicon project={project} className="size-4" />;
 }
 
+/** Applies the split the palette was opened with, if any; false when it cannot be honored. */
+function prepareRequestedNewThreadSplit(): boolean {
+  const split = takePendingNewThreadSplit();
+  return split === null || prepareNewThreadSplit(split);
+}
+
 export function CommandPalette({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
@@ -477,6 +484,9 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     openIntent: null,
   });
   const setOpen = useCallback((open: boolean) => dispatch({ _tag: "SetOpen", open }), []);
+  useEffect(() => {
+    if (!state.open) takePendingNewThreadSplit();
+  }, [state.open]);
   const toggleMode = useCallback(
     (mode: SearchOverlayMode) => dispatch({ _tag: "ToggleMode", mode }),
     [],
@@ -1367,6 +1377,7 @@ function OpenCommandPaletteDialog(props: {
         },
         icon: projectFaviconIcon,
         runProject: async (project) => {
+          if (!prepareRequestedNewThreadSplit()) return;
           const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
           const contextualRefBelongsToGroup =
             contextualProjectRef !== null &&
@@ -1399,7 +1410,10 @@ function OpenCommandPaletteDialog(props: {
         title: "No project",
         icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
         shortcutCommand: "chat.newWithoutProject" as const,
-        run: () => startScratchThread(scratchTargetEnvironmentId),
+        run: async () => {
+          if (!prepareRequestedNewThreadSplit()) return;
+          await startScratchThread(scratchTargetEnvironmentId);
+        },
       },
       ...projectItems.slice(noProjectIndex),
     ];

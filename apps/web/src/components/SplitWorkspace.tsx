@@ -5,6 +5,7 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { Columns2Icon, Rows2Icon, XIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { create } from "zustand";
 
 import { cn } from "~/lib/utils";
 import { ChatPaneContext, type ChatPaneContextValue } from "./ChatPaneContext";
@@ -477,33 +478,39 @@ export function commitThreadSplitDrop(
 }
 
 /**
- * Makes the next thread the route opens (a new thread about to be created)
- * open beside the focused pane, or says why it cannot.
+ * Where a thread about to be created should open: beside the focused pane, or
+ * in the pane and side it was dropped on. A drop is resolved when it happens,
+ * since a picker opened afterwards covers the chat area.
  */
-export function prepareNewThreadInSplitPane(placement: SplitPlacement): boolean {
-  const { layout } = useSplitLayoutStore.getState();
-  if (countSplitPanes(layout) >= MAX_SPLIT_PANES) {
-    showSplitFullToast();
-    return false;
-  }
-  useSplitLayoutStore.getState().placeNextRouteTarget(layout.focusedPaneId, placement);
-  return true;
+export type NewThreadSplit =
+  | { kind: "beside"; placement: SplitPlacement }
+  | { kind: "drop"; paneId: string; zone: SplitPlacement | "center" };
+
+/** The split for a new thread dropped at `point`; null when it is not over the chat area. */
+export function newThreadSplitAt(point: { x: number; y: number }): NewThreadSplit | null {
+  const drop = resolveThreadSplitDrop(point);
+  return drop ? { kind: "drop", paneId: drop.paneId, zone: drop.zone } : null;
 }
 
 /**
- * Like {@link commitThreadSplitDrop} for a thread not created yet: when the
- * pointer ended over the chat area, the next thread the route opens lands
- * there. Returns false when it ended elsewhere or the layout is full.
+ * Makes the next thread the route opens (the one about to be created) open as
+ * `split` asks, or says why it cannot.
  */
-export function prepareNewThreadSplitDrop(point: { x: number; y: number }): boolean {
-  const drop = resolveThreadSplitDrop(point);
-  if (!drop) return false;
-  const { layout } = useSplitLayoutStore.getState();
-  if (drop.zone !== "center" && countSplitPanes(layout) >= MAX_SPLIT_PANES) {
+export function prepareNewThreadSplit(split: NewThreadSplit): boolean {
+  if (!canPlaceNewThreadSplit(split)) return false;
+  const { layout, placeNextRouteTarget } = useSplitLayoutStore.getState();
+  if (split.kind === "beside") placeNextRouteTarget(layout.focusedPaneId, split.placement);
+  else placeNextRouteTarget(split.paneId, split.zone);
+  return true;
+}
+
+/** Whether `split` still has room, saying so when it does not; checked before asking where the thread goes. */
+export function canPlaceNewThreadSplit(split: NewThreadSplit): boolean {
+  const addsPane = split.kind === "beside" || split.zone !== "center";
+  if (addsPane && countSplitPanes(useSplitLayoutStore.getState().layout) >= MAX_SPLIT_PANES) {
     showSplitFullToast();
     return false;
   }
-  useSplitLayoutStore.getState().placeNextRouteTarget(drop.paneId, drop.zone);
   return true;
 }
 
@@ -517,14 +524,44 @@ function showSplitFullToast() {
   );
 }
 
-/** Highlights where a thread dragged from the sidebar would land. */
+const useSplitMenuPreviewStore = create<{ placement: SplitPlacement | null }>()(() => ({
+  placement: null,
+}));
+
+/**
+ * Shows where a split menu item would open, beside the focused pane, while
+ * that item is highlighted. Pass null when no split item is highlighted.
+ */
+export function previewSplitPlacement(placement: SplitPlacement | null) {
+  useSplitMenuPreviewStore.setState({ placement });
+}
+
+/**
+ * Highlights where a thread dragged from the sidebar would land, or where a
+ * highlighted split menu item would open.
+ */
 export function SplitDropOverlay() {
   const target = useThreadSplitDragStore((state) => state.target);
   const label = useThreadSplitDragStore((state) => state.label);
   const point = useThreadSplitDragStore((state) => state.point);
   const outside = useThreadSplitDragStore((state) => state.outside);
   const paneCount = useSplitLayoutStore((state) => countSplitPanes(state.layout));
+  const focusedPaneId = useSplitLayoutStore((state) => state.layout.focusedPaneId);
+  const menuPlacement = useSplitMenuPreviewStore((state) => state.placement);
   const shell = useThreadShell(target?.kind === "server" ? target.threadRef : null);
+  if (menuPlacement !== null) {
+    const pane = document.querySelector<HTMLElement>(
+      `[data-split-pane-id="${CSS.escape(focusedPaneId)}"]`,
+    );
+    if (!pane) return null;
+    return (
+      <SplitDropHighlight
+        rect={pane.getBoundingClientRect()}
+        zone={menuPlacement}
+        blocked={paneCount >= MAX_SPLIT_PANES}
+      />
+    );
+  }
   if ((!target && label === null) || !point || !outside) return null;
   const drop = resolveThreadSplitDrop(point);
   const blocked = drop !== null && drop.zone !== "center" && paneCount >= MAX_SPLIT_PANES;
