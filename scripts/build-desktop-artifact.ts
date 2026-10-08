@@ -55,6 +55,9 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.t3tools.t3code";
+// Windows keys NSIS install/uninstall registry entries off the appId, so Amu
+// gets its own. Must match the AppUserModelId set at runtime.
+const WINDOWS_AMU_APP_ID = "com.yuupapa.amu";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2669,9 +2672,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   arch?: typeof BuildArch.Type,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
+    appId: platform === "win" ? WINDOWS_AMU_APP_ID : DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    // scripts/amu-release.mjs expects the mac zip under the T3-Code- prefix,
+    // so only the Windows installer takes the Amu name.
+    artifactName:
+      platform === "win" ? "Amu-${version}-${arch}.${ext}" : "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,

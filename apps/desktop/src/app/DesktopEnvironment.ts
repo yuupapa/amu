@@ -235,8 +235,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     otlpProtocol: config.otlpProtocol,
     branding,
     displayName,
+    // Windows-only; matches the Amu installer's appId so taskbar pins and
+    // notifications never merge with an upstream T3 Code install.
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      isDevelopment ? "com.yuupapa.amu.dev" : "com.yuupapa.amu",
     ),
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
     linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",

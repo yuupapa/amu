@@ -459,6 +459,20 @@ NSIS differential packaging remains enabled. A sidecar layout transition can
 produce a larger one-time download; subsequent small releases retain their
 blockmaps, with a 60 MB maximum for a representative sidecar-to-sidecar update.
 
+## Amu releases (yuupapa/amu)
+
+Amu は上の Release ワークフローを使いません。Mac で `node scripts/amu-release.mjs --notes-file <notes.md> --publish` を実行します。
+
+1. スクリプトが Mac 版をビルドし、更新用の zip とマニフェストを付けた下書きのリリースを作ります。
+2. 続けて `.github/workflows/amu-windows-release.yml` を起動します。このワークフローは同じコミットから Windows x64 のインストーラーをビルドし、`Amu-<版>-x64.exe`、その `.blockmap`、`latest.yml` を下書きに追加してからリリースを公開します。
+3. 公開されるまで、Mac と Windows のどちらの Amu にも新しい版は届きません。Windows の更新は electron-updater が `latest.yml` を読むので、インストーラーより先にリリースが公開されると、Windows の Amu が更新の確認に失敗します。
+
+ワークフローは yuupapa/amu の既定ブランチ `amu` に置いてある版が動きます。ビルドするコミットは入力の `commit` で決まります。`-f dry_run=true` を付けると、リリースには触らず、インストーラーを Actions の成果物として残すだけになります。
+
+Windows のビルドが失敗したら、`gh run view --repo yuupapa/amu --log-failed` で原因を見て、`gh workflow run amu-windows-release.yml --repo yuupapa/amu -f tag=v<版> -f commit=<sha>` でやり直します。Mac 版だけ先に出す場合は `gh release edit v<版> --repo yuupapa/amu --draft=false --latest` を実行します。Windows の成果物は、あとで同じワークフローを動かせば追加されます。
+
+今の Windows インストーラーは署名していません。署名を入れるときは、下の Azure Trusted Signing の節と `release-desktop.yml` の署名手順を参考にします。
+
 ## 0) npm OIDC trusted publishing setup (CLI)
 
 The workflow runs `node scripts/build-npm-platform-packages.ts` on the downloaded CLI archives, then

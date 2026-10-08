@@ -96,6 +96,12 @@ Pass a path, such as `t3 app ../my-project`, to open another directory. It requi
 the desktop app, so a standalone server or an SSH session is not enough. If the
 command cannot reach the app, start or update the desktop app and try again.
 
+### Amu を Windows に入れる
+
+[Amu のリリースページ](https://github.com/yuupapa/amu/releases)から `Amu-<版>-x64.exe` をダウンロードして実行します。対応しているのは 64 ビット版（x64）の Windows だけです。今のインストーラーにはコード署名が無いので、「Windows によって PC が保護されました」と出たら「詳細情報」を押し、「実行」を選んでください。
+
+会話や設定は `%APPDATA%\Amu\runtime` に保存され、アンインストールしても消えません。サーバーは 5233 番ポートを使います。本家 T3 Code とはデータの場所もポートも別なので、同じ PC に両方を入れて同時に使えます。新しい版が出ると、起動中の Amu が自動でダウンロードしてお知らせを出します。
+
 ## Mobile app
 
 Install T3 Code from the

@@ -7,7 +7,9 @@
 //   node scripts/amu-release.mjs --notes-file notes.md --publish  # build and publish
 //
 // Publishing needs `gh` logged in to an account that can write to yuupapa/amu,
-// and the current commit pushed there.
+// and the current commit pushed there. The release starts as a draft; the
+// amu-windows-release.yml workflow adds the Windows installer and publishes it,
+// so Windows updaters never find a release without its latest.yml.
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -165,6 +167,7 @@ run("gh", [
   tag,
   "--repo",
   REPOSITORY,
+  "--draft",
   "--target",
   commit,
   "--title",
@@ -175,3 +178,18 @@ run("gh", [
   payloadPath,
   NodePath.join(out, appZipName),
 ]);
+run("gh", [
+  "workflow",
+  "run",
+  "amu-windows-release.yml",
+  "--repo",
+  REPOSITORY,
+  "-f",
+  `tag=${tag}`,
+  "-f",
+  `commit=${commit}`,
+]);
+console.log(
+  `\n${tag} is a draft until the Windows build publishes it. If that build fails,\n` +
+    `publish the Mac release alone: gh release edit ${tag} --repo ${REPOSITORY} --draft=false --latest`,
+);

@@ -8,7 +8,8 @@ export const BRAND_ASSET_PATHS = {
   // Amu ships its own mark; T3 Code's must not appear in Amu.
   productionMacIconPng: "assets/amu/amu-macos-1024.png",
   productionLinuxIconPng: "assets/prod/black-universal-1024.png",
-  productionWindowsIconIco: "assets/prod/t3-black-windows.ico",
+  // Amu ships its own mark; T3 Code's must not appear in Amu.
+  productionWindowsIconIco: "assets/amu/amu-windows.ico",
   productionWebFaviconIco: "assets/amu/amu-web-favicon.ico",
   productionWebFavicon16Png: "assets/amu/amu-web-favicon-16x16.png",
   productionWebFavicon32Png: "assets/amu/amu-web-favicon-32x32.png",

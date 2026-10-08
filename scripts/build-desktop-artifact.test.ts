@@ -2035,6 +2035,40 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  it.effect("gives Windows builds the Amu app id and installer name", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.equal(config.appId, "com.yuupapa.amu");
+      assert.equal(config.artifactName, "Amu-${version}-${arch}.${ext}");
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("keeps the upstream app id and T3 Code artifact name for macOS builds", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.equal(config.appId, "com.t3tools.t3code");
+      assert.equal(config.artifactName, "T3-Code-${version}-${arch}.${ext}");
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
   it("stages the resource monitor as an external executable resource", () => {
     assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
       {
