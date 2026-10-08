@@ -8693,6 +8693,8 @@ export default function ChatView(props: ChatViewProps) {
   });
   const activeProjectIdRef = useRef<string | null>(null);
   activeProjectIdRef.current = activeProject?.id ?? null;
+  const envModeRef = useRef(envMode);
+  envModeRef.current = envMode;
   const isScratchForAutoFolder = (project: NonNullable<typeof activeProject>) =>
     isScratchProject(project, scratchWorkspaceRootFor(project.environmentId));
   const moveDraftToAutoFolder = async (
@@ -8702,14 +8704,18 @@ export default function ChatView(props: ChatViewProps) {
   ): Promise<string | null> => {
     const project = activeProject;
     if (!draftId || !project) return null;
-    // A new worktree needs the other project's branches first; stay put.
-    if (envMode === "worktree") return null;
+    // A new worktree needs the other project's branches first; stay put, also
+    // when the draft is switched to one while a project is found or made.
+    if (envModeRef.current === "worktree") return null;
     const environmentId = project.environmentId;
     const routeKeyAtStart = currentRouteThreadKeyRef.current;
     // A cancel, or leaving this draft, while a project is being found or made
     // leaves the draft where it is.
     const stillWanted = () =>
-      !signal.aborted && currentRouteThreadKeyRef.current === routeKeyAtStart && unchanged();
+      !signal.aborted &&
+      currentRouteThreadKeyRef.current === routeKeyAtStart &&
+      envModeRef.current !== "worktree" &&
+      unchanged();
     let target: NonNullable<typeof activeProject> | null;
     if (!stillWanted()) return null;
     if (answer.kind === "new") {

@@ -126,8 +126,15 @@ function cliNotesRequest(input: CliNotesRequest): Promise<CliNotes | null> {
       notLocal: "このMacのローカルのAmuで利用してください。",
       unknown: "更新内容を取得できませんでした。",
     }).then((answer) => (answer.result ?? null) as CliNotes | null);
-    // A failed request may be tried again the next time the panel opens.
-    request.catch(() => cliNotesRequests.delete(key));
+    // Only a Japanese translation is kept for this session. A failure, or the
+    // English original shown while translating did not work, is asked for
+    // again the next time the panel opens.
+    request.then(
+      (notes) => {
+        if (notes?.language !== "ja") cliNotesRequests.delete(key);
+      },
+      () => cliNotesRequests.delete(key),
+    );
     cliNotesRequests.set(key, request);
   }
   return request;
