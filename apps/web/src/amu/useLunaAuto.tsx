@@ -28,6 +28,7 @@ import {
   type AutoTicket,
 } from "../lib/lunaAuto";
 import { uiText } from "../uiText";
+import { withFolders } from "./autoFolder";
 
 /**
  * Amu's "Auto": for the first request of a thread, a connected AI (Haiku, then
@@ -264,13 +265,15 @@ export function useLunaAuto(inputs: LunaAutoInputs) {
           unchanged,
           decide: async () => {
             const answer = await lunaAutoDecide(
-              {
-                id,
-                action: "decide",
-                prompt: promptSnapshot,
-                models: choices.map((c) => ({ instanceId: c.instanceId, model: c.model })),
-                ...(folders ? { folders } : {}),
-              },
+              withFolders(
+                {
+                  id,
+                  action: "decide",
+                  prompt: promptSnapshot,
+                  models: choices.map((c) => ({ instanceId: c.instanceId, model: c.model })),
+                },
+                folders,
+              ),
               controller.signal,
             );
             judge = answer.judge;

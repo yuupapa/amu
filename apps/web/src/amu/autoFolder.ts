@@ -22,7 +22,7 @@ export function buildAutoFolderContext(input: {
   const sameMachine = input.projects.filter(
     (project) => project.environmentId === active.environmentId && !input.isScratch(project),
   );
-  const projects = sameMachine.slice(0, 200).map((project) => {
+  const projects = sameMachine.map((project) => {
     const threads = input.threads
       .filter(
         (thread) =>
@@ -33,11 +33,36 @@ export function buildAutoFolderContext(input: {
       .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return {
       path: project.workspaceRoot,
-      titles: threads.slice(0, 5).map((thread) => thread.title),
+      titles: threads.slice(0, MAX_TITLES).map((thread) => thread.title.slice(0, TITLE_LENGTH)),
       updatedAt: threads[0]?.updatedAt ?? project.updatedAt,
     };
   });
-  return { current: input.isScratch(active) ? null : active.workspaceRoot, projects };
+  // The most recently used projects only, so the judgement request stays small.
+  const recent = projects
+    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, MAX_PROJECTS);
+  return { current: input.isScratch(active) ? null : active.workspaceRoot, projects: recent };
+}
+
+const MAX_PROJECTS = 40;
+const MAX_TITLES = 3;
+const TITLE_LENGTH = 60;
+/** The server refuses Auto requests over 64 000 bytes; leave room for the rest. */
+export const AUTO_REQUEST_BYTE_BUDGET = 60_000;
+
+/**
+ * The judgement request with the folders when it fits the server's limit,
+ * else without them, so a long request or many projects never stop Auto.
+ */
+export function withFolders<T extends object>(
+  body: T,
+  folders: AutoFolderContext | null,
+): T | (T & { folders: AutoFolderContext }) {
+  if (!folders) return body;
+  const withThem = { ...body, folders };
+  return new TextEncoder().encode(JSON.stringify(withThem)).length <= AUTO_REQUEST_BYTE_BUDGET
+    ? withThem
+    : body;
 }
 
 /** The folder's own name, for "（フォルダー：…）". */

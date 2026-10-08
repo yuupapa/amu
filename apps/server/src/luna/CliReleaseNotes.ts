@@ -132,12 +132,16 @@ export async function fetchCliReleaseSections(
   current: string,
   latest: string,
   fetchText: (url: string) => Promise<string> = defaultFetchText,
-): Promise<{ sections: CliNoteSection[]; sourceUrl: string } | null> {
+): Promise<{ sections: CliNoteSection[]; sourceUrl: string; complete: boolean } | null> {
   const source = SOURCES[driver];
   if (!source) return null;
   if (source.kind === "changelog") {
     const markdown = await fetchText(source.url);
-    return { sections: changelogSections(markdown, current, latest), sourceUrl: source.page };
+    return {
+      sections: changelogSections(markdown, current, latest),
+      sourceUrl: source.page,
+      complete: true,
+    };
   }
   // The release list carries every asset and runs to many megabytes, so read
   // the tag names first and then only the releases in range.
@@ -154,20 +158,31 @@ export async function fetchCliReleaseSections(
     .toSorted((a, b) => compareVersions(b, a) ?? 0)
     .slice(0, MAX_VERSIONS);
   const releases: GithubRelease[] = [];
+  let complete = true;
   for (const version of versions) {
     try {
       const release: unknown = JSON.parse(
         await fetchText(`${api}/releases/tags/${source.tagPrefix}${version}`),
       );
       if (release && typeof release === "object") releases.push(release as GithubRelease);
-    } catch {
-      // A tag without a release (or a failed read) is left out.
+    } catch (error) {
+      // A tag without a release is left out; any other failure means the
+      // notes are not whole, so they are shown but not saved.
+      if (!(error instanceof NotFoundError)) complete = false;
     }
   }
   return {
     sections: githubSections(releases, source.tagPrefix, current, latest),
     sourceUrl: `https://github.com/${source.repo}/releases`,
+    complete,
   };
+}
+
+/** The page is not there (a tag without a release), as opposed to a failed read. */
+export class NotFoundError extends Error {
+  constructor() {
+    super("見つかりません。");
+  }
 }
 
 async function defaultFetchText(url: string): Promise<string> {
@@ -175,6 +190,7 @@ async function defaultFetchText(url: string): Promise<string> {
     headers: { Accept: "application/vnd.github+json, text/plain", "User-Agent": "Amu" },
     signal: AbortSignal.timeout(15_000),
   });
+  if (response.status === 404) throw new NotFoundError();
   if (!response.ok) throw new Error(`更新内容を取得できませんでした（${response.status}）。`);
   const text = await response.text();
   if (text.length > 8_000_000) throw new Error("更新内容が大きすぎます。");
@@ -309,7 +325,8 @@ export async function cliReleaseNotes(input: {
     input.fetchText,
   );
   if (!fetched) return null;
-  const original: CliReleaseNotes = { ...fetched, language: "en" };
+  const { complete, ...found } = fetched;
+  const original: CliReleaseNotes = { ...found, language: "en" };
   if (!input.haikuRuntime || !fetched.sections.length) return original;
   try {
     const translated = await translateSections(
@@ -319,8 +336,8 @@ export async function cliReleaseNotes(input: {
       input.haiku,
     );
     if (!translated) return original;
-    const notes: CliReleaseNotes = { ...fetched, sections: translated, language: "ja" };
-    writeCachedNotes(input.stateDir, key, notes);
+    const notes: CliReleaseNotes = { ...found, sections: translated, language: "ja" };
+    if (complete) writeCachedNotes(input.stateDir, key, notes);
     return notes;
   } catch {
     return original;

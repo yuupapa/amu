@@ -12,6 +12,7 @@ import {
   compareVersions,
   githubSections,
   hasCliReleaseNotes,
+  NotFoundError,
 } from "./CliReleaseNotes.ts";
 
 const changelog = `# Changelog
@@ -182,7 +183,7 @@ describe("translating the notes", () => {
         );
       if (url.endsWith("rust-v0.161.0"))
         return JSON.stringify({ tag_name: "rust-v0.161.0", body: "- New default model" });
-      throw new Error("not found");
+      throw new NotFoundError();
     };
     const notes = await cliReleaseNotes({
       driver: "codex",
@@ -196,6 +197,50 @@ describe("translating the notes", () => {
     expect(notes?.sections).toEqual([{ version: "0.161.0", items: ["New default model"] }]);
     expect(urls.filter((url) => url.includes("/releases/tags/"))).toHaveLength(2);
     expect(urls.some((url) => url.includes("alpha"))).toBe(false);
+  });
+
+  it("does not save a translation with a version that failed to load", async () => {
+    const stateDir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "amu-cli-notes-"));
+    try {
+      let failNewest = true;
+      const fetchText = async (url: string) => {
+        if (url.includes("matching-refs"))
+          return JSON.stringify(
+            ["rust-v0.160.0", "rust-v0.161.0"].map((tag) => ({ ref: `refs/tags/${tag}` })),
+          );
+        if (url.endsWith("rust-v0.161.0") && failNewest) throw new Error("network");
+        const version = url.slice(url.lastIndexOf("rust-v") + 6);
+        return JSON.stringify({ tag_name: `rust-v${version}`, body: `- change ${version}` });
+      };
+      const haiku = vi.fn(async (input: { stdin: string }) => ({
+        sections: (
+          JSON.parse(input.stdin) as { sections: Array<{ version: string; items: string[] }> }
+        ).sections.map((section) => ({
+          ...section,
+          items: section.items.map((item) => `訳:${item}`),
+        })),
+      }));
+      const call = () =>
+        cliReleaseNotes({
+          driver: "codex",
+          currentVersion: "0.159.0",
+          latestVersion: "0.161.0",
+          stateDir,
+          haikuRuntime: runtime,
+          signal: new AbortController().signal,
+          fetchText,
+          haiku,
+        });
+      expect((await call())?.sections.map((section) => section.version)).toEqual(["0.160.0"]);
+      failNewest = false;
+      expect((await call())?.sections.map((section) => section.version)).toEqual([
+        "0.161.0",
+        "0.160.0",
+      ]);
+      expect(haiku).toHaveBeenCalledTimes(2);
+    } finally {
+      await NodeFSP.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("has nothing for a CLI without a readable changelog", async () => {
