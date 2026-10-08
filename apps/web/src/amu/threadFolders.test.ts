@@ -52,3 +52,28 @@ describe("answers arriving out of order", () => {
     expect(currentThreadFolders()).toEqual({ t1: "b" });
   });
 });
+
+describe("project rows keep their list when nothing in them changed", () => {
+  it("reuses the previous array for an unchanged project and replaces a changed one", async () => {
+    const { keepUnchangedLists } = await import("./threadFolders");
+    const a = { id: "a" },
+      b = { id: "b" },
+      c = { id: "c" };
+    const first = keepUnchangedLists(
+      new Map([
+        ["p1", [a, b]],
+        ["p2", [c]],
+      ]),
+      null,
+    );
+    const second = keepUnchangedLists(
+      new Map([
+        ["p1", [a, b]],
+        ["p2", [c, a]],
+      ]),
+      first,
+    );
+    expect(second.get("p1")).toBe(first.get("p1"));
+    expect(second.get("p2")).not.toBe(first.get("p2"));
+  });
+});

@@ -97,9 +97,11 @@ import {
   useThreadShellsForProjectRefs,
 } from "../state/entities";
 import {
+  keepUnchangedLists,
+  ListedThreadsContext,
   ThreadFolderDialog,
   useListedProjectIdOf,
-  useListedThreadShells,
+  useListedThreadsFor,
 } from "../amu/threadFolders";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
@@ -1294,7 +1296,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const ownThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
   const ownThreadsRef = useRef(ownThreads);
   ownThreadsRef.current = ownThreads;
-  const sidebarThreads = useListedThreadShells(project.memberProjectRefs);
+  const sidebarThreads = useListedThreadsFor<SidebarThreadSummary>(project.projectKey);
   const [threadFolderDialog, setThreadFolderDialog] = useState<{
     thread: { id: string; title: string; environmentId: string; ownProjectId: string };
     shownUnder: string;
@@ -1571,6 +1573,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const removeProject = useCallback(
     async (member: SidebarProjectGroupMember) => {
       const memberProjectRef = scopeProjectRef(member.environmentId, member.id);
+      // Taken before deleting: the threads leave the list while the server deletes them.
+      const ownThreadRefsAtStart = ownThreadsRef.current
+        .filter(
+          (thread) =>
+            thread.environmentId === member.environmentId && thread.projectId === member.id,
+        )
+        .map((thread) => scopeThreadRef(thread.environmentId, thread.id));
       const result = await deleteProject({
         environmentId: member.environmentId,
         input: {
@@ -1582,15 +1591,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return result;
       }
       const draftStore = useComposerDraftStore.getState();
-      releaseProjectDraftUploads(
-        memberProjectRef,
-        ownThreadsRef.current
-          .filter(
-            (thread) =>
-              thread.environmentId === member.environmentId && thread.projectId === member.id,
-          )
-          .map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
-      );
+      releaseProjectDraftUploads(memberProjectRef, ownThreadRefsAtStart);
       const projectDraftThread = draftStore.getDraftThreadByProjectRef(memberProjectRef);
       if (projectDraftThread) {
         draftStore.clearDraftThread(projectDraftThread.draftId);
@@ -3439,18 +3440,32 @@ export default function LegacySidebar() {
     }
     const activeThread = sidebarThreadByKey.get(routeThreadKey);
     if (!activeThread) return null;
+    // The row is under the project the thread is listed under.
+    const listedProjectId = listedProjectIdOf(activeThread);
     const physicalKey =
       projectPhysicalKeyByScopedRef.get(
-        scopedProjectKey(scopeProjectRef(activeThread.environmentId, activeThread.projectId)),
-      ) ?? scopedProjectKey(scopeProjectRef(activeThread.environmentId, activeThread.projectId));
+        scopedProjectKey(scopeProjectRef(activeThread.environmentId, listedProjectId)),
+      ) ?? scopedProjectKey(scopeProjectRef(activeThread.environmentId, listedProjectId));
     return physicalToLogicalKey.get(physicalKey) ?? physicalKey;
-  }, [routeThreadKey, sidebarThreadByKey, physicalToLogicalKey, projectPhysicalKeyByScopedRef]);
+  }, [
+    listedProjectIdOf,
+    routeThreadKey,
+    sidebarThreadByKey,
+    physicalToLogicalKey,
+    projectPhysicalKeyByScopedRef,
+  ]);
 
   // Group threads by logical project key so all threads from grouped projects
   // are displayed together.
+  const previousThreadsByProjectKeyRef = useRef<ReadonlyMap<
+    string,
+    ReadonlyArray<SidebarThreadSummary>
+  > | null>(null);
   const threadsByProjectKey = useMemo(() => {
     const next = new Map<string, SidebarThreadSummary[]>();
     for (const thread of sidebarThreads) {
+      // Subagent threads belong to the parent's Agents view, as in the flat sidebar.
+      if (thread.lineage.relationshipToParent === "subagent") continue;
       const listedProjectId = listedProjectIdOf(thread);
       const physicalKey =
         projectPhysicalKeyByScopedRef.get(
@@ -3464,7 +3479,9 @@ export default function LegacySidebar() {
         next.set(logicalKey, [thread]);
       }
     }
-    return next;
+    const stable = keepUnchangedLists(next, previousThreadsByProjectKeyRef.current);
+    previousThreadsByProjectKeyRef.current = stable;
+    return stable;
   }, [listedProjectIdOf, sidebarThreads, physicalToLogicalKey, projectPhysicalKeyByScopedRef]);
   const getCurrentSidebarShortcutContext = useCallback(
     () => ({
@@ -3929,7 +3946,7 @@ export default function LegacySidebar() {
   }, []);
 
   return (
-    <>
+    <ListedThreadsContext.Provider value={threadsByProjectKey}>
       {prewarmedSidebarThreadRefs.map((threadRef) => (
         <SidebarThreadDetailPrewarmer key={scopedThreadKey(threadRef)} threadRef={threadRef} />
       ))}
@@ -3975,6 +3992,6 @@ export default function LegacySidebar() {
         projectsLength={projects.length}
       />
       <SidebarChromeFooter />
-    </>
+    </ListedThreadsContext.Provider>
   );
 }

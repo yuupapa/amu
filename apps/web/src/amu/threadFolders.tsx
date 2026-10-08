@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ScopedProjectRef } from "@t3tools/contracts";
 
 import { Button } from "../components/ui/button";
@@ -81,12 +89,18 @@ export function acceptAnswer(answer: Answer): boolean {
 }
 
 /** Reads the choices again (on start and when the window comes back to the front). */
-export async function refreshThreadFolders(): Promise<void> {
-  try {
-    acceptAnswer(await request());
-  } catch {
-    // An older server has no such route; the sidebar shows threads as they are.
-  }
+export function refreshThreadFolders(): Promise<void> {
+  reading ??= request()
+    .then((answer) => {
+      acceptAnswer(answer);
+    })
+    .catch(() => {
+      // An older server has no such route; the sidebar shows threads as they are.
+    })
+    .finally(() => {
+      reading = null;
+    });
+  return reading;
 }
 
 /** Lists `threadId` under `projectId`, or under its own project again with null. */
@@ -107,12 +121,24 @@ export function useThreadFolders(): Entries {
     () => entries,
   );
   useEffect(() => {
-    if (!loaded) void refreshThreadFolders();
-    const onFocus = () => void refreshThreadFolders();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    watchers += 1;
+    if (watchers === 1) {
+      window.addEventListener("focus", onWindowFocus);
+      if (!loaded) void refreshThreadFolders();
+    }
+    return () => {
+      watchers -= 1;
+      if (watchers === 0) window.removeEventListener("focus", onWindowFocus);
+    };
   }, []);
   return value;
+}
+
+/** One focus listener and one read at a time, however many components watch. */
+let watchers = 0;
+let reading: Promise<void> | null = null;
+function onWindowFocus() {
+  void refreshThreadFolders();
 }
 
 type ThreadLike = {
@@ -176,6 +202,40 @@ export function useListedThreadShells(refs: ReadonlyArray<ScopedProjectRef>) {
       ),
     [keys, listedProjectIdOf, threads],
   );
+}
+
+/**
+ * The project-tree sidebar's rows, grouped once for the whole list by the
+ * project each thread is listed under (key: the sidebar's project key).
+ * Provided by LegacySidebar; each project row reads its own list.
+ */
+export const ListedThreadsContext = createContext<ReadonlyMap<
+  string,
+  ReadonlyArray<unknown>
+> | null>(null);
+
+export function useListedThreadsFor<T>(projectKey: string): ReadonlyArray<T> {
+  const map = useContext(ListedThreadsContext);
+  return (map?.get(projectKey) ?? EMPTY) as ReadonlyArray<T>;
+}
+const EMPTY: ReadonlyArray<never> = [];
+
+/** Keeps a project's previous array when its threads did not change, so its row does not redraw. */
+export function keepUnchangedLists<T>(
+  next: Map<string, T[]>,
+  previous: ReadonlyMap<string, ReadonlyArray<T>> | null,
+): Map<string, ReadonlyArray<T>> {
+  const result = new Map<string, ReadonlyArray<T>>();
+  for (const [key, list] of next) {
+    const before = previous?.get(key);
+    result.set(
+      key,
+      before && before.length === list.length && before.every((item, index) => item === list[index])
+        ? before
+        : list,
+    );
+  }
+  return result;
 }
 
 /** The threads with the project they are listed under, for counting work (Auto's folders). */
