@@ -100,19 +100,95 @@ jobs:
             exit $code
           }
 
-      # Unsigned until a Windows code signing setup exists. The publish config
-      # makes electron-builder write latest.yml and the app's app-update.yml.
+      # Signing turns on only when all Azure Trusted Signing secrets are set on
+      # yuupapa/amu (see docs/operations/release.md); until then builds are unsigned.
+      - name: Prepare Azure Trusted Signing
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $requiredSecrets = @(
+            $env:AZURE_TENANT_ID,
+            $env:AZURE_CLIENT_ID,
+            $env:AZURE_CLIENT_SECRET,
+            $env:AZURE_TRUSTED_SIGNING_ENDPOINT,
+            $env:AZURE_TRUSTED_SIGNING_ACCOUNT_NAME,
+            $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME,
+            $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
+          )
+          if ($requiredSecrets | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
+            Write-Host "Azure Trusted Signing disabled; skipping TrustedSigning module preparation."
+            exit 0
+          }
+
+          try {
+            Install-PackageProvider `
+              -Name NuGet `
+              -MinimumVersion 2.8.5.201 `
+              -Force `
+              -Scope CurrentUser `
+              -ErrorAction Stop
+          } catch {
+            Write-Warning "Could not bootstrap NuGet package provider. Continuing because the runner may already have a usable provider. $($_.Exception.Message)"
+          }
+
+          Install-Module `
+            -Name TrustedSigning `
+            -MinimumVersion 0.5.0 `
+            -Force `
+            -AllowClobber `
+            -Repository PSGallery `
+            -Scope CurrentUser `
+            -ErrorAction Stop
+
+          Import-Module TrustedSigning -MinimumVersion 0.5.0 -Force
+          Get-Command Invoke-TrustedSigning -ErrorAction Stop
+
+          $moduleRoots = @(
+            [System.IO.Path]::Combine([Environment]::GetFolderPath("MyDocuments"), "PowerShell", "Modules"),
+            [System.IO.Path]::Combine([Environment]::GetFolderPath("MyDocuments"), "WindowsPowerShell", "Modules"),
+            [System.IO.Path]::Combine($env:ProgramFiles, "PowerShell", "Modules"),
+            [System.IO.Path]::Combine($env:ProgramFiles, "WindowsPowerShell", "Modules")
+          )
+          $modulePathEntries = @($moduleRoots + ($env:PSModulePath -split ";")) |
+            Where-Object { $_ -and (Test-Path $_) } |
+            Select-Object -Unique
+          "PSModulePath=$($modulePathEntries -join ';')" >> $env:GITHUB_ENV
+
+      # The publish config makes electron-builder write latest.yml and the
+      # app's app-update.yml.
       - name: Build installer
         shell: bash
         env:
           T3CODE_DESKTOP_UPDATE_REPOSITORY: yuupapa/amu
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
-          node scripts/build-desktop-artifact.ts \
-            --platform win \
-            --target nsis \
-            --arch x64 \
-            --output-dir release \
-            --verbose
+          set -euo pipefail
+          args=(--platform win --target nsis --arch x64 --output-dir release --verbose)
+          if [[ -n "$AZURE_TENANT_ID" && -n "$AZURE_CLIENT_ID" && -n "$AZURE_CLIENT_SECRET" \
+            && -n "$AZURE_TRUSTED_SIGNING_ENDPOINT" && -n "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" \
+            && -n "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME" \
+            && -n "$AZURE_TRUSTED_SIGNING_PUBLISHER_NAME" ]]; then
+            echo "Windows signing enabled (Azure Trusted Signing)."
+            args+=(--signed)
+          else
+            echo "Windows signing disabled (missing one or more Azure Trusted Signing secrets)."
+          fi
+          node scripts/build-desktop-artifact.ts "${args[@]}"
 
       - name: Keep the installer as a workflow artifact
         if: inputs.dry_run
@@ -124,6 +200,51 @@ jobs:
             release/*.blockmap
             release/latest.yml
           if-no-files-found: error
+
+      # Dry runs also install the build on this runner and check what a user
+      # would: Amu starts, keeps its data in %APPDATA%\Amu\runtime (not ~/.t3),
+      # serves on 5233, registers as Amu, and leaves its data after uninstall.
+      - name: Smoke test the installer
+        if: inputs.dry_run
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          T3CODE_DISABLE_AUTO_UPDATE: "true"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-ChildItem release -Filter "Amu-*-x64.exe" | Select-Object -First 1
+          Start-Process $installer.FullName -ArgumentList "/S" -Wait
+          $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Depth 2 -Filter "Amu.exe" | Select-Object -First 1
+          if (-not $app) { throw "Amu.exe was not installed under $env:LOCALAPPDATA\Programs." }
+          Write-Host "Installed: $($app.FullName)"
+          $entry = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" |
+            Where-Object { $_.DisplayName -like "Amu*" } | Select-Object -First 1
+          if (-not $entry) { throw "No uninstall entry named Amu." }
+          Write-Host "Uninstall entry: $($entry.PSChildName) $($entry.DisplayName) $($entry.DisplayVersion)"
+
+          $amu = Start-Process $app.FullName -PassThru
+          $deadline = (Get-Date).AddMinutes(4)
+          do {
+            Start-Sleep -Seconds 3
+            $listening = Get-NetTCPConnection -LocalPort 5233 -State Listen -ErrorAction SilentlyContinue
+          } until ($listening -or (Get-Date) -gt $deadline)
+          if (-not $listening) { throw "Nothing listened on port 5233 within 4 minutes." }
+          Write-Host "Port 5233 is served by: $((Get-Process -Id $listening[0].OwningProcess).Path)"
+          $runtime = Join-Path $env:APPDATA "Amu\runtime"
+          if (-not (Test-Path $runtime)) { throw "$runtime was not created." }
+          Get-ChildItem $runtime -Recurse -Depth 1 | Select-Object -ExpandProperty FullName
+          if (Test-Path (Join-Path $env:USERPROFILE ".t3")) { throw "Amu wrote to ~/.t3, upstream T3 Code's folder." }
+
+          # Stop only the process tree this step started.
+          taskkill /PID $amu.Id /T /F | Out-Null
+          Start-Sleep -Seconds 5
+          $uninstaller = Join-Path $app.DirectoryName "Uninstall Amu.exe"
+          Start-Process $uninstaller -ArgumentList "/S" -Wait
+          $deadline = (Get-Date).AddMinutes(2)
+          while ((Test-Path $app.FullName) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
+          if (Test-Path $app.FullName) { throw "Uninstall left $($app.FullName) behind." }
+          if (-not (Test-Path $runtime)) { throw "Uninstall removed $runtime." }
+          Write-Host "Uninstalled; $runtime is still there."
 
       - name: Upload to the draft release and publish it
         if: ${{ !inputs.dry_run }}

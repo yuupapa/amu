@@ -467,11 +467,11 @@ Amu は上の Release ワークフローを使いません。Mac で `node scrip
 2. 続けて `.github/workflows/amu-windows-release.yml` を起動します。このワークフローは同じコミットから Windows x64 のインストーラーをビルドし、`Amu-<版>-x64.exe`、その `.blockmap`、`latest.yml` を下書きに追加してからリリースを公開します。
 3. 公開されるまで、Mac と Windows のどちらの Amu にも新しい版は届きません。Windows の更新は electron-updater が `latest.yml` を読むので、インストーラーより先にリリースが公開されると、Windows の Amu が更新の確認に失敗します。
 
-ワークフローは yuupapa/amu の既定ブランチ `amu` に置いてある版が動きます。ビルドするコミットは入力の `commit` で決まります。`-f dry_run=true` を付けると、リリースには触らず、インストーラーを Actions の成果物として残すだけになります。
+ワークフローは yuupapa/amu の既定ブランチ `amu` に置いてある版が動きます。ビルドするコミットは入力の `commit` で決まります。`-f dry_run=true` を付けると、リリースには触りません。インストーラーを Actions の成果物として残し、ランナーに実際に入れて確かめます。起動すること、データが `%APPDATA%\Amu\runtime` にできて `~/.t3` には書かないこと、5233 番ポートで待ち受けること、アンインストールしてもデータが残ることを見ます。
 
 Windows のビルドが失敗したら、`gh run view --repo yuupapa/amu --log-failed` で原因を見て、`gh workflow run amu-windows-release.yml --repo yuupapa/amu -f tag=v<版> -f commit=<sha>` でやり直します。Mac 版だけ先に出す場合は `gh release edit v<版> --repo yuupapa/amu --draft=false --latest` を実行します。Windows の成果物は、あとで同じワークフローを動かせば追加されます。
 
-今の Windows インストーラーは署名していません。署名を入れるときは、下の Azure Trusted Signing の節と `release-desktop.yml` の署名手順を参考にします。
+Windows の署名は、yuupapa/amu に Azure Trusted Signing の 7 つのシークレット（`AZURE_TENANT_ID`、`AZURE_CLIENT_ID`、`AZURE_CLIENT_SECRET`、`AZURE_TRUSTED_SIGNING_ENDPOINT`、`AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`、`AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`、`AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`）がそろったときだけ有効になります。1 つでも欠けていれば署名せずにビルドします。用意の仕方は下の Azure Trusted Signing の節を見てください。署名を入れたら、未署名の版から署名した版へ自動更新できるかを一度確かめます（electron-updater は発行者名で更新ファイルの署名を確かめます）。
 
 ## 0) npm OIDC trusted publishing setup (CLI)
 
