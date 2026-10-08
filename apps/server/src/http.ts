@@ -5,6 +5,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  ThreadId,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
@@ -30,6 +31,12 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
+import { findMcpMarketEntry } from "./amu/mcpMarket/catalog.ts";
+import { McpMarket, setActiveMcpMarket } from "./amu/mcpMarket/market.ts";
+import { McpMarketLoginError } from "./amu/mcpMarket/oauth.ts";
+import { claudeLivePermissionMode, marketAllowsOutsideActions } from "./amu/mcpMarket/policy.ts";
+import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
 import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
@@ -53,6 +60,7 @@ import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
   isLocalLunaAutoRequest,
+  isLoopbackRemoteAddress,
 } from "./httpCors.ts";
 import { autoChoices, LUNA_JUDGE_NAMES } from "@t3tools/shared/lunaAuto";
 import { cliReleaseNotes, hasCliReleaseNotes } from "./luna/CliReleaseNotes.ts";
@@ -788,6 +796,126 @@ export const layerThreadFoldersRoute = Layer.unwrap(
           ),
           Effect.catch((message) =>
             Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 500 })),
+          ),
+        );
+      }),
+    );
+    return Layer.mergeAll(read, write);
+  }),
+);
+
+// Amu: the MCP market (docs/internals/amu-mcp-market.md). Anyone signed in
+// may read the cards; connecting and removing only from this Mac's desktop app.
+const authenticateDesktopRoute = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
+    Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
+      failEnvironmentAuthInvalid(
+        EnvironmentAuth.serverAuthCredentialReason(error),
+        EnvironmentAuth.serverAuthDpopFailureReason(error),
+      ),
+    ),
+    Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+      failEnvironmentInternal("internal_error", error),
+    ),
+  );
+  const remoteAddress = socketPeerAddress(request);
+  return {
+    session,
+    // The desktop app's own session (only the desktop-bootstrap grant issues
+    // that subject) on a loopback socket. Tailscale serving forwards remote
+    // clients to loopback, so the address alone would not do.
+    desktop:
+      session.subject === "desktop-bootstrap" &&
+      session.scopes.includes(AuthOrchestrationOperateScope) &&
+      remoteAddress !== undefined &&
+      isLoopbackRemoteAddress(remoteAddress),
+  };
+});
+
+export const layerMcpMarketRoute = Layer.unwrap(
+  Effect.gen(function* () {
+    const serverConfig = yield* ServerConfig.ServerConfig;
+    const registry = yield* McpSessionRegistry.McpSessionRegistry;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const context = yield* Effect.context<never>();
+    const run = <A, E>(effect: Effect.Effect<A, E>) =>
+      Effect.runPromiseWith(context)(effect.pipe(Effect.orElseSucceed(() => undefined as A)));
+    const market = yield* Effect.acquireRelease(
+      Effect.promise(() =>
+        McpMarket.start({
+          stateDir: serverConfig.stateDir,
+          secretsDir: serverConfig.secretsDir,
+          hooks: {
+            sessionLive: async (providerSessionId) =>
+              (await run(registry.isProviderSessionLive(providerSessionId))) === true,
+            allowsOutsideActions: async (credential) => {
+              const shell = await run(threads.getThreadShell(ThreadId.make(credential.threadId)));
+              if (!shell || shell.deletedAt !== null) return false;
+              return marketAllowsOutsideActions({
+                driver: credential.driver,
+                policy: {
+                  runtimeMode: shell.runtimeMode,
+                  interactionMode: shell.interactionMode,
+                  cwd: shell.worktreePath ?? null,
+                },
+                claudeLivePermissionMode: claudeLivePermissionMode(credential.providerSessionId),
+              });
+            },
+          },
+        }),
+      ).pipe(Effect.tap((started) => Effect.sync(() => setActiveMcpMarket(started)))),
+      (started) =>
+        Effect.sync(() => {
+          setActiveMcpMarket(undefined);
+          started.close();
+        }),
+    );
+    const read = HttpRouter.add(
+      "GET",
+      "/api/amu/mcp-market",
+      Effect.gen(function* () {
+        const { desktop } = yield* authenticateDesktopRoute;
+        return HttpServerResponse.jsonUnsafe({ result: market.cards(), canManage: desktop });
+      }),
+    );
+    const write = HttpRouter.add(
+      "POST",
+      "/api/amu/mcp-market",
+      Effect.gen(function* () {
+        const { desktop } = yield* authenticateDesktopRoute;
+        if (!desktop)
+          return HttpServerResponse.jsonUnsafe(
+            { error: "MCP の追加と削除は、この Mac の Amu からだけできます。" },
+            { status: 403 },
+          );
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const body = yield* readCappedBody(request, 2_000);
+        const data =
+          body === null
+            ? null
+            : yield* Schema.decodeEffect(
+                Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+              )(body).pipe(Effect.orElseSucceed(() => null));
+        const id = typeof data?.id === "string" ? data.id : "";
+        if (
+          !data ||
+          !findMcpMarketEntry(id) ||
+          !["connect", "remove"].includes(String(data.action))
+        )
+          return HttpServerResponse.jsonUnsafe({ error: "形式が不正です。" }, { status: 400 });
+        return yield* Effect.tryPromise({
+          try: async () =>
+            data.action === "remove"
+              ? (await market.remove(id), { result: market.cards() })
+              : { authorizationUrl: await market.connect(id), result: market.cards() },
+          catch: (cause) =>
+            cause instanceof McpMarketLoginError ? cause.message : "接続を始められませんでした。",
+        }).pipe(
+          Effect.map((answer) => HttpServerResponse.jsonUnsafe(answer)),
+          Effect.catch((message) =>
+            Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 502 })),
           ),
         );
       }),

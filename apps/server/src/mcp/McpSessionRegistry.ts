@@ -8,6 +8,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
 
+import { activeMcpMarket } from "../amu/mcpMarket/market.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "./McpProviderSession.ts";
@@ -39,6 +40,11 @@ export interface McpSessionRegistryShape {
    * credential even when it goes a long time without touching an MCP tool.
    */
   readonly touch: (threadId: ThreadId) => Effect.Effect<void>;
+  /**
+   * Whether a provider session still holds a live credential. Unlike
+   * `resolve`, this is no sign of life (Amu's MCP market proxy asks it).
+   */
+  readonly isProviderSessionLive: (providerSessionId: string) => Effect.Effect<boolean>;
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
@@ -206,15 +212,29 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     issue,
     resolve,
     touch,
+    isProviderSessionLive: Effect.fn("McpSessionRegistry.isProviderSessionLive")(
+      function* (providerSessionId) {
+        const timestamp = yield* currentTimeMillis;
+        const { records } = yield* SynchronizedRef.get(state);
+        return Array.from(pruneDead(records, timestamp).values()).some(
+          (record) => record.scope.thread.providerSessionId === providerSessionId,
+        );
+      },
+    ),
+    // Amu: the MCP market's credentials live and end with these.
     revokeProviderSession: Effect.fn("McpSessionRegistry.revokeProviderSession")(
       function* (providerSessionId) {
         yield* revokeWhere((record) => record.scope.thread.providerSessionId === providerSessionId);
+        activeMcpMarket()?.revokeProviderSession(providerSessionId);
       },
     ),
     revokeThread: Effect.fn("McpSessionRegistry.revokeThread")(function* (threadId) {
       yield* revokeWhere((record) => record.scope.thread.threadId === threadId);
+      activeMcpMarket()?.revokeThread(threadId);
     }),
-    revokeAll: SynchronizedRef.set(state, { records: new Map() }),
+    revokeAll: SynchronizedRef.set(state, { records: new Map() }).pipe(
+      Effect.tap(() => Effect.sync(() => activeMcpMarket()?.revokeAll())),
+    ),
   });
 });
 

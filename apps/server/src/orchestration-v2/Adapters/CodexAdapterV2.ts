@@ -110,6 +110,7 @@ import {
 import { ProviderEventLoggers } from "../../provider/ProviderEventLoggers.ts";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "../../provider/codexLaunchArgs.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
+import { activeMcpMarket } from "../../amu/mcpMarket/market.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterDriverCreateError,
@@ -660,7 +661,7 @@ const isProviderAdapterRuntimeRequestResponseError = Schema.is(
   ProviderAdapterRuntimeRequestResponseError,
 );
 
-function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
+export function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: CodexSchema.V2TurnStartParams__AskForApproval;
   readonly approvalsReviewer: CodexSchema.V2TurnStartParams__ApprovalsReviewer;
   readonly sandboxPolicy: CodexSchema.V2TurnStartParams__SandboxPolicy;
@@ -1349,6 +1350,21 @@ export function codexThreadRuntimeParams(input: {
                   Authorization: mcpSession.authorizationHeader,
                 },
               },
+              // Amu: the servers added in Settings → MCP, through Amu's proxy
+              // (docs/internals/amu-mcp-market.md).
+              ...Object.fromEntries(
+                (
+                  activeMcpMarket()?.serversForSession({
+                    environmentId: mcpSession.environmentId,
+                    threadId: mcpSession.threadId,
+                    providerSessionId: mcpSession.providerSessionId,
+                    driver: "codex",
+                  }) ?? []
+                ).map((server) => [
+                  server.name,
+                  { url: server.url, http_headers: { Authorization: server.authorizationHeader } },
+                ]),
+              ),
             },
           }),
     },

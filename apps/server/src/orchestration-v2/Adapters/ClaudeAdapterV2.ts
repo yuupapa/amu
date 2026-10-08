@@ -116,6 +116,8 @@ import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanc
 import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "../../provider/T3OrchestrationInstructions.ts";
 import { buildRuntimeInstructions } from "../../provider/RuntimeInstructions.ts";
 import { mcpToolPresentation, normalizeMcpText } from "../../provider/McpToolPresentation.ts";
+import { activeMcpMarket } from "../../amu/mcpMarket/market.ts";
+import { setClaudeLivePermissionMode } from "../../amu/mcpMarket/policy.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
@@ -962,6 +964,16 @@ export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 // not pre-approved), but read-only sandboxes pre-approve only the annotated
 // read-only orchestrator tools so a read-only session cannot silently spawn
 // threads or scheduled tasks.
+/**
+ * Amu: Claude's mode as its CLI last reported it, for the MCP market proxy,
+ * which refuses outside actions while Claude is in its own plan mode
+ * (docs/internals/amu-mcp-market.md, "Effective policy").
+ */
+function publishClaudeLiveMode(threadId: ThreadId, mode: PermissionMode | undefined): void {
+  const session = McpProviderSession.readMcpProviderSession(threadId);
+  if (session) setClaudeLivePermissionMode(session.providerSessionId, mode);
+}
+
 export function claudeMcpQueryOverrides(input: {
   readonly threadId: ThreadId;
   readonly readOnlySandbox: boolean;
@@ -988,6 +1000,26 @@ export function claudeMcpQueryOverrides(input: {
         },
         timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
       },
+      // Amu: the servers added in Settings → MCP, through Amu's proxy
+      // (docs/internals/amu-mcp-market.md). Not pre-approved: they follow
+      // Claude's permission mode.
+      ...Object.fromEntries(
+        (
+          activeMcpMarket()?.serversForSession({
+            environmentId: session.environmentId,
+            threadId: session.threadId,
+            providerSessionId: session.providerSessionId,
+            driver: "claudeAgent",
+          }) ?? []
+        ).map((server) => [
+          server.name,
+          {
+            type: "http" as const,
+            url: server.url,
+            headers: { Authorization: server.authorizationHeader },
+          },
+        ]),
+      ),
     },
   };
 }
@@ -1486,7 +1518,7 @@ const isClaudeRuntimeReadOnlyFullAccessSandboxPolicy = Schema.is(
   ClaudeRuntimeReadOnlyFullAccessSandboxPolicy,
 );
 
-function sandboxPolicyKindForClaudeRuntimePolicy(
+export function sandboxPolicyKindForClaudeRuntimePolicy(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
 ): ClaudeRuntimeSandboxPolicyKindName | undefined {
   return runtimePolicy.sandboxPolicy !== undefined &&
@@ -1504,7 +1536,7 @@ function readOnlyPolicyAllowsGlobalReads(
   );
 }
 
-function permissionModeForClaudeRuntimePolicy(
+export function permissionModeForClaudeRuntimePolicy(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
 ): PermissionMode {
   if (runtimePolicy.interactionMode === "plan") {
@@ -7076,6 +7108,7 @@ export function makeClaudeAdapterV2(
             if (existing.permissionMode !== existing.openedPermissionMode) {
               yield* existing.query.setPermissionMode(existing.openedPermissionMode);
               existing.permissionMode = existing.openedPermissionMode;
+              publishClaudeLiveMode(turnInput.threadId, existing.permissionMode);
             }
             return existing;
           }
@@ -7203,6 +7236,7 @@ export function makeClaudeAdapterV2(
             ),
           };
           yield* Ref.set(queryContext, context);
+          publishClaudeLiveMode(turnInput.threadId, context.permissionMode);
           yield* querySession.messages.pipe(
             Stream.runForEach((message) => {
               if (
@@ -7211,6 +7245,7 @@ export function makeClaudeAdapterV2(
                 message.permissionMode !== undefined
               ) {
                 context.permissionMode = message.permissionMode;
+                publishClaudeLiveMode(turnInput.threadId, context.permissionMode);
               }
               return handleSdkMessage({ query: querySession, message });
             }),
@@ -7231,6 +7266,7 @@ export function makeClaudeAdapterV2(
                 const ownsLiveQuery = yield* Ref.modify(queryContext, (current) =>
                   current?.query === querySession ? [true, null] : [false, current],
                 );
+                if (ownsLiveQuery) publishClaudeLiveMode(turnInput.threadId, undefined);
                 if (ownsLiveQuery) {
                   yield* finalizeActiveTurnAfterQueryExit(
                     exit._tag === "Failure" ? exit.cause : undefined,
