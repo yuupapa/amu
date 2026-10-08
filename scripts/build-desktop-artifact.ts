@@ -2652,6 +2652,16 @@ export function resolveDesktopProductName(version: string): string {
     : (desktopPackageJson.productName ?? "T3 Code");
 }
 
+/**
+ * The per-user NSIS install folder (%LOCALAPPDATA%\Programs\<name>) and the
+ * updater cache (%LOCALAPPDATA%\<name>-updater) take this name, so Windows
+ * Amu needs its own to install beside upstream T3 Code. The running app sets
+ * its name from the display name, so nothing else reads it.
+ */
+export function resolveStagePackageName(platform: typeof BuildPlatform.Type): string {
+  return platform === "win" ? "amu" : "t3code";
+}
+
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -3711,7 +3721,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: resolveStagePackageName(options.platform),
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,

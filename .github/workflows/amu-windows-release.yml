@@ -203,7 +203,8 @@ jobs:
 
       # Dry runs also install the build on this runner and check what a user
       # would: Amu starts, keeps its data in %APPDATA%\Amu\runtime (not ~/.t3),
-      # serves on 5233, registers as Amu, and leaves its data after uninstall.
+      # serves on 5233, installs and registers as Amu, and leaves its data after
+      # uninstall.
       - name: Smoke test the installer
         if: inputs.dry_run
         shell: pwsh
@@ -217,6 +218,8 @@ jobs:
           $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Depth 2 -Filter "Amu.exe" | Select-Object -First 1
           if (-not $app) { throw "Amu.exe was not installed under $env:LOCALAPPDATA\Programs." }
           Write-Host "Installed: $($app.FullName)"
+          # Upstream T3 Code installs to Programs\t3code; sharing it would overwrite each other.
+          if ($app.Directory.Name -ne "amu") { throw "Installed under $($app.DirectoryName), not Programs\amu." }
           $entry = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" |
             Where-Object { $_.DisplayName -like "Amu*" } | Select-Object -First 1
           if (-not $entry) { throw "No uninstall entry named Amu." }

@@ -22,6 +22,7 @@ import {
   createStageWorkspaceConfig,
   createStagePatchedDependencies,
   createBuildConfig,
+  resolveStagePackageName,
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
@@ -2051,6 +2052,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(config.artifactName, "Amu-${version}-${arch}.${ext}");
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
+
+  it("gives Windows builds their own package name so the install folder is Amu's", () => {
+    assert.equal(resolveStagePackageName("win"), "amu");
+    assert.equal(resolveStagePackageName("mac"), "t3code");
+  });
 
   it.effect("keeps the upstream app id and T3 Code artifact name for macOS builds", () =>
     Effect.gen(function* () {
