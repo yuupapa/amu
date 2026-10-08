@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Button } from "../components/ui/button";
 import {
@@ -176,6 +176,14 @@ export function ThreadFolderDialog(props: {
   const [selected, setSelected] = useState(props.shownUnder);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A save that finishes after this dialog was closed must not close another one.
+  const open = useRef(true);
+  useEffect(
+    () => () => {
+      open.current = false;
+    },
+    [],
+  );
   const choices = props.projects.filter(
     (project) => project.environmentId === props.thread.environmentId,
   );
@@ -187,8 +195,9 @@ export function ThreadFolderDialog(props: {
         props.thread.id,
         selected === props.thread.ownProjectId ? null : selected,
       );
-      props.onClose();
+      if (open.current) props.onClose();
     } catch (cause) {
+      if (!open.current) return;
       setError(cause instanceof Error ? cause.message : "保存できませんでした。");
       setSaving(false);
     }

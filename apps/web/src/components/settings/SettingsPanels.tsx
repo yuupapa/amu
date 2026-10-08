@@ -1,5 +1,5 @@
 import { SettingsGroup } from "./SettingsGroup";
-import { forgetScreenForRestart, rememberScreenForRestart } from "../../amu/restartReturn";
+import { installUpdateReturningHere } from "../../amu/restartReturn";
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
@@ -365,11 +365,8 @@ function AboutVersionSection() {
         return;
       }
       // Amu: come back to this screen once the new version starts.
-      rememberScreenForRestart();
-      void bridge
-        .installUpdate()
+      void installUpdateReturningHere(() => bridge.installUpdate())
         .catch((error: unknown) => {
-          forgetScreenForRestart();
           toastManager.add(
             stackedThreadToast({
               type: "error",

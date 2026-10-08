@@ -65,3 +65,24 @@ export function restoreScreenAfterRestart(): void {
   const hash = takeScreenAfterRestart();
   if (hash && window.location.hash !== hash) window.location.hash = hash;
 }
+
+/**
+ * Installs an update so that Amu comes back to this screen afterwards; a
+ * refused or failed install forgets the screen again.
+ */
+export async function installUpdateReturningHere<
+  R extends {
+    readonly accepted: boolean;
+    readonly state: { readonly errorContext: string | null };
+  },
+>(install: () => Promise<R>): Promise<R> {
+  rememberScreenForRestart();
+  try {
+    const result = await install();
+    if (!result.accepted || result.state.errorContext === "install") forgetScreenForRestart();
+    return result;
+  } catch (error) {
+    forgetScreenForRestart();
+    throw error;
+  }
+}

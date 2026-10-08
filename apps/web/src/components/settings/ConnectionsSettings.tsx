@@ -919,6 +919,9 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                     />
                   </div>
                 ) : null}
+                {isRevealValueUrl && isRevealValueQrShareable ? (
+                  <PhoneConnectHelp pairingUrl={revealValue} />
+                ) : null}
               </DialogPanel>
               <DialogFooter variant="bare">
                 <Button variant="outline" onClick={() => setIsRevealDialogOpen(false)}>
@@ -1010,7 +1013,6 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             <Button size="xs" variant="ghost" onClick={handleCopyCode}>
               Copy code only
             </Button>
-            <PhoneConnectHelp pairingUrl={qrPairingUrl} />
           </div>
           {canRenderQrForSelection ? (
             <div className="w-fit shrink-0 self-center rounded-xl bg-white p-3 sm:self-start">
@@ -1030,6 +1032,11 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
               </p>
             </div>
           )}
+        </div>
+      ) : null}
+      {isQrPanelOpen && qrPairingUrl !== null && canRenderQrForSelection ? (
+        <div className="mt-2">
+          <PhoneConnectHelp pairingUrl={qrPairingUrl} />
         </div>
       ) : null}
     </div>

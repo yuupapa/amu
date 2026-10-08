@@ -5132,6 +5132,7 @@ export default function Sidebar() {
       <ThreadContextDragGhost />
       {threadFolderDialog ? (
         <ThreadFolderDialog
+          key={`${threadFolderDialog.thread.environmentId}:${threadFolderDialog.thread.id}`}
           thread={threadFolderDialog.thread}
           shownUnder={threadFolderDialog.shownUnder}
           projects={projects

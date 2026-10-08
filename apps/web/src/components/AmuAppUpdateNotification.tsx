@@ -18,7 +18,7 @@ import {
 } from "./desktopUpdate.logic";
 import { openDesktopUpdateReleaseNotes } from "./desktopUpdate.toast";
 import { AmuReleaseNotes } from "../amu/ReleaseNotesView";
-import { forgetScreenForRestart, rememberScreenForRestart } from "../amu/restartReturn";
+import { forgetScreenForRestart, installUpdateReturningHere } from "../amu/restartReturn";
 import { hiddenToastActionProps, stackedThreadToast, toastManager } from "./ui/toast";
 
 // "A new Amu is out — download it?" as a corner notice, like the CLI update
@@ -95,12 +95,9 @@ export function AmuAppUpdateNotification() {
       // A failed install comes back as the "install-failed" state.
       if (confirmed) {
         // Amu: come back to this screen once the new version starts.
-        rememberScreenForRestart();
-        const result = await bridge.installUpdate();
-        if (!result.accepted) forgetScreenForRestart();
+        await installUpdateReturningHere(() => bridge.installUpdate());
       }
     } catch (error) {
-      forgetScreenForRestart();
       showBridgeError("Could not install update", error);
     } finally {
       setPending(false);
@@ -162,7 +159,7 @@ export function AmuAppUpdateNotification() {
   // at the next ordinary start.
   useEffect(() => {
     if (state?.errorContext === "install") forgetScreenForRestart();
-  }, [state?.errorContext]);
+  }, [state]);
 
   return null;
 }

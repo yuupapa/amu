@@ -72,3 +72,32 @@ describe("phone help addresses", async () => {
     expect(isTailnetAddress("http://100.200.1.1:5233")).toBe(false);
   });
 });
+
+describe("installing an update", () => {
+  it("keeps the screen for an accepted install and forgets it for a refused or failed one", async () => {
+    const { installUpdateReturningHere } = await import("./restartReturn");
+    const items = stubWindow("#/usage");
+    const key = "amu:return-after-restart";
+    await installUpdateReturningHere(async () => ({
+      accepted: true,
+      state: { errorContext: null },
+    }));
+    expect(items.has(key)).toBe(true);
+    await installUpdateReturningHere(async () => ({
+      accepted: false,
+      state: { errorContext: null },
+    }));
+    expect(items.has(key)).toBe(false);
+    await installUpdateReturningHere(async () => ({
+      accepted: true,
+      state: { errorContext: "install" },
+    }));
+    expect(items.has(key)).toBe(false);
+    await expect(
+      installUpdateReturningHere(async () => {
+        throw new Error("bridge failed");
+      }),
+    ).rejects.toThrow("bridge failed");
+    expect(items.has(key)).toBe(false);
+  });
+});

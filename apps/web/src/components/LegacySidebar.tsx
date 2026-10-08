@@ -1,4 +1,5 @@
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
+import { installUpdateReturningHere } from "../amu/restartReturn";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { Spinner } from "~/components/ui/spinner";
 import {
@@ -3813,8 +3814,8 @@ export default function LegacySidebar() {
         setDesktopUpdateActionPending(false);
         return;
       }
-      void bridge
-        .installUpdate()
+      // Amu: come back to this screen once the new version starts.
+      void installUpdateReturningHere(() => bridge.installUpdate())
         .then((result) => {
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
