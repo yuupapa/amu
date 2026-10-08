@@ -41,3 +41,14 @@ describe("listing a thread under another project", () => {
     );
   });
 });
+
+describe("answers arriving out of order", () => {
+  it("keeps the newest revision", async () => {
+    const { acceptAnswer, currentThreadFolders } = await import("./threadFolders");
+    expect(acceptAnswer({ entries: { t1: "a" }, revision: 5 })).toBe(true);
+    expect(acceptAnswer({ entries: { t1: "b" }, revision: 6 })).toBe(true);
+    // The answer to the earlier save arrives last.
+    expect(acceptAnswer({ entries: { t1: "a" }, revision: 5 })).toBe(false);
+    expect(currentThreadFolders()).toEqual({ t1: "b" });
+  });
+});

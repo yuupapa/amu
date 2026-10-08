@@ -4,7 +4,12 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { isThreadFolderId, readThreadFolders, setThreadFolder } from "./ThreadFolders.ts";
+import {
+  isThreadFolderId,
+  readThreadFolderState,
+  readThreadFolders,
+  setThreadFolder,
+} from "./ThreadFolders.ts";
 
 describe("threads listed under another project", () => {
   it("saves, changes and clears a thread's listed project", () => {
@@ -17,8 +22,11 @@ describe("threads listed under another project", () => {
         "thread-a": "project-youtube",
         "thread-b": "project-lp",
       });
-      setThreadFolder(stateDir, "thread-a", null);
-      expect(readThreadFolders(stateDir)).toEqual({ "thread-b": "project-lp" });
+      expect(setThreadFolder(stateDir, "thread-a", null)).toEqual({
+        entries: { "thread-b": "project-lp" },
+        revision: 3,
+      });
+      expect(readThreadFolderState(stateDir).revision).toBe(3);
     } finally {
       NodeFS.rmSync(stateDir, { recursive: true, force: true });
     }

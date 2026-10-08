@@ -2454,6 +2454,8 @@ export function ConnectionsSettings() {
     if (!isTailscaleServePortValid) return;
     setIsUpdatingTailscaleServe(true);
     setDesktopServerExposureMutationError(null);
+    // Amu: the change restarts the app; open this page again afterwards.
+    rememberScreenForRestart();
     try {
       await desktopBridge.setTailscaleServeEnabled({
         enabled: true,
@@ -2462,6 +2464,7 @@ export function ConnectionsSettings() {
       refreshDesktopNetworkAccessState();
       setPendingTailscaleServeEndpoint(null);
     } catch (error) {
+      forgetScreenForRestart();
       const message =
         error instanceof Error ? error.message : "Failed to configure Tailscale HTTPS.";
       setDesktopServerExposureMutationError(message);
@@ -2496,6 +2499,8 @@ export function ConnectionsSettings() {
       return;
     setIsUpdatingTailscaleServe(true);
     setDesktopServerExposureMutationError(null);
+    // Amu: the change restarts the app; open this page again afterwards.
+    rememberScreenForRestart();
     try {
       await desktopBridge.setTailscaleServeEnabled({
         enabled: false,
@@ -2504,6 +2509,7 @@ export function ConnectionsSettings() {
       refreshDesktopNetworkAccessState();
       setDisableTailscaleServeDialogOpen(false);
     } catch (error) {
+      forgetScreenForRestart();
       const message = error instanceof Error ? error.message : "Failed to disable Tailscale HTTPS.";
       setDesktopServerExposureMutationError(message);
       toastManager.add(

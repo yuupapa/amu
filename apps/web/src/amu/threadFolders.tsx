@@ -26,14 +26,16 @@ const PATH = "/api/amu/thread-folders";
 
 let entries: Entries = {};
 let loaded = false;
-/** Bumped by every save, so a read that started before it cannot undo it. */
-let saves = 0;
+/** The server's revision of `entries`; an older answer is dropped. */
+let revision = -1;
 const listeners = new Set<() => void>();
 const notify = () => {
   for (const listener of listeners) listener();
 };
 
-async function request(init?: { body: unknown }): Promise<Entries> {
+type Answer = { entries: Entries; revision: number };
+
+async function request(init?: { body: unknown }): Promise<Answer> {
   const bearer = await readDesktopPrimaryBearerToken();
   const response = await fetch(resolvePrimaryEnvironmentHttpUrl(PATH), {
     method: init ? "POST" : "GET",
@@ -44,26 +46,41 @@ async function request(init?: { body: unknown }): Promise<Entries> {
     },
     ...(init ? { body: JSON.stringify(init.body) } : {}),
   });
-  const answer = (await response.json()) as { result?: unknown; error?: string };
+  const answer = (await response.json()) as {
+    result?: unknown;
+    revision?: unknown;
+    error?: string;
+  };
   if (!response.ok || answer.error) throw new Error(answer.error ?? "保存できませんでした。");
   const result = answer.result;
-  if (!result || typeof result !== "object" || Array.isArray(result)) return {};
-  return Object.fromEntries(
-    Object.entries(result).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
+  const read =
+    !result || typeof result !== "object" || Array.isArray(result)
+      ? {}
+      : Object.fromEntries(
+          Object.entries(result).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        );
+  return { entries: read, revision: typeof answer.revision === "number" ? answer.revision : 0 };
+}
+
+/**
+ * Takes an answer unless a newer one is already in: answers can arrive out
+ * of order (two saves, or a read that crossed a save here or on another device).
+ */
+export function acceptAnswer(answer: Answer): boolean {
+  if (answer.revision < revision) return false;
+  revision = answer.revision;
+  entries = answer.entries;
+  loaded = true;
+  notify();
+  return true;
 }
 
 /** Reads the choices again (on start and when the window comes back to the front). */
 export async function refreshThreadFolders(): Promise<void> {
-  const savesAtStart = saves;
   try {
-    const read = await request();
-    if (saves !== savesAtStart) return;
-    entries = read;
-    loaded = true;
-    notify();
+    acceptAnswer(await request());
   } catch {
     // An older server has no such route; the sidebar shows threads as they are.
   }
@@ -71,10 +88,7 @@ export async function refreshThreadFolders(): Promise<void> {
 
 /** Lists `threadId` under `projectId`, or under its own project again with null. */
 export async function moveThreadInList(threadId: string, projectId: string | null): Promise<void> {
-  saves += 1;
-  entries = await request({ body: { threadId, projectId } });
-  saves += 1;
-  notify();
+  acceptAnswer(await request({ body: { threadId, projectId } }));
 }
 
 /** The choices as last read, for code outside React (Auto's folder context). */

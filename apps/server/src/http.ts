@@ -57,7 +57,7 @@ import {
 import { autoChoices, LUNA_JUDGE_NAMES } from "@t3tools/shared/lunaAuto";
 import { cliReleaseNotes, hasCliReleaseNotes } from "./luna/CliReleaseNotes.ts";
 import { judgeFoldersFromRequest } from "./luna/WorkFolderRequest.ts";
-import { isThreadFolderId, readThreadFolders, setThreadFolder } from "./luna/ThreadFolders.ts";
+import { isThreadFolderId, readThreadFolderState, setThreadFolder } from "./luna/ThreadFolders.ts";
 import { findCursorAgent, LunaDecisionBroker, type JudgeTarget } from "./luna/LunaDecision.ts";
 import {
   lunaPreflightBlocked,
@@ -755,7 +755,8 @@ export const layerThreadFoldersRoute = Layer.unwrap(
       "/api/amu/thread-folders",
       Effect.gen(function* () {
         yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
-        return HttpServerResponse.jsonUnsafe({ result: readThreadFolders(serverConfig.stateDir) });
+        const state = readThreadFolderState(serverConfig.stateDir);
+        return HttpServerResponse.jsonUnsafe({ result: state.entries, revision: state.revision });
       }),
     );
     const write = HttpRouter.add(
@@ -782,7 +783,9 @@ export const layerThreadFoldersRoute = Layer.unwrap(
           try: () => setThreadFolder(serverConfig.stateDir, threadId, projectId),
           catch: () => "保存できませんでした。",
         }).pipe(
-          Effect.map((result) => HttpServerResponse.jsonUnsafe({ result })),
+          Effect.map((state) =>
+            HttpServerResponse.jsonUnsafe({ result: state.entries, revision: state.revision }),
+          ),
           Effect.catch((message) =>
             Effect.succeed(HttpServerResponse.jsonUnsafe({ error: message }, { status: 500 })),
           ),

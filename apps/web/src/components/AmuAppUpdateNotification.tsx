@@ -158,6 +158,12 @@ export function AmuAppUpdateNotification() {
 
   useEffect(() => closeOwnToast, [closeOwnToast]);
 
+  // An install that failed without restarting must not reopen this screen
+  // at the next ordinary start.
+  useEffect(() => {
+    if (state?.errorContext === "install") forgetScreenForRestart();
+  }, [state?.errorContext]);
+
   return null;
 }
 

@@ -1,4 +1,5 @@
 import type { DesktopUpdateState } from "@t3tools/contracts";
+import { forgetScreenForRestart, rememberScreenForRestart } from "../../amu/restartReturn";
 import { TriangleAlertIcon } from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
@@ -232,6 +233,8 @@ function SidebarUpdateControl() {
         setIsActionPending(false);
         return;
       }
+      // Amu: come back to this screen once the new version starts.
+      rememberScreenForRestart();
       void bridge
         .installUpdate()
         .then((result) => {
@@ -247,6 +250,7 @@ function SidebarUpdateControl() {
           );
         })
         .catch((error) => {
+          forgetScreenForRestart();
           toastManager.add(
             stackedThreadToast({
               type: "error",

@@ -19,35 +19,52 @@ export type ThreadFolderEntries = Readonly<Record<string, string>>;
 export const isThreadFolderId = (value: unknown): value is string =>
   typeof value === "string" && ID.test(value);
 
-export function readThreadFolders(stateDir: string): ThreadFolderEntries {
+/** The choices and their revision, which every save raises by one. */
+export type ThreadFolderState = { entries: ThreadFolderEntries; revision: number };
+
+export function readThreadFolderState(stateDir: string): ThreadFolderState {
   try {
     const value: unknown = JSON.parse(NodeFS.readFileSync(NodePath.join(stateDir, FILE), "utf8"));
-    if (!value || typeof value !== "object") return {};
-    const entries = (value as { entries?: unknown }).entries;
-    if (!entries || typeof entries !== "object" || Array.isArray(entries)) return {};
+    if (!value || typeof value !== "object") return { entries: {}, revision: 0 };
+    const record = value as { entries?: unknown; revision?: unknown };
+    const revision =
+      typeof record.revision === "number" && Number.isSafeInteger(record.revision)
+        ? Math.max(0, record.revision)
+        : 0;
+    const entries = record.entries;
+    if (!entries || typeof entries !== "object" || Array.isArray(entries))
+      return { entries: {}, revision };
     const result: Record<string, string> = {};
     for (const [threadId, projectId] of Object.entries(entries)) {
       if (isThreadFolderId(threadId) && isThreadFolderId(projectId)) result[threadId] = projectId;
     }
-    return result;
+    return { entries: result, revision };
   } catch {
-    return {};
+    return { entries: {}, revision: 0 };
   }
 }
 
-/** Shows `threadId` under `projectId`, or back under its own project with null. */
+export function readThreadFolders(stateDir: string): ThreadFolderEntries {
+  return readThreadFolderState(stateDir).entries;
+}
+
+/** Lists `threadId` under `projectId`, or back under its own project with null. */
 export function setThreadFolder(
   stateDir: string,
   threadId: string,
   projectId: string | null,
-): ThreadFolderEntries {
-  const entries: Record<string, string> = { ...readThreadFolders(stateDir) };
+): ThreadFolderState {
+  const current = readThreadFolderState(stateDir);
+  const entries: Record<string, string> = { ...current.entries };
   if (projectId === null) delete entries[threadId];
   else entries[threadId] = projectId;
   const kept = Object.fromEntries(Object.entries(entries).slice(-MAX_ENTRIES));
+  const revision = current.revision + 1;
   const file = NodePath.join(stateDir, FILE);
   const temporary = `${file}.${process.pid}.tmp`;
-  NodeFS.writeFileSync(temporary, JSON.stringify({ version: 1, entries: kept }), { mode: 0o600 });
+  NodeFS.writeFileSync(temporary, JSON.stringify({ version: 1, revision, entries: kept }), {
+    mode: 0o600,
+  });
   NodeFS.renameSync(temporary, file);
-  return kept;
+  return { entries: kept, revision };
 }

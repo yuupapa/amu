@@ -4,10 +4,16 @@
  * is the bare address, which shows whether the phone reaches this Mac at all.
  */
 
-/** The address to open first: the link without the pairing token. */
+/**
+ * The address to open first: where the link reaches this Mac, without the
+ * pairing token. A hosted-app link (https://app…/pair?host=…) names the Mac
+ * in its `host` parameter.
+ */
 export function reachabilityCheckUrl(pairingUrl: string): string | null {
   try {
-    const url = new URL(pairingUrl);
+    let url = new URL(pairingUrl);
+    const host = url.searchParams.get("host");
+    if (url.pathname === "/pair" && host) url = new URL(host);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     if (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) return null;
     return url.origin;
@@ -16,10 +22,22 @@ export function reachabilityCheckUrl(pairingUrl: string): string | null {
   }
 }
 
+/** Whether the address is on a tailnet: MagicDNS (*.ts.net) or 100.64.0.0/10. */
+export function isTailnetAddress(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname;
+    if (host.endsWith(".ts.net")) return true;
+    const parts = host.split(".").map(Number);
+    return parts.length === 4 && parts[0] === 100 && parts[1]! >= 64 && parts[1]! <= 127;
+  } catch {
+    return false;
+  }
+}
+
 export function PhoneConnectHelp(props: { pairingUrl: string }) {
   const check = reachabilityCheckUrl(props.pairingUrl);
   if (!check) return null;
-  const tailnet = new URL(check).hostname.endsWith(".ts.net");
+  const tailnet = isTailnetAddress(check);
   return (
     <details className="rounded-lg border border-border/50 px-2.5 py-1.5 text-2xs text-muted-foreground">
       <summary className="cursor-pointer text-xs font-medium text-foreground">
@@ -27,7 +45,11 @@ export function PhoneConnectHelp(props: { pairingUrl: string }) {
       </summary>
       <ol className="mt-1.5 list-decimal space-y-1 pl-4">
         {tailnet ? (
-          <li>スマホにも Tailscale を入れ、Mac と同じアカウントでログインしておきます。</li>
+          <li>
+            スマホにも Tailscale を入れ、Mac
+            と同じアカウントでログインして、接続をオンにしておきます。Wi-Fi
+            でもモバイルデータでも構いません。
+          </li>
         ) : (
           <li>スマホを Mac と同じ Wi-Fi につなぎます。モバイルデータと VPN はオフにします。</li>
         )}

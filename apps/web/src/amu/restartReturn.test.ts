@@ -49,3 +49,26 @@ describe("coming back after a restart", () => {
     expect(takeScreenAfterRestart(2_000)).toBeNull();
   });
 });
+
+describe("phone help addresses", async () => {
+  const { isTailnetAddress, reachabilityCheckUrl } = await import("./phoneConnectHelp");
+
+  it("checks the Mac's own address, also inside a hosted-app link", () => {
+    expect(reachabilityCheckUrl("http://192.168.11.25:5233/pair#token=x")).toBe(
+      "http://192.168.11.25:5233",
+    );
+    expect(
+      reachabilityCheckUrl(
+        "https://app.t3.codes/pair?host=https%3A%2F%2Fmac.tail1234.ts.net&token=x",
+      ),
+    ).toBe("https://mac.tail1234.ts.net");
+    expect(reachabilityCheckUrl("http://127.0.0.1:5233/pair#token=x")).toBeNull();
+  });
+
+  it("tells tailnet addresses apart", () => {
+    expect(isTailnetAddress("https://mac.tail1234.ts.net")).toBe(true);
+    expect(isTailnetAddress("http://100.101.102.103:5233")).toBe(true);
+    expect(isTailnetAddress("http://192.168.11.25:5233")).toBe(false);
+    expect(isTailnetAddress("http://100.200.1.1:5233")).toBe(false);
+  });
+});
