@@ -201,6 +201,13 @@ jobs:
             release/latest.yml
           if-no-files-found: error
 
+      - name: Download upstream T3 Code for the smoke test
+        if: inputs.dry_run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --repo pingdotgg/t3code --pattern "T3-Code-*-x64.exe" --dir upstream
+
       # Dry runs also install the build on this runner beside upstream T3 Code
       # and check what a user would: Amu installs and registers as Amu in its
       # own folder, starts on 5233 with its data in %APPDATA%\Amu\runtime (not
@@ -210,8 +217,8 @@ jobs:
         if: inputs.dry_run
         shell: pwsh
         timeout-minutes: 15
+        # No GitHub token here: this step runs Amu and upstream T3 Code.
         env:
-          GH_TOKEN: ${{ github.token }}
           T3CODE_DISABLE_AUTO_UPDATE: "true"
         run: |
           $ErrorActionPreference = "Stop"
@@ -226,7 +233,6 @@ jobs:
             return $found
           }
 
-          gh release download --repo pingdotgg/t3code --pattern "T3-Code-*-x64.exe" --dir upstream
           $upstreamInstaller = Get-ChildItem upstream -Filter "T3-Code-*-x64.exe" | Select-Object -First 1
           Start-Process $upstreamInstaller.FullName -ArgumentList "/S" -Wait
           $upstreamApp = Get-ChildItem "$env:LOCALAPPDATA\Programs\t3code" -Filter "*.exe" |
