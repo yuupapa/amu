@@ -33,7 +33,9 @@ export const MCP_MARKET_CATALOG: ReadonlyArray<McpMarketEntry> = [
     description: "ライブラリーやフレームワークの最新の説明書を調べます。ログインは要りません。",
     url: "https://mcp.context7.com/mcp",
     auth: { kind: "none" },
-    verified: false,
+    // Verified 2026-10-08: add, initialize, tools/list, and resolve-library-id
+    // from a Claude and a Codex thread through the proxy (refused in Supervised Codex).
+    verified: true,
   },
   {
     id: "vercel",
