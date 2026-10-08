@@ -178,12 +178,12 @@ export function ThreadFolderDialog(props: {
   const [error, setError] = useState<string | null>(null);
   // A save that finishes after this dialog was closed must not close another one.
   const open = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    open.current = true;
+    return () => {
       open.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
   const choices = props.projects.filter(
     (project) => project.environmentId === props.thread.environmentId,
   );
