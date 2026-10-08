@@ -135,10 +135,14 @@ export class McpMarket {
     if (!entry || !offered(entry))
       throw new McpMarketLoginError("このサービスは一覧にありません。");
     if (entry.auth.kind === "oauth-dcr") return await this.oauth.start(id);
+    // Same rule as a login: a remove (or a newer add) meanwhile wins.
+    const attempt = this.oauth.beginAttempt(id);
     await checkMcpServer(this.transport, entry, undefined).catch(() => {
       throw new McpMarketLoginError(`${entry.name} につながりませんでした。`);
     });
     await this.store.withLock(id, () => {
+      if (!this.oauth.isLatestAttempt(id, attempt))
+        throw new McpMarketLoginError("この追加は取りやめました。もう一度押してください。");
       if (!this.store.server(id)) this.store.addLocked(id);
     });
     return null;

@@ -289,8 +289,7 @@ export class McpMarketOAuth {
     const entry = findMcpMarketEntry(serverId);
     if (!entry || entry.auth.kind !== "oauth-dcr")
       throw new McpMarketLoginError("このサービスはログインを使いません。");
-    const attemptNumber = (this.latestAttempt.get(serverId) ?? 0) + 1;
-    this.latestAttempt.set(serverId, attemptNumber);
+    const attemptNumber = this.beginAttempt(serverId);
     for (const [state, attempt] of this.attempts)
       if (attempt.serverId === serverId) this.attempts.delete(state);
     const generation = this.store.server(serverId)?.generation;
@@ -329,6 +328,21 @@ export class McpMarketOAuth {
     url.searchParams.set("resource", server.resource);
     if (entry.auth.scopes.length > 0) url.searchParams.set("scope", entry.auth.scopes.join(" "));
     return url.toString();
+  }
+
+  /**
+   * Starts a connect (a login, or adding a server without one); every older
+   * one is void from here on. Returns its number.
+   */
+  beginAttempt(serverId: string): number {
+    const attemptNumber = (this.latestAttempt.get(serverId) ?? 0) + 1;
+    this.latestAttempt.set(serverId, attemptNumber);
+    return attemptNumber;
+  }
+
+  /** Whether `attempt` is still the newest connect (no newer start, no remove). */
+  isLatestAttempt(serverId: string, attempt: number): boolean {
+    return this.latestAttempt.get(serverId) === attempt;
   }
 
   /** Stops a pending login (removal, or the user closing the card). */

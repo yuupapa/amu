@@ -122,10 +122,12 @@ async function startFake(): Promise<Fake> {
       }
       if (url.pathname === "/mcp") {
         const token = /^Bearer (.+)$/u.exec(request.headers.authorization ?? "")?.[1];
+        const open = request.headers["x-fake-origin"] === "https://mcp.context7.com";
         if (
-          !token ||
-          !fake.accessTokens.has(token) ||
-          (fake.rejectNext && request.method === "POST")
+          !open &&
+          (!token ||
+            !fake.accessTokens.has(token) ||
+            (fake.rejectNext && request.method === "POST"))
         ) {
           fake.rejectNext = false;
           return send(
@@ -212,7 +214,7 @@ const fakeTransport =
           port: fake.port,
           method: request.method,
           path: `${url.pathname}${url.search}`,
-          headers: request.headers,
+          headers: { ...request.headers, "x-fake-origin": url.origin },
           ...(request.signal ? { signal: request.signal } : {}),
         },
         resolve,
@@ -632,5 +634,18 @@ describe("MCP market fixes from review round 1", () => {
     const result = await pending;
     expect(result.status).toBe(404);
     expect((result.body as { id: number }).id).toBe(7);
+  });
+
+  it("does not add a server without login again when it was removed while being added", async () => {
+    let release: () => void = () => undefined;
+    lookupDelay = () => new Promise<void>((resolve) => (release = resolve));
+    // Context7 needs no login; its check goes through the fake transport.
+    const adding = market.connect("context7").catch((cause: Error) => cause.message);
+    await new Promise((r) => setTimeout(r, 20));
+    await market.remove("context7");
+    lookupDelay = undefined;
+    release();
+    expect(await adding).toContain("取りやめ");
+    expect(market.store.server("context7")).toBeUndefined();
   });
 });
