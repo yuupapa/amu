@@ -36,6 +36,9 @@ interface Fake {
   sessionId: string;
   /** Called when a refresh request arrives, before it is answered. */
   onRefresh?: () => void;
+  /** What the metadata calls the resource and the issuer; Linear's own by default. */
+  resource: string;
+  issuer: string;
 }
 
 const read = (request: NodeHttp.IncomingMessage) =>
@@ -57,6 +60,8 @@ async function startFake(): Promise<Fake> {
     rejectNext: false,
     holdStreams: false,
     sessionId: "up-session-1",
+    resource: "https://mcp.linear.app/mcp",
+    issuer: "https://mcp.linear.app",
   };
   const issue = () => {
     const access = `at-${NodeCrypto.randomUUID()}`;
@@ -84,12 +89,12 @@ async function startFake(): Promise<Fake> {
       };
       if (url.pathname === "/.well-known/oauth-protected-resource/mcp")
         return send(200, {
-          resource: "https://mcp.linear.app/mcp",
+          resource: fake.resource,
           authorization_servers: ["https://mcp.linear.app"],
         });
       if (url.pathname === "/.well-known/oauth-authorization-server")
         return send(200, {
-          issuer: "https://mcp.linear.app",
+          issuer: fake.issuer,
           authorization_endpoint: "https://mcp.linear.app/authorize",
           token_endpoint: "https://mcp.linear.app/token",
           registration_endpoint: "https://mcp.linear.app/register",
@@ -683,5 +688,40 @@ describe("MCP market fixes from review round 1", () => {
       fake.sessionId,
     );
     expect(listed.status).toBe(200);
+  });
+});
+
+describe("MCP market fixes from the 0.0.55 security review", () => {
+  it("sends the body as it was checked, so a repeated method cannot slip past plan mode", async () => {
+    const server = await connectLinear();
+    allowed = false;
+    // JSON.parse keeps the last "method"; a server that keeps the first would run tools/call.
+    const response = await fetch(server.url, {
+      method: "POST",
+      headers: {
+        Authorization: server.authorizationHeader,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_issues"},"method":"tools/list"}',
+    });
+    expect(response.status).toBe(200);
+    expect(fake.seen.some((request) => request.body?.includes('"tools/call"'))).toBe(false);
+  });
+
+  it("refuses a login whose metadata names another resource", async () => {
+    fake.resource = "https://mcp.linear.app/elsewhere";
+    await expect(market.connect("linear")).rejects.toThrow("一致しませんでした");
+  });
+
+  it("refuses a login whose authorization server metadata names another issuer", async () => {
+    fake.issuer = "https://mcp.linear.app/other";
+    await expect(market.connect("linear")).rejects.toThrow("一致しませんでした");
+  });
+
+  it("accepts metadata that only adds or drops a trailing slash", async () => {
+    fake.resource = "https://mcp.linear.app/mcp/";
+    fake.issuer = "https://mcp.linear.app/";
+    expect(await market.connect("linear")).toBeTruthy();
   });
 });

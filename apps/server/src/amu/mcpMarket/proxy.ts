@@ -206,20 +206,25 @@ export class McpMarketProxy {
       this.reply(response, [], false, `${entry.name} は Amu の設定で外されています。`, 404);
       return;
     }
-    const body = request.method === "POST" ? await readBody(request, MAX_BODY_BYTES) : undefined;
-    if (request.method === "POST" && body === undefined) {
+    const rawBody = request.method === "POST" ? await readBody(request, MAX_BODY_BYTES) : undefined;
+    if (request.method === "POST" && rawBody === undefined) {
       this.reply(response, [], false, "送る内容が大きすぎます。", 413);
       return;
     }
-    const messages = body === undefined ? [] : parseMessages(body);
-    if (body !== undefined && messages === undefined) {
+    const parsed = rawBody === undefined ? undefined : parseBody(rawBody);
+    if (rawBody !== undefined && parsed === undefined) {
       this.reply(response, [], false, "形式が不正です。", 400);
       return;
     }
-    const batch = body !== undefined && isBatch(body);
+    const messages = parsed?.messages ?? [];
+    const batch = parsed?.batch ?? false;
+    // The server gets the body as it was read here, so a body two JSON
+    // parsers would read differently (a repeated "method" key) cannot pass
+    // the policy check as one method and run as another.
+    const body = parsed?.canonical;
     const answer = (text: string, status = 200) =>
-      this.reply(response, messages ?? [], batch, text, status);
-    const needsPolicy = (messages ?? []).some(
+      this.reply(response, messages, batch, text, status);
+    const needsPolicy = messages.some(
       (message) => typeof message.method === "string" && !isRestrictedOk(message.method),
     );
     const restrictedText = `この会話のモード（計画モードや読み取り専用）では ${entry.name} のツールは使えません。普通のモードに切り替えてください。`;
@@ -442,8 +447,6 @@ class McpMarketSendFailed extends Error {
   }
 }
 
-const isBatch = (body: Buffer) => body.toString("utf8").trimStart().startsWith("[");
-
 const isRestrictedOk = (method: string) =>
   RESTRICTED_METHODS.has(method) || method.startsWith("notifications/");
 
@@ -452,13 +455,21 @@ interface Message {
   readonly method?: unknown;
 }
 
-function parseMessages(body: Buffer): Message[] | undefined {
+/** The messages in a body, whether it is a batch, and the body re-encoded from them. */
+function parseBody(
+  body: Buffer,
+): { messages: Message[]; batch: boolean; canonical: Buffer } | undefined {
   try {
     const value: unknown = JSON.parse(body.toString("utf8"));
-    const list = Array.isArray(value) ? value : [value];
+    const batch = Array.isArray(value);
+    const list: unknown[] = batch ? value : [value];
     if (list.length === 0 || !list.every((item) => item && typeof item === "object"))
       return undefined;
-    return list as Message[];
+    return {
+      messages: list as Message[],
+      batch,
+      canonical: Buffer.from(JSON.stringify(value), "utf8"),
+    };
   } catch {
     return undefined;
   }

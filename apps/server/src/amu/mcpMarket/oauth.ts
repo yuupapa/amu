@@ -95,6 +95,16 @@ const json = (response: MarketResponse): Record<string, unknown> | undefined => 
 const text = (value: unknown) =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 
+/** Same URL apart from a trailing slash, which servers add or drop (Vercel, HyperFrames). */
+function sameUrl(a: string, b: string): boolean {
+  try {
+    const strip = (url: string) => new URL(url).href.replace(/\/$/u, "");
+    return strip(a) === strip(b);
+  } catch {
+    return false;
+  }
+}
+
 export class McpMarketOAuth {
   private readonly attempts = new Map<string, Attempt>();
   private readonly latestAttempt = new Map<string, number>();
@@ -190,6 +200,11 @@ export class McpMarketOAuth {
       : undefined;
     if (!issuer)
       throw new McpMarketLoginError("このサービスのログイン方法が見つかりませんでした。");
+    // A token is issued for the resource the metadata names, and Amu sends it
+    // to entry.url, so the two must be the same server (RFC 9728 §3.3).
+    const resource = text(resourceMetadata?.resource) ?? entry.url;
+    if (!sameUrl(resource, entry.url))
+      throw new McpMarketLoginError("このサービスのログイン情報が、つなぐ先と一致しませんでした。");
     const issuerUrl = new URL(issuer);
     const path = issuerUrl.pathname.replace(/\/$/u, "");
     let metadata: Record<string, unknown> | undefined;
@@ -204,6 +219,9 @@ export class McpMarketOAuth {
       });
       if (metadata) break;
     }
+    // The metadata must be the issuer's own (RFC 8414 §3.3).
+    if (!sameUrl(text(metadata?.issuer) ?? "", issuer))
+      throw new McpMarketLoginError("このサービスのログイン情報が、つなぐ先と一致しませんでした。");
     const authorizationEndpoint = text(metadata?.authorization_endpoint);
     const tokenEndpoint = text(metadata?.token_endpoint);
     const registrationEndpoint = text(metadata?.registration_endpoint);
@@ -226,7 +244,7 @@ export class McpMarketOAuth {
       throw new McpMarketLoginError("このサービスのログイン方法に Amu は対応していません。");
     return {
       issuer,
-      resource: text(resourceMetadata?.resource) ?? entry.url,
+      resource,
       authorizationEndpoint,
       tokenEndpoint,
       registrationEndpoint,
