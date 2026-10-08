@@ -1,6 +1,7 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimersInEffect:off - runs the Grok and npm CLIs for an in-app sign-in, with a time limit.
+// @effect-diagnostics nodeBuiltinImport:off globalTimersInEffect:off globalTimers:off - runs the Grok and npm CLIs for an in-app sign-in, with a time limit.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { ProviderSetupError, type ProviderInstanceId } from "@t3tools/contracts";
@@ -23,18 +24,47 @@ import type { ProviderAuthController } from "./ProviderAuthService.ts";
 export const GROK_NPM_PACKAGE = "@xai-official/grok";
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 const INSTALL_TIMEOUT_MS = 5 * 60_000;
+/** The longest terminal text the app takes (ProviderAuthInteraction in contracts). */
+const TERMINAL_OUTPUT_MAX = 16_384;
+/** How long a stopped command may take to close before it is killed. */
+const STOP_GRACE_MS = 2_000;
 
 /** The CLI's colours and cursor moves, which are not part of the text. */
 const stripAnsi = (text: string) =>
   // eslint-disable-next-line no-control-regex
   text.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/gu, "");
 
-/** The address and code `grok login --device-auth` prints, once both are there. */
+/**
+ * The address and code `grok login --device-auth` prints, once both are there
+ * in full: the code must be followed by more text, so an address cut between
+ * two pieces of output is not taken early.
+ */
 export function parseGrokDeviceLogin(output: string): { url: string; userCode: string } | null {
   const text = stripAnsi(output);
-  const url = /https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=([A-Z0-9-]{4,32})/u.exec(text);
+  const url =
+    /https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=([A-Z0-9]{4,16}(?:-[A-Z0-9]{4,16})*)(?=[\s"'<>)\]])/u.exec(
+      text,
+    );
   if (!url) return null;
   return { url: url[0], userCode: url[1]! };
+}
+
+/**
+ * The folder the CLI keeps its login in, as a stable key: GROK_HOME, else
+ * ~/.grok, made absolute, so two instances that name the same folder in
+ * different ways share one sign-in.
+ */
+export function grokHomeFolder(environment: NodeJS.ProcessEnv): string {
+  const home = environment.HOME?.trim() || NodeOS.homedir();
+  const configured = environment.GROK_HOME?.trim();
+  const folder = configured
+    ? NodePath.resolve(home, configured.replace(/^~(?=$|\/)/u, home))
+    : NodePath.join(home, ".grok");
+  try {
+    return NodeFS.realpathSync(folder);
+  } catch {
+    return folder;
+  }
 }
 
 /** An executable found as given, or on PATH; null when there is none. */
@@ -57,39 +87,71 @@ export function findExecutable(command: string, environment: NodeJS.ProcessEnv):
 
 type Run = { code: number; output: string };
 
-/** Runs a command, passing its output along; stopping the flow stops it. */
-function runCommand(input: {
+/**
+ * Runs a command in its own process group, passing its output along. A time
+ * limit or a stopped flow ends the whole group (npm's and the CLI's children
+ * too) and waits until it has closed, so a new attempt does not overlap it.
+ */
+export function runCommand(input: {
   command: string;
   args: ReadonlyArray<string>;
   environment: NodeJS.ProcessEnv;
   timeoutMs: number;
-  onOutput?: (output: string) => void;
+  /** Each new piece of output, and the latest text kept so far. */
+  onOutput?: (chunk: string, output: string) => void;
 }) {
   return Effect.callback<Run, Error>((resume) => {
     let output = "";
+    let closed = false;
+    const closedListeners = new Set<() => void>();
     const child = NodeChildProcess.spawn(input.command, [...input.args], {
       env: input.environment,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
-    const take = (chunk: Buffer) => {
-      output = (output + chunk.toString("utf8")).slice(-16_384);
-      input.onOutput?.(output);
+    const signal = (name: NodeJS.Signals) => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, name);
+        else child.kill(name);
+      } catch {
+        // Already gone.
+      }
+    };
+    const stop = () => {
+      signal("SIGTERM");
+      setTimeout(() => signal("SIGKILL"), STOP_GRACE_MS).unref();
+    };
+    const take = (data: Buffer) => {
+      const chunk = data.toString("utf8");
+      output = (output + chunk).slice(-TERMINAL_OUTPUT_MAX);
+      input.onOutput?.(chunk, output);
     };
     child.stdout.on("data", take);
     child.stderr.on("data", take);
-    const timer = setTimeout(() => child.kill("SIGTERM"), input.timeoutMs);
+    const timer = setTimeout(stop, input.timeoutMs);
     child.once("error", (cause) => {
       clearTimeout(timer);
+      closed = true;
+      for (const listener of closedListeners) listener();
       resume(Effect.fail(cause));
     });
     child.once("close", (code) => {
       clearTimeout(timer);
+      closed = true;
+      for (const listener of closedListeners) listener();
       resume(Effect.succeed({ code: code ?? 1, output }));
     });
-    return Effect.sync(() => {
-      clearTimeout(timer);
-      child.kill("SIGTERM");
-    });
+    return Effect.promise(
+      () =>
+        new Promise<void>((done) => {
+          clearTimeout(timer);
+          if (closed) return done();
+          closedListeners.add(done);
+          stop();
+          // Gives up waiting a little after the kill; the group is gone by then.
+          setTimeout(done, STOP_GRACE_MS + 1_000).unref();
+        }),
+    );
   });
 }
 
@@ -109,32 +171,68 @@ export const makeGrokAuth = Effect.fn("makeGrokAuth")(function* (options: {
       ...(cause === undefined ? {} : { cause }),
     });
   const grokCommand = () => findExecutable(options.binaryPath || "grok", options.environment);
+  const npmCommand = () => findExecutable("npm", options.environment);
+
+  /** Where `npm install -g` puts the CLI: `npm prefix -g`/bin/grok, when it is there. */
+  const grokInNpmPrefix = (npm: string) =>
+    runCommand({
+      command: npm,
+      args: ["prefix", "-g"],
+      environment: options.environment,
+      timeoutMs: 30_000,
+    }).pipe(
+      Effect.map((prefix) =>
+        prefix.code === 0 && prefix.output.trim()
+          ? findExecutable(NodePath.join(prefix.output.trim(), "bin", "grok"), options.environment)
+          : null,
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+
+  /**
+   * The CLI is there but not where Amu looks for it (the provider's PATH or
+   * binary path), so Amu could not use it after signing in.
+   */
+  const notOnPath = (found: string) =>
+    failure(
+      "start",
+      `Grok Build CLI は ${found} に入っていますが、Amu から見つけられません。Grok の設定の「実行ファイルのパス」に ${found} を入れてから、もう一度押してください。`,
+    );
 
   /** Installs the Grok Build CLI for the whole Mac, then finds it again. */
   const install = (context: ProviderAuthFlow.ProviderAuthFlowContext) =>
     Effect.gen(function* () {
-      const npm = findExecutable("npm", options.environment);
+      const npm = npmCommand();
       if (!npm)
         return yield* failure(
           "start",
           "Grok Build CLI を入れるための npm（Node.js）が見つかりません。Node.js を入れてから、もう一度押してください。",
         );
       const runFork = Effect.runForkWith(yield* Effect.context<never>());
-      const show = (text: string) =>
+      // The terminal keeps the latest text within the app's limit; the offset
+      // tells it how much has been written in all, so it adds only the new part.
+      let transcript = "";
+      let outputOffset = 0;
+      const show = (chunk: string) => {
+        const text = chunk.replace(/\r?\n/gu, "\r\n");
+        outputOffset += text.length;
+        transcript = (transcript + text).slice(-TERMINAL_OUTPUT_MAX);
         runFork(
           context.setInteraction({
             type: "terminal",
             id: "install",
-            output: `Grok Build CLI を入れています（${GROK_NPM_PACKAGE}）…\r\n\r\n${text.replace(/\n/gu, "\r\n")}`,
+            output: transcript,
+            outputOffset,
           }),
         );
-      show("");
+      };
+      show(`Grok Build CLI を入れています（${GROK_NPM_PACKAGE}）…\n\n`);
       const result = yield* runCommand({
         command: npm,
         args: ["install", "-g", GROK_NPM_PACKAGE],
         environment: options.environment,
         timeoutMs: INSTALL_TIMEOUT_MS,
-        onOutput: show,
+        onOutput: (chunk) => show(chunk),
       }).pipe(
         Effect.mapError((cause) =>
           failure("start", "Grok Build CLI を入れられませんでした。", cause),
@@ -145,28 +243,34 @@ export const makeGrokAuth = Effect.fn("makeGrokAuth")(function* (options: {
           "start",
           "Grok Build CLI を入れられませんでした。ターミナルで npm install -g @xai-official/grok を試してください。",
         );
-      const prefix = yield* runCommand({
-        command: npm,
-        args: ["prefix", "-g"],
-        environment: options.environment,
-        timeoutMs: 30_000,
-      }).pipe(Effect.orElseSucceed(() => ({ code: 1, output: "" })));
-      const fromPrefix =
-        prefix.code === 0
-          ? findExecutable(NodePath.join(prefix.output.trim(), "bin", "grok"), options.environment)
-          : null;
-      const found = grokCommand() ?? fromPrefix;
-      if (!found)
-        return yield* failure(
-          "start",
-          "Grok Build CLI は入りましたが、見つけられません。Amu を再起動してから、もう一度押してください。",
-        );
-      return found;
+      const found = grokCommand();
+      if (found) return found;
+      const fromPrefix = yield* grokInNpmPrefix(npm);
+      return yield* fromPrefix
+        ? notOnPath(fromPrefix)
+        : failure(
+            "start",
+            "Grok Build CLI は入りましたが、見つけられません。Amu を再起動してから、もう一度押してください。",
+          );
+    });
+
+  /**
+   * The CLI Amu uses. When it is missing: an earlier install that Amu cannot
+   * see is reported (installing again would not help), else it is installed.
+   */
+  const resolveGrok = (context: ProviderAuthFlow.ProviderAuthFlowContext) =>
+    Effect.gen(function* () {
+      const found = grokCommand();
+      if (found) return found;
+      const npm = npmCommand();
+      const installed = npm ? yield* grokInNpmPrefix(npm) : null;
+      if (installed) return yield* notOnPath(installed);
+      return yield* install(context);
     });
 
   const authenticate = (_methodId: string, context: ProviderAuthFlow.ProviderAuthFlowContext) =>
     Effect.gen(function* () {
-      const grok = grokCommand() ?? (yield* install(context));
+      const grok = yield* resolveGrok(context);
       const shown = yield* Deferred.make<{ url: string; userCode: string }>();
       const showCode = yield* Deferred.await(shown).pipe(
         Effect.flatMap(({ url, userCode }) =>
@@ -179,7 +283,7 @@ export const makeGrokAuth = Effect.fn("makeGrokAuth")(function* (options: {
         args: ["login", "--device-auth"],
         environment: options.environment,
         timeoutMs: LOGIN_TIMEOUT_MS,
-        onOutput: (output) => {
+        onOutput: (_chunk, output) => {
           const code = parseGrokDeviceLogin(output);
           if (code) Deferred.doneUnsafe(shown, Effect.succeed(code));
         },
@@ -215,10 +319,10 @@ export const makeGrokAuth = Effect.fn("makeGrokAuth")(function* (options: {
 
   const controller: ProviderAuthController = yield* ProviderAuthFlow.make({
     instanceId: options.instanceId,
-    // The CLI keeps one login for this Mac user (~/.grok, or GROK_HOME).
+    // The CLI keeps one login per folder (~/.grok, or GROK_HOME).
     credentialBinding: {
       owner: "provider",
-      key: `grok:${options.environment.GROK_HOME ?? "~/.grok"}`,
+      key: `grok:${grokHomeFolder(options.environment)}`,
     },
     methods: Effect.succeed([
       {
