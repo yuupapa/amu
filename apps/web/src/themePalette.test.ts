@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
+import { AMU_THEMES, BUILT_IN_THEMES, THEME_COLOR_ROLES } from "@t3tools/shared/themePalettes";
 
 import {
   applyThemeColorPreview,
@@ -40,6 +40,7 @@ import {
   toCanonicalThemeColor,
   THEME_FILE_VERSION,
   singleAppearanceOf,
+  themeSetsInterfaceFont,
 } from "./themePalette";
 
 function asHex(value: string): string {
@@ -972,6 +973,122 @@ describe("theme files", () => {
 
     vi.unstubAllGlobals();
     invalidateCustomThemes();
+  });
+});
+
+describe("Amu themes", () => {
+  const amuModes = AMU_THEMES.flatMap((theme) =>
+    getThemeModes(theme).map((mode) => ({
+      theme,
+      mode,
+      colors: getThemeColorsForMode(theme, mode)!,
+    })),
+  );
+
+  it("ships Amu and Luxe in both appearances, Cyber dark only, and Simple light only", () => {
+    expect(Object.fromEntries(AMU_THEMES.map((theme) => [theme.id, getThemeModes(theme)]))).toEqual(
+      {
+        amu: ["light", "dark"],
+        "amu-cyber": ["dark"],
+        "amu-simple": ["light"],
+        "amu-luxe": ["light", "dark"],
+      },
+    );
+  });
+
+  it("fills every color role with a canonical OKLCH value", () => {
+    for (const { colors } of amuModes) {
+      expect(Object.keys(colors).toSorted()).toEqual([...THEME_COLOR_ROLES].toSorted());
+      for (const value of Object.values(colors)) {
+        expect(toCanonicalThemeColor(value)).toBe(value);
+      }
+    }
+  });
+
+  it("keeps text readable (4.5:1) on the surfaces it sits on", () => {
+    const pairs = [
+      ["text", "canvas"],
+      ["text", "surface"],
+      ["text", "surfaceOverlay"],
+      ["textMuted", "surface"],
+      ["textMuted", "canvas"],
+      ["mutedForeground", "muted"],
+      ["placeholder", "surface"],
+      ["secondaryLabel", "surface"],
+      ["secondaryForeground", "secondary"],
+      ["accentForeground", "accent"],
+      ["accentSurfaceForeground", "accentSurface"],
+      ["messageForeground", "messageSurface"],
+      ["messageActionForeground", "messageAction"],
+      ["errorForeground", "errorSurface"],
+      ["warningForeground", "warningSurface"],
+      ["updateForeground", "updateSurface"],
+      ["codeForeground", "codeBackground"],
+      ["toolbarForeground", "toolbar"],
+      ["toolbarControlForeground", "toolbarControl"],
+      ["sidebarForeground", "sidebar"],
+      ["sidebarForeground", "sidebarRowSelected"],
+      ["sidebarMutedForeground", "sidebar"],
+      ["terminalForeground", "terminalBackground"],
+    ] as const;
+    const failures = amuModes.flatMap(({ theme, mode, colors }) =>
+      pairs
+        .map(([foreground, background]) => ({
+          pair: `${theme.id}/${mode}: ${foreground} on ${background}`,
+          ratio: contrastRatio(colors[foreground], colors[background]),
+        }))
+        .filter(({ ratio }) => ratio < 4.5),
+    );
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps translucent sidebar names and code block labels readable", () => {
+    // Inactive thread rows draw the sidebar's muted text at 80%, and code block
+    // headers draw the code color at 72% over the block's secondary surface.
+    const blend = (foreground: string, background: string, alpha: number) => {
+      const [fg, bg] = [asHex(foreground), asHex(background)].map((hex) =>
+        [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16)),
+      );
+      return `#${fg!
+        .map((channel, index) =>
+          Math.round(channel * alpha + bg![index]! * (1 - alpha))
+            .toString(16)
+            .padStart(2, "0"),
+        )
+        .join("")}`;
+    };
+    const failures = amuModes.flatMap(({ theme, mode, colors }) =>
+      [
+        {
+          pair: `${theme.id}/${mode}: sidebar names`,
+          ratio: contrastRatio(
+            blend(colors.sidebarMutedForeground, colors.sidebar, 0.8),
+            colors.sidebar,
+          ),
+        },
+        {
+          pair: `${theme.id}/${mode}: code block label`,
+          ratio: contrastRatio(
+            blend(colors.codeForeground, colors.secondary, 0.72),
+            colors.secondary,
+          ),
+        },
+      ].filter(({ ratio }) => ratio < 4.5),
+    );
+    expect(failures).toEqual([]);
+  });
+
+  it("resolves as built-ins and replaces the interface font only where fonts are bundled", () => {
+    for (const theme of AMU_THEMES) {
+      expect(getThemeDefinition(theme.id)).toBe(theme);
+    }
+    expect(themeSetsInterfaceFont("amu")).toBe(true);
+    expect(themeSetsInterfaceFont("amu-cyber")).toBe(true);
+    expect(themeSetsInterfaceFont("amu-luxe")).toBe(true);
+    expect(themeSetsInterfaceFont("amu-simple")).toBe(false);
+    expect(themeSetsInterfaceFont("system")).toBe(false);
+    expect(themeAllowsSidebarArtwork("amu-simple")).toBe(false);
+    expect(themeAllowsSidebarArtwork("amu")).toBe(true);
   });
 });
 

@@ -209,4 +209,11 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   // "Enter code <code> in your browser." is three text nodes.
   "Enter code": "ブラウザーでコード",
   "in your browser.": "を入力します。",
+  // Amu themes (themePalettes.ts); the theme-less look is "Basic".
+  Basic: "ベーシック",
+  Cyber: "サイバー",
+  Simple: "シンプル",
+  Luxe: "高級・ビジネス",
+  "Everything outside code blocks and the terminal. The current theme uses its own font for this; your choice returns with other themes.":
+    "コードブロックとターミナル以外のすべて。今のテーマは本文にもテーマの書体を使います。ほかのテーマに戻すと、ここで選んだ書体に戻ります。",
 };

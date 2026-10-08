@@ -827,6 +827,102 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     }
   }
 
+  /* Amu's own themes change type and corners as well as color. While one is
+     worn its interface font wins over Settings -> Appearance (the inline
+     --font-sans there loses to !important); code font and sizes stay with the
+     user. Bundled faces load on demand from themeFonts.css (themePalette.ts). */
+  html[data-theme-id="amu"] {
+    --font-sans:
+      "Zen Maru Gothic", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui,
+      sans-serif !important;
+    --font-display: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", sans-serif;
+    --stage-art-top: #2f8f80;
+    --stage-art-mid: #1f6f66;
+    --stage-art-bottom: #134a47;
+    --stage-art-highlight: #f6e7da;
+    --stage-art-secondary: #74d4c2;
+    --stage-art-tertiary: #ecaa92;
+    --stage-art-line: #eae5d9;
+
+    @variant dark {
+      --stage-art-top: #1f6a60;
+      --stage-art-mid: #164b48;
+      --stage-art-bottom: #0d2a2c;
+      --stage-art-highlight: #eae5d9;
+      --stage-art-secondary: #5fbfae;
+      --stage-art-tertiary: #d9937b;
+      --stage-art-line: #e2ddd0;
+    }
+  }
+
+  /* Cyan focus rings come from the palette; the static glow on the selected
+     row and send button lives unlayered at the end of this file. */
+  html[data-theme-id="amu-cyber"] {
+    --font-sans:
+      "JetBrains Mono", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui,
+      sans-serif !important;
+    --font-display: "JetBrains Mono", ui-monospace, monospace;
+    --font-label: "JetBrains Mono", ui-monospace, monospace;
+    --display-tracking: 0.02em;
+    --label-tracking: 0.08em;
+    --label-case: uppercase;
+    --stage-art-top: #0b3c44;
+    --stage-art-mid: #071f28;
+    --stage-art-bottom: #05070b;
+    --stage-art-highlight: #7ff3f5;
+    --stage-art-secondary: #2de2e6;
+    --stage-art-tertiary: #ff3da8;
+    --stage-art-line: #2de2e6;
+  }
+
+  html[data-theme-id="amu-luxe"] {
+    --font-sans: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif !important;
+    --font-display: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
+    --display-tracking: 0.04em;
+    --label-tracking: 0.18em;
+    --label-case: uppercase;
+    --stage-art-top: #8a6a2f;
+    --stage-art-mid: #5f4920;
+    --stage-art-bottom: #1b2440;
+    --stage-art-highlight: #f2e6c8;
+    --stage-art-secondary: #c9a55c;
+    --stage-art-tertiary: #7d5f28;
+    --stage-art-line: #f2ece1;
+
+    @variant dark {
+      --stage-art-top: #3a2f1c;
+      --stage-art-mid: #241d12;
+      --stage-art-bottom: #120f0a;
+      --stage-art-highlight: #e6cf98;
+      --stage-art-secondary: #c9a55c;
+      --stage-art-tertiary: #9c7a3c;
+      --stage-art-line: #c9a55c;
+    }
+  }
+
+  :is(html[data-theme-id="amu"], html[data-theme-id="amu-cyber"], html[data-theme-id="amu-luxe"]) {
+    --stage-night-top: var(--stage-art-top);
+    --stage-night-mid: var(--stage-art-mid);
+    --stage-night-bottom: var(--stage-art-bottom);
+    --stage-night-highlight: var(--stage-art-highlight);
+    --stage-night-secondary: var(--stage-art-secondary);
+    --stage-night-tertiary: var(--stage-art-tertiary);
+    --stage-night-line: var(--stage-art-line);
+  }
+
+  /* Headings and section labels: theme type where a theme sets one,
+     the interface font otherwise. */
+  .theme-display {
+    font-family: var(--font-display, var(--font-sans));
+    letter-spacing: var(--display-tracking, normal);
+  }
+
+  .theme-label {
+    font-family: var(--font-label, var(--font-sans));
+    letter-spacing: var(--label-tracking, normal);
+    text-transform: var(--label-case, none);
+  }
+
   :is(html[data-theme-id="t3-chat"], html[data-theme-id="ocean"], html[data-theme-id="iris"]) {
     --stage-night-top: color-mix(in oklch, var(--stage-art-top) 38%, var(--stage-night-base-top));
     --stage-night-mid: color-mix(in oklch, var(--stage-art-mid) 38%, var(--stage-night-base-mid));
@@ -854,7 +950,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     html[data-theme-id="grove"],
     html[data-theme-id="ocean"],
     html[data-theme-id="ember"],
-    html[data-theme-id="iris"]
+    html[data-theme-id="iris"],
+    html[data-theme-id="amu"],
+    html[data-theme-id="amu-cyber"],
+    html[data-theme-id="amu-luxe"]
   ) {
     --stage-art-celeste-highlight: var(--stage-art-highlight);
     --stage-art-celeste-secondary: var(--stage-art-secondary);
@@ -1766,8 +1865,10 @@ code {
 .chat-markdown h5,
 .chat-markdown h6 {
   margin: 1.25rem 0 0.5rem;
+  font-family: var(--font-display, var(--font-sans));
   font-weight: 600;
   line-height: 1.3;
+  letter-spacing: var(--display-tracking, normal);
   color: var(--contrast-foreground);
 }
 
@@ -2306,4 +2407,33 @@ code {
       );
     }
   }
+}
+
+/* Amu theme corners. Unlayered like the stock --radius on :root, which would
+   otherwise outrank a layered override. Simple has no artwork because its
+   definition leaves sidebarArtwork unset. */
+html[data-theme-id="amu"] {
+  --radius: 0.75rem;
+}
+
+html[data-theme-id="amu-cyber"] {
+  --radius: 0.25rem;
+}
+
+:is(html[data-theme-id="amu-simple"], html[data-theme-id="amu-luxe"]) {
+  --radius: 0.375rem;
+}
+
+/* Amu Cyber's glow. Unlayered so it outranks the shadow utilities those
+   elements already carry; static, nothing animates. */
+html[data-theme-id="amu-cyber"]
+  [data-thread-item]
+  :is([data-active="true"], [aria-current]:not([aria-current="false"])) {
+  box-shadow: inset 2px 0 0 #2de2e6;
+}
+
+html[data-theme-id="amu-cyber"]
+  [data-chat-composer-form="true"]
+  button[type="submit"]:not(:disabled) {
+  box-shadow: 0 0 14px rgb(45 226 230 / 0.45);
 }

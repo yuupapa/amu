@@ -92,8 +92,7 @@ import { useClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { useCustomThemes } from "../hooks/useCustomThemes";
 import { useEnvironmentThemeDefinitions } from "../hooks/useEnvironmentTheme";
-import { BUILT_IN_THEMES } from "@t3tools/shared/themePalettes";
-import { getThemeDefinition } from "../themePalette";
+import { BUILT_IN_THEME_DEFINITIONS, getThemeDefinition } from "../themePalette";
 import {
   STANDARD_THEME_CARDS,
   getThemeCardDefinition,
@@ -819,7 +818,7 @@ function OpenCommandPaletteDialog(props: {
     const seen = new Set<string>();
     return [
       ...STANDARD_THEME_CARDS.map((card) => ({ ...card, id: null })),
-      ...[...BUILT_IN_THEMES, ...customThemes, ...environmentThemes]
+      ...[...BUILT_IN_THEME_DEFINITIONS, ...customThemes, ...environmentThemes]
         .filter((definition) => {
           if (seen.has(definition.id)) return false;
           seen.add(definition.id);
@@ -2152,11 +2151,17 @@ function OpenCommandPaletteDialog(props: {
             </span>
           ),
           run: async () => {
-            const saved =
-              previews.length === 1 && id !== null
-                ? setThemeHalf(previews[0]!.mode, id)
-                : setTheme(id ?? appearanceMode);
-            if (!saved) notifyThemeSaveFailure();
+            if (previews.length === 1 && id !== null) {
+              const mode = previews[0]!.mode;
+              // A single-appearance theme only owns its half. When the screen is
+              // showing the other half, switch to its appearance so the pick is
+              // visible instead of silently waiting for the next mode change.
+              const saved =
+                setThemeHalf(mode, id) && (mode === resolvedTheme || setAppearanceMode(mode));
+              if (!saved) notifyThemeSaveFailure();
+              return;
+            }
+            if (!setTheme(id ?? appearanceMode)) notifyThemeSaveFailure();
           },
         })),
       },

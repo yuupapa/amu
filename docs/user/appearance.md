@@ -11,6 +11,13 @@ Use **Change appearance** in the command palette to choose System, Light, or Dar
 the theme. **Cmd+Option+Shift+A** on macOS or **Ctrl+Alt+Shift+A** on Windows/Linux cycles through
 those modes. Customize these shortcuts under **Settings → Keybindings**.
 
+The first five themes are Amu's own: **Basic** (the standard look), **Amu**, **Cyber**, **Simple**,
+and **Luxe**. Besides colors, they change corner rounding, and Amu, Cyber, and Luxe also bring their
+own typeface. While one of those three is selected it replaces the interface font chosen in
+Appearance; the code font and all font sizes still follow your settings, and your font choice
+returns when you switch to another theme. Cyber has only a dark appearance and Simple only a light one; choosing either from the command palette also switches to that appearance.
+The typefaces ship with the app, so they also work offline. Mobile does not have these themes yet.
+
 On mobile, open **Settings → Appearance**. Mobile has its own themes and text,
 code, and terminal preferences. It does not follow environment themes or defaults.
 

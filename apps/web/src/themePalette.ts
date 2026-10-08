@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import "culori/css";
 import { converter, parse } from "culori/fn";
 import {
+  AMU_THEMES,
   BUILT_IN_THEMES,
   EMBER_THEME,
   GROVE_THEME,
@@ -1067,7 +1068,33 @@ export function updateThemeColorFamily(
   }
 }
 
-const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = BUILT_IN_THEMES;
+/** Every theme the app ships, Amu's own first; the order the pickers list them. */
+export const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [
+  ...AMU_THEMES,
+  ...BUILT_IN_THEMES,
+];
+
+/**
+ * Amu themes that draw with bundled faces. Their @font-face rules are large
+ * (one per unicode-range slice), so they load only once one of these is worn.
+ */
+const BUNDLED_FONT_THEME_IDS: ReadonlySet<string> = new Set(["amu", "amu-cyber", "amu-luxe"]);
+let bundledFontsRequested = false;
+
+/** Whether wearing this theme replaces the interface font chosen in Appearance. */
+export function themeSetsInterfaceFont(theme: ThemePreference): boolean {
+  const themeId = getThemeDefinition(theme)?.id;
+  return themeId !== undefined && BUNDLED_FONT_THEME_IDS.has(themeId);
+}
+
+function loadBundledThemeFonts(themeId: string): void {
+  if (bundledFontsRequested || !BUNDLED_FONT_THEME_IDS.has(themeId)) return;
+  bundledFontsRequested = true;
+  void import("./themeFonts.css").catch(() => {
+    // The theme still renders with its fallback stacks; allow a later retry.
+    bundledFontsRequested = false;
+  });
+}
 
 export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | null {
   const themeId = themeIdFromPreference(theme);
@@ -1524,6 +1551,7 @@ export function applyThemePalette(theme: ThemePreference, appearance?: ThemeAppe
 
   if (palette) {
     root.dataset.themeId = palette.id;
+    loadBundledThemeFonts(palette.id);
     const mode = appearance ?? legacyThemeMode(theme) ?? palette.appearance;
     const colors = getThemeColorsForMode(palette, mode) ?? palette.colors;
     for (const [role, value] of Object.entries(colors) as Array<[ThemeColorRole, string]>) {

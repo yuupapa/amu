@@ -78,6 +78,7 @@ import {
   readThemePreference,
   useTheme,
 } from "../../hooks/useTheme";
+import { resolveThemeHalf, themeSetsInterfaceFont } from "../../themePalette";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import {
   useScopedSettings,
@@ -1540,10 +1541,16 @@ function InterfaceFontRow({ preview }: { preview?: ReactNode }) {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const defaults = useFontDefaultFamilies();
+  const { theme, themeHalves, resolvedTheme } = useTheme();
+  const themeOwnsFont = themeSetsInterfaceFont(resolveThemeHalf(theme, themeHalves, resolvedTheme));
   return (
     <FontFamilySettingsRow
       {...searchableSetting("interface-font")}
-      description="Everything outside code blocks and the terminal."
+      description={
+        themeOwnsFont
+          ? "Everything outside code blocks and the terminal. The current theme uses its own font for this; your choice returns with other themes."
+          : "Everything outside code blocks and the terminal."
+      }
       defaultFamily={defaults.sans}
       defaultValue={DEFAULT_UNIFIED_SETTINGS.fontFamilySans}
       value={settings.fontFamilySans}

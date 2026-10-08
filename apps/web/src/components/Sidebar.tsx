@@ -851,7 +851,7 @@ function SidebarSectionHeader(props: {
         }
         data-testid={`sidebar-${shelf}-shelf-toggle`}
       >
-        {props.label}
+        <span className="theme-label">{props.label}</span>
       </CollapsibleSectionHeader>
     </SortableSidebarMarker>
   );
