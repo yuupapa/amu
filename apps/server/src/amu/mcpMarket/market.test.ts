@@ -195,12 +195,17 @@ async function startFake(): Promise<Fake> {
   return fake;
 }
 
+/** Stands in for the name lookup: runs before `beforeSend`, like DNS in the real transport. */
+let lookupDelay: (() => Promise<void>) | undefined;
+
 const fakeTransport =
   (fake: Fake): MarketTransport =>
-  (entry, request) => {
-    if (!isAllowedMarketUrl(entry, request.url)) return Promise.reject(new Error("not allowed"));
+  async (entry, request) => {
+    if (!isAllowedMarketUrl(entry, request.url)) throw new Error("not allowed");
     const url = new URL(request.url);
-    return new Promise((resolve, reject) => {
+    await lookupDelay?.();
+    await request.beforeSend?.();
+    return await new Promise((resolve, reject) => {
       const outgoing = NodeHttp.request(
         {
           host: "127.0.0.1",
@@ -223,6 +228,7 @@ let folder: string;
 let allowed = true;
 
 beforeEach(async () => {
+  lookupDelay = undefined;
   fake = await startFake();
   folder = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "amu-mcp-market-"));
   allowed = true;
@@ -594,5 +600,37 @@ describe("MCP market fixes from review round 1", () => {
     expect(server.name).toMatch(/^amu-mcp-linear-[a-f0-9]{6}$/u);
     const [again] = market.mintForSession(session("session-3")) ?? [];
     expect(again!.name).toBe(server.name);
+  });
+
+  it("checks the mode again after the name lookup, right before sending", async () => {
+    const server = await connectLinear();
+    lookupDelay = async () => {
+      allowed = false;
+    };
+    const called = await call(server.url, server.authorizationHeader, {
+      jsonrpc: "2.0",
+      id: 6,
+      method: "tools/call",
+      params: { name: "list_issues" },
+    });
+    expect((called.body.error as { message: string }).message).toContain("計画モード");
+    expect(fake.seen.some((request) => request.body?.includes('"tools/call"'))).toBe(false);
+  });
+
+  it("answers the AI when Amu stops a request before the reply", async () => {
+    const server = await connectLinear();
+    let release: () => void = () => undefined;
+    lookupDelay = () => new Promise<void>((resolve) => (release = resolve));
+    const pending = call(server.url, server.authorizationHeader, {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/list",
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    market.proxy.abortServer("linear");
+    release();
+    const result = await pending;
+    expect(result.status).toBe(404);
+    expect((result.body as { id: number }).id).toBe(7);
   });
 });

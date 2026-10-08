@@ -22,6 +22,11 @@ export interface MarketRequest {
   /** Until the response headers arrive. */
   readonly headerTimeoutMs?: number;
   readonly signal?: AbortSignal;
+  /**
+   * Runs after the address is resolved, right before the request is made; a
+   * rejection stops it (the proxy re-checks the add and the thread's mode).
+   */
+  readonly beforeSend?: () => Promise<void>;
 }
 
 export interface MarketResponse {
@@ -51,8 +56,28 @@ export const httpsTransport: MarketTransport = async (entry, request) => {
     throw new MarketFetchError("この接続先には送れません。", "not_allowed");
   const url = new URL(request.url);
   const host = url.hostname.replace(/^\[|\]$/gu, "");
-  const addresses = await publicAddresses(host);
+  // The name lookup counts toward the time limit and stops with the signal.
+  const addresses = await new Promise<Awaited<ReturnType<typeof publicAddresses>>>(
+    (resolve, reject) => {
+      const fail = () => reject(new MarketFetchError("接続先が応答しません。", "timeout"));
+      if (request.signal?.aborted) return fail();
+      const timer = setTimeout(fail, request.headerTimeoutMs ?? HEADER_TIMEOUT_MS);
+      request.signal?.addEventListener("abort", fail, { once: true });
+      publicAddresses(host).then(
+        (value) => {
+          clearTimeout(timer);
+          request.signal?.removeEventListener("abort", fail);
+          resolve(value);
+        },
+        (cause) => {
+          clearTimeout(timer);
+          reject(cause);
+        },
+      );
+    },
+  );
   if (!addresses) throw new MarketFetchError("この接続先には送れません。", "not_public");
+  await request.beforeSend?.();
   return await new Promise<NodeHttp.IncomingMessage>((resolve, reject) => {
     const outgoing = NodeHttps.request(
       {

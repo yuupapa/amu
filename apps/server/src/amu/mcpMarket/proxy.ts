@@ -313,8 +313,10 @@ export class McpMarketProxy {
       streams.delete(abort);
       if (streams.size === 0) this.openStreams.delete(sessionKey);
     };
+    let clientGone = false;
     const closed = new Promise<void>((resolve) =>
       response.once("close", () => {
+        clientGone = true;
         abort.abort();
         done();
         resolve();
@@ -325,12 +327,16 @@ export class McpMarketProxy {
     // Checked again right before every send: the add (a remove and re-add),
     // and the thread's mode, may have changed while the body arrived or a
     // refresh ran.
-    const send = async (token: AccessToken | undefined) => {
+    const check = async (token: AccessToken | undefined) => {
       if (!this.credentials.has(key) || this.oauth.currentGeneration(entry.id) !== bound)
         throw new McpMarketRemoved();
       if (token && token.generation !== bound) throw new McpMarketRemoved();
       if (input.needsPolicy && !(await this.hooks.allowsOutsideActions(credential)))
         throw new McpMarketRestricted();
+      if (abort.signal.aborted) throw new McpMarketRemoved();
+    };
+    const send = async (token: AccessToken | undefined) => {
+      await check(token);
       used = token
         ? {
             generation: token.generation,
@@ -345,8 +351,11 @@ export class McpMarketProxy {
           headers: { ...headers, ...(token ? { Authorization: `Bearer ${token.token}` } : {}) },
           ...(body === undefined ? {} : { body }),
           signal: abort.signal,
+          // Again after the name lookup, the last moment before it goes out.
+          beforeSend: () => check(token),
         });
       } catch (cause) {
+        if (cause instanceof McpMarketRemoved || cause instanceof McpMarketRestricted) throw cause;
         throw new McpMarketSendFailed(cause);
       }
     };
@@ -392,7 +401,12 @@ export class McpMarketProxy {
       upstream.once("error", () => response.destroy());
       await closed;
     } catch (cause) {
-      if (abort.signal.aborted) return;
+      // The AI hung up: nobody to answer.
+      if (clientGone) return;
+      // Amu stopped it (a remove or a revoked session) before anything came
+      // back: say so instead of leaving the AI waiting.
+      if (abort.signal.aborted && !(cause instanceof McpMarketRestricted))
+        return answer(`${entry.name} は Amu の設定で外されています。`, 404);
       if (cause instanceof McpMarketRemoved)
         return answer(`${entry.name} は Amu の設定で外されています。`, 404);
       if (cause instanceof McpMarketRestricted) return answer(input.restrictedText);
