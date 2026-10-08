@@ -320,8 +320,20 @@ function ProviderAccount({
       ) : !active && !needsExternalSetup && provider.setup?.canAuthenticate !== false ? (
         <SettingsActionRow
           icon="person.crop.circle"
-          label={signedIn ? "Change account" : "Sign in"}
-          disabled={disabled || !provider.enabled || !provider.installed || state === null}
+          label={
+            // Amu: signing in to Grok installs its CLI first when it is missing.
+            provider.driver === "grok" && !provider.installed
+              ? "Install and sign in"
+              : signedIn
+                ? "Change account"
+                : "Sign in"
+          }
+          disabled={
+            disabled ||
+            !provider.enabled ||
+            (!provider.installed && provider.driver !== "grok") ||
+            state === null
+          }
           loading={pending}
           onPress={chooseMethod}
         />

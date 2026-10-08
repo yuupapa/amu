@@ -210,36 +210,42 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
             }),
         ),
       );
-      const auth = yield* makeGrokAuth({
-        instanceId,
-        binaryPath: effectiveConfig.binaryPath,
-        environment: processEnv,
-        onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
-          snapshot.refresh.pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderSetupError({
-                  instanceId,
-                  operation: "verify",
-                  detail: "Grok の状態を確かめられませんでした。",
-                  cause,
-                }),
-            ),
-            Effect.flatMap((provider) =>
-              !signedIn || provider.auth.status === "authenticated"
-                ? Effect.void
-                : Effect.fail(
+      // With XAI_API_KEY the instance does not use the CLI's login, so it is
+      // left out of that login's sign-in and sign-out (which stops the threads
+      // of every instance sharing it).
+      const usesApiKey = Boolean(processEnv.XAI_API_KEY?.trim());
+      const auth = usesApiKey
+        ? null
+        : yield* makeGrokAuth({
+            instanceId,
+            binaryPath: effectiveConfig.binaryPath,
+            environment: processEnv,
+            onChanged: (signedIn): Effect.Effect<void, ProviderSetupError> =>
+              snapshot.refresh.pipe(
+                Effect.mapError(
+                  (cause) =>
                     new ProviderSetupError({
                       instanceId,
                       operation: "verify",
-                      detail:
-                        provider.message ??
-                        "Grok のログインを確かめられませんでした。もう一度押してください。",
+                      detail: "Grok の状態を確かめられませんでした。",
+                      cause,
                     }),
-                  ),
-            ),
-          ),
-      });
+                ),
+                Effect.flatMap((provider) =>
+                  !signedIn || provider.auth.status === "authenticated"
+                    ? Effect.void
+                    : Effect.fail(
+                        new ProviderSetupError({
+                          instanceId,
+                          operation: "verify",
+                          detail:
+                            provider.message ??
+                            "Grok のログインを確かめられませんでした。もう一度押してください。",
+                        }),
+                      ),
+                ),
+              ),
+          });
       const snapshotForCwd = (workspaceCwd: string) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot
@@ -266,7 +272,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         displayName,
         accentColor,
         enabled,
-        auth: auth.controller,
+        ...(auth ? { auth: auth.controller } : {}),
         snapshot,
         snapshotForCwd,
         orchestrationAdapter,

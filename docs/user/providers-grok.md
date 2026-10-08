@@ -1,6 +1,6 @@
 # Grok
 
-Amu は xAI の Grok Build CLI（`grok`）を通して Grok を使います。ログインは Grok のサブスクのアカウントで行い、API キーは使いません。
+Amu は xAI の Grok Build CLI（`grok`）を通して Grok を使います。設定からのログインは Grok のサブスクのアカウントで行います。Grok の環境変数に `XAI_API_KEY` を入れると、そちらの API キーが優先され、この画面のログインとログアウトは出ません。
 
 ## 設定から入れてログインする（Amu）
 
