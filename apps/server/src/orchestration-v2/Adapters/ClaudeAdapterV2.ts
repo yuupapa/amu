@@ -969,9 +969,11 @@ export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
  * which refuses outside actions while Claude is in its own plan mode
  * (docs/internals/amu-mcp-market.md, "Effective policy").
  */
-function publishClaudeLiveMode(threadId: ThreadId, mode: PermissionMode | undefined): void {
-  const session = McpProviderSession.readMcpProviderSession(threadId);
-  if (session) setClaudeLivePermissionMode(session.providerSessionId, mode);
+function publishClaudeLiveMode(
+  mcpProviderSessionId: string | undefined,
+  mode: PermissionMode | undefined,
+): void {
+  if (mcpProviderSessionId !== undefined) setClaudeLivePermissionMode(mcpProviderSessionId, mode);
 }
 
 export function claudeMcpQueryOverrides(input: {
@@ -2832,6 +2834,9 @@ interface ClaudeLiveQueryContext {
   // EnterPlanMode.
   readonly openedPermissionMode: PermissionMode;
   permissionMode: PermissionMode;
+  // Amu: the MCP session this process was opened with, which its mode is
+  // published for (the MCP market proxy reads it).
+  readonly mcpProviderSessionId: string | undefined;
   // Stop, rollback or fork is closing this process; its work is ending.
   stopping: boolean;
   // Registry entries still running when this process opened. Their process
@@ -7108,7 +7113,7 @@ export function makeClaudeAdapterV2(
             if (existing.permissionMode !== existing.openedPermissionMode) {
               yield* existing.query.setPermissionMode(existing.openedPermissionMode);
               existing.permissionMode = existing.openedPermissionMode;
-              publishClaudeLiveMode(turnInput.threadId, existing.permissionMode);
+              publishClaudeLiveMode(existing.mcpProviderSessionId, existing.permissionMode);
             }
             return existing;
           }
@@ -7228,6 +7233,8 @@ export function makeClaudeAdapterV2(
             promptEchoMode: "unknown",
             openedPermissionMode: queryOptions.permissionMode,
             permissionMode: queryOptions.permissionMode,
+            mcpProviderSessionId: McpProviderSession.readMcpProviderSession(turnInput.threadId)
+              ?.providerSessionId,
             stopping: false,
             subagentsFromEarlierProcesses: new Set(
               [...(yield* Ref.get(sessionSubagentsByTaskId)).values()].filter(
@@ -7236,7 +7243,7 @@ export function makeClaudeAdapterV2(
             ),
           };
           yield* Ref.set(queryContext, context);
-          publishClaudeLiveMode(turnInput.threadId, context.permissionMode);
+          publishClaudeLiveMode(context.mcpProviderSessionId, context.permissionMode);
           yield* querySession.messages.pipe(
             Stream.runForEach((message) => {
               if (
@@ -7245,7 +7252,7 @@ export function makeClaudeAdapterV2(
                 message.permissionMode !== undefined
               ) {
                 context.permissionMode = message.permissionMode;
-                publishClaudeLiveMode(turnInput.threadId, context.permissionMode);
+                publishClaudeLiveMode(context.mcpProviderSessionId, context.permissionMode);
               }
               return handleSdkMessage({ query: querySession, message });
             }),
@@ -7266,7 +7273,7 @@ export function makeClaudeAdapterV2(
                 const ownsLiveQuery = yield* Ref.modify(queryContext, (current) =>
                   current?.query === querySession ? [true, null] : [false, current],
                 );
-                if (ownsLiveQuery) publishClaudeLiveMode(turnInput.threadId, undefined);
+                if (ownsLiveQuery) publishClaudeLiveMode(context.mcpProviderSessionId, undefined);
                 if (ownsLiveQuery) {
                   yield* finalizeActiveTurnAfterQueryExit(
                     exit._tag === "Failure" ? exit.cause : undefined,

@@ -7,6 +7,9 @@ import * as NodePath from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
+// The fake servers stand in for catalog entries that are not verified yet.
+process.env.AMU_MCP_MARKET_SHOW_UNVERIFIED = "1";
+
 import { findMcpMarketEntry, isAllowedMarketUrl } from "./catalog.ts";
 import { McpMarket } from "./market.ts";
 import type { ProxyCredential } from "./proxy.ts";
@@ -27,6 +30,8 @@ interface Fake {
   refreshes: number;
   /** When set, the next MCP request answers 401 once even with a valid token. */
   rejectNext: boolean;
+  /** Answer initialize and tools/list as an event stream that stays open. */
+  holdStreams: boolean;
 }
 
 const read = (request: NodeHttp.IncomingMessage) =>
@@ -46,6 +51,7 @@ async function startFake(): Promise<Fake> {
     seen: [],
     refreshes: 0,
     rejectNext: false,
+    holdStreams: false,
   };
   const issue = () => {
     const access = `at-${NodeCrypto.randomUUID()}`;
@@ -130,6 +136,23 @@ async function startFake(): Promise<Fake> {
         }
         if (request.method === "DELETE") return send(200, {});
         const message = JSON.parse(body) as { id?: number; method: string };
+        if (
+          fake.holdStreams &&
+          (message.method === "initialize" || message.method === "tools/list")
+        ) {
+          response.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            ...(message.method === "initialize" ? { "Mcp-Session-Id": "up-session-1" } : {}),
+          });
+          const result =
+            message.method === "initialize"
+              ? { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "fake" } }
+              : { tools: [{ name: "list_issues" }] };
+          response.write(
+            `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n\n`,
+          );
+          return; // never ended
+        }
         if (message.method === "initialize")
           return send(
             200,
@@ -195,20 +218,17 @@ let fake: Fake;
 let market: McpMarket;
 let folder: string;
 let allowed = true;
-let live = true;
 
 beforeEach(async () => {
   fake = await startFake();
   folder = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "amu-mcp-market-"));
   allowed = true;
-  live = true;
   market = await McpMarket.start({
     stateDir: NodePath.join(folder, "state"),
     secretsDir: NodePath.join(folder, "secrets"),
     transport: fakeTransport(fake),
     port: 0,
     hooks: {
-      sessionLive: async () => live,
       allowsOutsideActions: async () => allowed,
     },
   });
@@ -344,16 +364,6 @@ describe("MCP market proxy", () => {
       "someone-elses-session",
     );
     expect(stray.status).toBe(404);
-    live = false;
-    expect(
-      (
-        await call(server.url, server.authorizationHeader, {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "ping",
-        })
-      ).status,
-    ).toBe(401);
   });
 
   it("refuses tools/call while the thread may not act outside, but still lists tools", async () => {
@@ -475,5 +485,99 @@ describe("MCP market catalog", () => {
     expect(isAllowedMarketUrl(linear, "https://evil.example/token")).toBe(false);
     expect(isAllowedMarketUrl(linear, "https://user:pw@mcp.linear.app/")).toBe(false);
     expect(isAllowedMarketUrl(linear, "https://127.0.0.1/")).toBe(false);
+  });
+});
+
+describe("MCP market fixes from review round 1", () => {
+  it("answers every request of a refused batch, and nothing for notifications", async () => {
+    const server = await connectLinear();
+    allowed = false;
+    const response = await fetch(server.url, {
+      method: "POST",
+      headers: { Authorization: server.authorizationHeader, "Content-Type": "application/json" },
+      body: JSON.stringify([
+        { jsonrpc: "2.0", id: 1, method: "tools/list" },
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "list_issues" } },
+        { jsonrpc: "2.0", method: "notifications/progress" },
+      ]),
+    });
+    const answers = (await response.json()) as Array<{ id: number; error?: unknown }>;
+    expect(answers.map((answer) => answer.id)).toEqual([1, 2]);
+    expect(answers.every((answer) => answer.error !== undefined)).toBe(true);
+  });
+
+  it("does not send a body that finished after the server was removed and added again", async () => {
+    const server = await connectLinear();
+    const url = new URL(server.url);
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 9,
+      method: "tools/call",
+      params: { name: "list_issues" },
+    });
+    const answer = new Promise<{ status: number; text: string }>((resolve) => {
+      const request = NodeHttp.request(
+        {
+          host: url.hostname,
+          port: url.port,
+          path: url.pathname,
+          method: "POST",
+          headers: {
+            Authorization: server.authorizationHeader,
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body),
+          },
+        },
+        (response) => {
+          let text = "";
+          response.on("data", (chunk: Buffer) => (text += chunk.toString("utf8")));
+          response.on("end", () => resolve({ status: response.statusCode ?? 0, text }));
+        },
+      );
+      request.write(body.slice(0, 10));
+      void (async () => {
+        await new Promise((r) => setTimeout(r, 50));
+        await market.remove("linear");
+        await approve((await market.connect("linear"))!);
+        request.end(body.slice(10));
+      })();
+    });
+    const result = await answer;
+    expect(result.status).toBe(404);
+    expect(fake.seen.some((request) => request.body?.includes('"id":9'))).toBe(false);
+  });
+
+  it("finishes the login check when the server answers on a stream it keeps open", async () => {
+    fake.holdStreams = true;
+    const authorizationUrl = (await market.connect("linear"))!;
+    expect(await approve(authorizationUrl)).toContain("つながりました");
+  }, 15_000);
+
+  it("leaves a server out for an AI whose own settings already use the name", async () => {
+    await connectLinear();
+    const claudeHome = NodePath.join(folder, "claude-home");
+    NodeFS.mkdirSync(claudeHome);
+    NodeFS.writeFileSync(
+      NodePath.join(claudeHome, ".claude.json"),
+      JSON.stringify({
+        mcpServers: { "amu-mcp-linear": { type: "http", url: "https://example.com" } },
+      }),
+    );
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = claudeHome;
+    try {
+      await new Promise((r) => setTimeout(r, 0));
+      const { userTakenMarketNames } = await import("./conflicts.ts");
+      expect(
+        userTakenMarketNames("claudeAgent", process.env, Date.now() + 60_000).has("amu-mcp-linear"),
+      ).toBe(true);
+      const forClaude = market.serversForSession({ ...session("claude-1"), driver: "claudeAgent" });
+      const forCodex = market.serversForSession({ ...session("codex-1"), driver: "codex" });
+      expect(forClaude.map((item) => item.id)).not.toContain("linear");
+      expect(forCodex.map((item) => item.id)).toContain("linear");
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+    }
   });
 });

@@ -96,8 +96,8 @@ export class McpMarketOAuth {
   private readonly attempts = new Map<string, Attempt>();
   private readonly latestAttempt = new Map<string, number>();
   private readonly refreshing = new Map<string, Promise<AccessToken>>();
-  /** Servers that were briefly unreachable (memory only, for the card). */
-  readonly unavailable = new Set<string>();
+  /** Servers that were briefly unreachable, with the add it was seen for (memory, for the card). */
+  private readonly unreachable = new Map<string, number>();
 
   private readonly store: McpMarketStore;
   private readonly transport: MarketTransport;
@@ -157,7 +157,7 @@ export class McpMarketOAuth {
 
   /** Protected-resource metadata → authorization-server metadata. */
   private async discover(entry: McpMarketEntry): Promise<AuthServer> {
-    const probe = await postMcp(this.transport, entry, initializeBody(0), {});
+    const probe = await postMcp(this.transport, entry, initializeBody(0), {}, 0);
     const challenge = String(probe.headers["www-authenticate"] ?? "");
     const resourceMetadataUrl = /resource_metadata="([^"]+)"/u.exec(challenge)?.[1];
     const resourceUrl = new URL(entry.url);
@@ -418,9 +418,22 @@ export class McpMarketOAuth {
         tokenGeneration: (previous?.tokenGeneration ?? 0) + 1,
         authVersion: (previous?.authVersion ?? 0) + 1,
       });
-      this.unavailable.delete(attempt.serverId);
+      this.unreachable.delete(attempt.serverId);
     });
     return attempt.serverId;
+  }
+
+  /** Whether the card should say 一時的に使えません. */
+  isUnavailable(serverId: string): boolean {
+    const generation = this.unreachable.get(serverId);
+    return generation !== undefined && generation === this.currentGeneration(serverId);
+  }
+
+  /** A request to the server got through (or not); only for the add it was sent for. */
+  noteReachable(serverId: string, generation: number, reachable: boolean): void {
+    if (this.currentGeneration(serverId) !== generation) return;
+    if (reachable) this.unreachable.delete(serverId);
+    else this.unreachable.set(serverId, generation);
   }
 
   /** The server's generation while it is added. */
@@ -510,7 +523,16 @@ export class McpMarketOAuth {
     try {
       response = await this.postForm(entry, secret.tokenEndpoint, form, basic);
     } catch (cause) {
-      this.unavailable.add(serverId);
+      // Only while nothing newer was stored: a login meanwhile is not marked.
+      await this.store.withLock(serverId, () => {
+        const now = this.store.secret(serverId);
+        if (
+          this.currentGeneration(serverId) === from.generation &&
+          now?.authVersion === from.authVersion &&
+          now.tokenGeneration === from.tokenGeneration
+        )
+          this.noteReachable(serverId, from.generation, false);
+      });
       throw cause;
     }
     const body = json(response);
@@ -539,7 +561,7 @@ export class McpMarketOAuth {
           this.store.writeSecretLocked(serverId, { ...now, needsLogin: true });
           throw new McpMarketNeedsLogin();
         }
-        this.unavailable.add(serverId);
+        this.noteReachable(serverId, from.generation, false);
         throw new McpMarketUnavailable();
       }
       const expiresIn = typeof body?.expires_in === "number" ? body.expires_in : undefined;
@@ -553,7 +575,7 @@ export class McpMarketOAuth {
         tokenGeneration: now.tokenGeneration + 1,
       };
       this.store.writeSecretLocked(serverId, next);
-      this.unavailable.delete(serverId);
+      this.noteReachable(serverId, from.generation, true);
       return {
         token: accessToken,
         generation: server.generation,

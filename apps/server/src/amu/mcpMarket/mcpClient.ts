@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off - one deadline per upstream exchange.
 import type { McpMarketEntry } from "./catalog.ts";
 import {
   MARKET_USER_AGENT,
@@ -14,6 +15,7 @@ import {
 
 const PROTOCOL_VERSION = "2025-06-18";
 const MAX_RESPONSE_BYTES = 2_000_000;
+const EXCHANGE_DEADLINE_MS = 20_000;
 
 export const initializeBody = (id: number) =>
   JSON.stringify({
@@ -65,26 +67,70 @@ const resultOf = (messages: unknown[], id: number): Record<string, unknown> | un
   return undefined;
 };
 
+/**
+ * One MCP POST. A `text/event-stream` answer may stay open after the reply,
+ * so with `untilId` the body is read only until that message has arrived;
+ * the whole exchange has a deadline either way.
+ */
 export async function postMcp(
   transport: MarketTransport,
   entry: McpMarketEntry,
   body: string,
   extraHeaders: Readonly<Record<string, string>>,
+  untilId?: number,
 ): Promise<MarketResponse> {
-  const response = await transport(entry, {
-    method: "POST",
-    url: entry.url,
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      "MCP-Protocol-Version": PROTOCOL_VERSION,
-      "User-Agent": MARKET_USER_AGENT,
-      "Accept-Encoding": "identity",
-      ...extraHeaders,
-    },
-    body,
-  });
-  return await readMarketResponse(response, MAX_RESPONSE_BYTES);
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), EXCHANGE_DEADLINE_MS);
+  try {
+    const response = await transport(entry, {
+      method: "POST",
+      url: entry.url,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": PROTOCOL_VERSION,
+        "User-Agent": MARKET_USER_AGENT,
+        "Accept-Encoding": "identity",
+        ...extraHeaders,
+      },
+      body,
+      signal: deadline.signal,
+    });
+    const isStream = String(response.headers["content-type"] ?? "").includes("text/event-stream");
+    if (!isStream || untilId === undefined)
+      return await readMarketResponse(response, MAX_RESPONSE_BYTES);
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of response) {
+      chunks.push(chunk as Buffer);
+      size += (chunk as Buffer).length;
+      if (size > MAX_RESPONSE_BYTES) break;
+      const sofar: MarketResponse = {
+        status: response.statusCode ?? 0,
+        headers: response.headers,
+        body: Buffer.concat(chunks),
+      };
+      if (
+        jsonRpcMessages(sofar).some(
+          (message) =>
+            message !== null &&
+            typeof message === "object" &&
+            (message as { id?: unknown }).id === untilId,
+        )
+      ) {
+        response.destroy();
+        return sofar;
+      }
+    }
+    response.destroy();
+    return {
+      status: response.statusCode ?? 0,
+      headers: response.headers,
+      body: Buffer.concat(chunks),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -99,7 +145,7 @@ export async function checkMcpServer(
   const auth: Record<string, string> = accessToken
     ? { Authorization: `Bearer ${accessToken}` }
     : {};
-  const initialized = await postMcp(transport, entry, initializeBody(1), auth);
+  const initialized = await postMcp(transport, entry, initializeBody(1), auth, 1);
   if (initialized.status !== 200 || !resultOf(jsonRpcMessages(initialized), 1))
     throw new McpCheckError(initialized.status);
   const sessionId = initialized.headers["mcp-session-id"];
@@ -116,6 +162,7 @@ export async function checkMcpServer(
     entry,
     JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
     { ...auth, ...session },
+    2,
   );
   const result = resultOf(jsonRpcMessages(listed), 2);
   if (listed.status !== 200 || !result || !Array.isArray(result.tools))

@@ -32,8 +32,6 @@ export interface ProxyCredential {
 }
 
 export interface ProxyHooks {
-  /** Whether the provider MCP session is still owned and not released. */
-  readonly sessionLive: (providerSessionId: string) => Promise<boolean>;
   /**
    * Whether the thread may act outside right now (not plan, not read-only,
    * Claude not in its own plan mode). Unknown counts as no.
@@ -184,12 +182,9 @@ export class McpMarketProxy {
     )?.[1];
     const key = bearer ? hash(bearer) : undefined;
     const credential = key ? this.credentials.get(key) : undefined;
-    if (
-      !entry ||
-      !key ||
-      !credential ||
-      !(await this.hooks.sessionLive(credential.providerSessionId))
-    ) {
+    // A credential lives exactly as long as its provider MCP session: the
+    // session manager's release path revokes it (McpSessionRegistry).
+    if (!entry || !key || !credential) {
       request.resume();
       response
         .writeHead(401, { "Content-Type": "application/json" })
@@ -198,8 +193,7 @@ export class McpMarketProxy {
     }
     // Bound at session open, and still the same add.
     const bound = credential.servers.get(serverId);
-    const current = this.oauth.currentGeneration(serverId);
-    if (bound === undefined || current === undefined || bound !== current) {
+    if (bound === undefined || this.oauth.currentGeneration(serverId) !== bound) {
       request.resume();
       this.reply(response, undefined, `${entry.name} は Amu の設定で外されています。`, 404);
       return;
@@ -219,16 +213,22 @@ export class McpMarketProxy {
       messages &&
       messages.some(
         (message) => typeof message.method === "string" && !isRestrictedOk(message.method),
-      )
+      ) &&
+      !(await this.hooks.allowsOutsideActions(credential))
     ) {
-      if (!(await this.hooks.allowsOutsideActions(credential))) {
-        this.reply(
-          response,
-          firstId,
-          `この会話のモード（計画モードや読み取り専用）では ${entry.name} のツールは使えません。普通のモードに切り替えてください。`,
-        );
+      // Every request in the body gets its own answer; notifications get none.
+      const text = `この会話のモード（計画モードや読み取り専用）では ${entry.name} のツールは使えません。普通のモードに切り替えてください。`;
+      const answers = messages
+        .filter((message) => typeof message.method === "string" && "id" in message)
+        .map((message) => jsonRpcError(message.id, text));
+      if (answers.length === 0) {
+        response.writeHead(202).end();
         return;
       }
+      response
+        .writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" })
+        .end(JSON.stringify(isBatch(body!) ? answers : answers[0]));
+      return;
     }
     const sessionKey = `${key}:${serverId}`;
     const sessionId = request.headers["mcp-session-id"];
@@ -246,7 +246,7 @@ export class McpMarketProxy {
       this.reply(response, firstId, "同時に開いている接続が多すぎます。少し待ってください。", 429);
       return;
     }
-    await this.forward(request, response, entry, credential, sessionKey, body, firstId);
+    await this.forward({ request, response, entry, key, bound, sessionKey, body, firstId });
   }
 
   private reply(response: NodeHttp.ServerResponse, id: unknown, message: string, status = 200) {
@@ -256,15 +256,17 @@ export class McpMarketProxy {
       .end(JSON.stringify(jsonRpcError(id, message)));
   }
 
-  private async forward(
-    request: NodeHttp.IncomingMessage,
-    response: NodeHttp.ServerResponse,
-    entry: McpMarketEntry,
-    _credential: ProxyCredential,
-    sessionKey: string,
-    body: Buffer | undefined,
-    firstId: unknown,
-  ) {
+  private async forward(input: {
+    request: NodeHttp.IncomingMessage;
+    response: NodeHttp.ServerResponse;
+    entry: McpMarketEntry;
+    key: string;
+    bound: number;
+    sessionKey: string;
+    body: Buffer | undefined;
+    firstId: unknown;
+  }) {
+    const { request, response, entry, key, bound, sessionKey, body, firstId } = input;
     const headers: Record<string, string> = {
       "User-Agent": MARKET_USER_AGENT,
       "Accept-Encoding": "identity",
@@ -284,26 +286,36 @@ export class McpMarketProxy {
       streams.delete(abort);
       if (streams.size === 0) this.openStreams.delete(sessionKey);
     };
-    response.once("close", () => {
-      abort.abort();
-      done();
-    });
-    let token: AccessToken | undefined;
+    const closed = new Promise<void>((resolve) =>
+      response.once("close", () => {
+        abort.abort();
+        done();
+        resolve();
+      }),
+    );
+    // Checked again right before every send: a remove (and re-add) may have
+    // happened while the body was arriving or a refresh ran.
+    const stillBound = () =>
+      this.credentials.has(key) && this.oauth.currentGeneration(entry.id) === bound;
+    const send = (token: AccessToken | undefined) => {
+      if (!stillBound()) return Promise.reject(new McpMarketRemoved());
+      return this.transport(entry, {
+        method: request.method as "POST" | "GET" | "DELETE",
+        url: entry.url,
+        headers: { ...headers, ...(token ? { Authorization: `Bearer ${token.token}` } : {}) },
+        ...(body === undefined ? {} : { body }),
+        signal: abort.signal,
+      });
+    };
     try {
-      token = entry.auth.kind === "none" ? undefined : await this.oauth.accessToken(entry.id);
-      const send = (with_: AccessToken | undefined) =>
-        this.transport(entry, {
-          method: request.method as "POST" | "GET" | "DELETE",
-          url: entry.url,
-          headers: { ...headers, ...(with_ ? { Authorization: `Bearer ${with_.token}` } : {}) },
-          ...(body === undefined ? {} : { body }),
-          signal: abort.signal,
-        });
+      let token = entry.auth.kind === "none" ? undefined : await this.oauth.accessToken(entry.id);
+      if (token && token.generation !== bound) throw new McpMarketRemoved();
       let upstream = await send(token);
       // One retry after a plain 401: upstream did not process the request.
       if (upstream.statusCode === 401 && token) {
         upstream.resume();
         token = await this.oauth.afterUnauthorized(entry.id, token);
+        if (token.generation !== bound) throw new McpMarketRemoved();
         upstream = await send(token);
         if (upstream.statusCode === 401) {
           upstream.resume();
@@ -315,10 +327,12 @@ export class McpMarketProxy {
         upstream.resume();
         throw new McpMarketNeedsLogin();
       }
-      if ((upstream.statusCode ?? 0) >= 300 && (upstream.statusCode ?? 0) < 400) {
+      const status = upstream.statusCode ?? 502;
+      if (status >= 300 && status < 400) {
         upstream.resume();
         throw new McpMarketUnavailable();
       }
+      this.oauth.noteReachable(entry.id, bound, status < 500);
       const out: Record<string, string> = {};
       for (const name of RESPONSE_HEADERS) {
         const value = upstream.headers[name];
@@ -332,22 +346,33 @@ export class McpMarketProxy {
       }
       if (request.method === "DELETE" && typeof sessionId === "string")
         this.sessions.get(sessionKey)?.delete(sessionId);
-      response.writeHead(upstream.statusCode ?? 502, out);
+      response.writeHead(status, out);
       upstream.pipe(response);
       upstream.once("error", () => response.destroy());
-      await new Promise<void>((resolve) => response.once("close", resolve));
+      await closed;
     } catch (cause) {
       if (abort.signal.aborted) return;
-      const message =
-        cause instanceof McpMarketNeedsLogin
+      if (cause instanceof McpMarketRemoved)
+        return this.reply(response, firstId, `${entry.name} は Amu の設定で外されています。`, 404);
+      const needsLogin = cause instanceof McpMarketNeedsLogin;
+      if (!needsLogin) this.oauth.noteReachable(entry.id, bound, false);
+      this.reply(
+        response,
+        firstId,
+        needsLogin
           ? `Amu の 設定 → MCP で ${entry.name} にもう一度ログインしてください。`
-          : `${entry.name} に一時的につながりません。少ししてからもう一度試してください。`;
-      this.reply(response, firstId, message, cause instanceof McpMarketNeedsLogin ? 200 : 502);
+          : `${entry.name} に一時的につながりません。少ししてからもう一度試してください。`,
+        needsLogin ? 200 : 502,
+      );
     } finally {
       done();
     }
   }
 }
+
+class McpMarketRemoved extends Error {}
+
+const isBatch = (body: Buffer) => body.toString("utf8").trimStart().startsWith("[");
 
 const isRestrictedOk = (method: string) =>
   RESTRICTED_METHODS.has(method) || method.startsWith("notifications/");

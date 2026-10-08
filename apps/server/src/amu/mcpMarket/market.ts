@@ -1,5 +1,6 @@
 // @effect-diagnostics globalDate:off - a card's expiry is shown against the wall clock.
 import { findMcpMarketEntry, MCP_MARKET_CATALOG, mcpMarketServerName } from "./catalog.ts";
+import { userTakenMarketNames } from "./conflicts.ts";
 import { checkMcpServer } from "./mcpClient.ts";
 import { McpMarketLoginError, McpMarketOAuth } from "./oauth.ts";
 import { McpMarketProxy, type ProxyCredential, type ProxyHooks } from "./proxy.ts";
@@ -27,6 +28,8 @@ export interface McpMarketCard {
   readonly verified: boolean;
   readonly status: McpMarketStatus;
   readonly addedAt: string | null;
+  /** AIs left out because the user's own settings already use the name. */
+  readonly nameTakenIn: ReadonlyArray<"Claude" | "Codex">;
 }
 
 /** What a provider MCP session gets: one entry per added server. */
@@ -36,6 +39,13 @@ export interface McpMarketSessionServer {
   readonly url: string;
   readonly authorizationHeader: string;
 }
+
+/**
+ * Entries not yet verified (catalog `verified`) are offered only when Amu runs
+ * with AMU_MCP_MARKET_SHOW_UNVERIFIED=1 — the test copy used to verify them.
+ */
+const offered = (entry: { readonly verified: boolean }) =>
+  entry.verified || process.env.AMU_MCP_MARKET_SHOW_UNVERIFIED === "1";
 
 /** The address the proxy tries first, so login redirect addresses stay the same. */
 const PREFERRED_PORT = 47_823;
@@ -91,17 +101,17 @@ export class McpMarket {
 
   cards(): McpMarketCard[] {
     const state = this.store.readState();
-    return MCP_MARKET_CATALOG.map((entry) => {
+    return MCP_MARKET_CATALOG.filter(offered).map((entry) => {
       const server = state.servers[entry.id];
       const secret = server ? this.store.secret(entry.id) : undefined;
       const status: McpMarketStatus = !server
         ? "not_added"
-        : entry.auth.kind === "none"
-          ? "connected"
-          : !secret || secret.needsLogin
-            ? "needs_login"
-            : this.oauth.unavailable.has(entry.id)
-              ? "unavailable"
+        : this.oauth.isUnavailable(entry.id)
+          ? "unavailable"
+          : entry.auth.kind === "none"
+            ? "connected"
+            : !secret || secret.needsLogin
+              ? "needs_login"
               : secret.expiresAt !== undefined && secret.expiresAt <= Date.now()
                 ? secret.refreshToken
                   ? "refreshable"
@@ -115,6 +125,14 @@ export class McpMarket {
         verified: entry.verified,
         status,
         addedAt: server?.addedAt ?? null,
+        nameTakenIn: [
+          ...(userTakenMarketNames("claudeAgent").has(mcpMarketServerName(entry.id))
+            ? (["Claude"] as const)
+            : []),
+          ...(userTakenMarketNames("codex").has(mcpMarketServerName(entry.id))
+            ? (["Codex"] as const)
+            : []),
+        ],
       };
     });
   }
@@ -125,7 +143,8 @@ export class McpMarket {
    */
   async connect(id: string): Promise<string | null> {
     const entry = findMcpMarketEntry(id);
-    if (!entry) throw new McpMarketLoginError("このサービスは一覧にありません。");
+    if (!entry || !offered(entry))
+      throw new McpMarketLoginError("このサービスは一覧にありません。");
     if (entry.auth.kind === "oauth-dcr") return await this.oauth.start(id);
     await checkMcpServer(this.transport, entry, undefined).catch(() => {
       throw new McpMarketLoginError(`${entry.name} につながりませんでした。`);
@@ -171,10 +190,12 @@ export class McpMarket {
     session: Omit<ProxyCredential, "servers">,
   ): ReadonlyArray<McpMarketSessionServer> | undefined {
     const state = this.store.readState();
+    const taken = userTakenMarketNames(session.driver);
     const servers = new Map<string, number>();
     for (const entry of MCP_MARKET_CATALOG) {
       const server = state.servers[entry.id];
-      if (server) servers.set(entry.id, server.generation);
+      if (server && offered(entry) && !taken.has(mcpMarketServerName(entry.id)))
+        servers.set(entry.id, server.generation);
     }
     if (servers.size === 0) return undefined;
     const token = this.proxy.mint({ ...session, servers });

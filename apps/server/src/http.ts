@@ -5,6 +5,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  type OrchestrationV2AppThread,
   ThreadId,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
@@ -35,7 +36,8 @@ import { findMcpMarketEntry } from "./amu/mcpMarket/catalog.ts";
 import { McpMarket, setActiveMcpMarket } from "./amu/mcpMarket/market.ts";
 import { McpMarketLoginError } from "./amu/mcpMarket/oauth.ts";
 import { claudeLivePermissionMode, marketAllowsOutsideActions } from "./amu/mcpMarket/policy.ts";
-import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import * as RuntimePolicy from "./orchestration-v2/RuntimePolicy.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
 import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
@@ -834,11 +836,13 @@ const authenticateDesktopRoute = Effect.gen(function* () {
   };
 });
 
-export const layerMcpMarketRoute = Layer.unwrap(
+const layerMcpMarketRouteUnprovided = Layer.unwrap(
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig.ServerConfig;
-    const registry = yield* McpSessionRegistry.McpSessionRegistry;
     const threads = yield* ThreadManagement.ThreadManagementService;
+    // The same policy the provider sessions are set up with (the adapters'
+    // turn policy comes from this service too).
+    const policies = yield* RuntimePolicy.RuntimePolicyV2;
     const context = yield* Effect.context<never>();
     const run = <A, E>(effect: Effect.Effect<A, E>) =>
       Effect.runPromiseWith(context)(effect.pipe(Effect.orElseSucceed(() => undefined as A)));
@@ -848,18 +852,21 @@ export const layerMcpMarketRoute = Layer.unwrap(
           stateDir: serverConfig.stateDir,
           secretsDir: serverConfig.secretsDir,
           hooks: {
-            sessionLive: async (providerSessionId) =>
-              (await run(registry.isProviderSessionLive(providerSessionId))) === true,
             allowsOutsideActions: async (credential) => {
               const shell = await run(threads.getThreadShell(ThreadId.make(credential.threadId)));
               if (!shell || shell.deletedAt !== null) return false;
+              // The resolver reads only runtimeMode, interactionMode,
+              // worktreePath and projectId, which a shell has.
+              const policy = await run(
+                policies.resolve({
+                  thread: shell as unknown as OrchestrationV2AppThread,
+                  modelSelection: shell.modelSelection,
+                }),
+              );
+              if (!policy) return false;
               return marketAllowsOutsideActions({
                 driver: credential.driver,
-                policy: {
-                  runtimeMode: shell.runtimeMode,
-                  interactionMode: shell.interactionMode,
-                  cwd: shell.worktreePath ?? null,
-                },
+                policy,
                 claudeLivePermissionMode: claudeLivePermissionMode(credential.providerSessionId),
               });
             },
@@ -922,6 +929,10 @@ export const layerMcpMarketRoute = Layer.unwrap(
     );
     return Layer.mergeAll(read, write);
   }),
+);
+
+export const layerMcpMarketRoute = layerMcpMarketRouteUnprovided.pipe(
+  Layer.provide(RuntimePolicy.layerFromProjectStore.pipe(Layer.provide(ProjectStore.layer))),
 );
 
 export const layerAttachmentUploadRoute = HttpRouter.add(

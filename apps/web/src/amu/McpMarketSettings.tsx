@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingsRow, SettingsSection } from "../components/settings/settingsLayout";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { Switch } from "../components/ui/switch";
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
 import { resolvePrimaryEnvironmentHttpUrl } from "../environments/primary/target";
 
@@ -23,10 +22,10 @@ interface Card {
   verified: boolean;
   status: Status;
   addedAt: string | null;
+  nameTakenIn: string[];
 }
 
 const PATH = "/api/amu/mcp-market";
-const SHOW_UNVERIFIED_KEY = "amu:mcp-market:show-unverified";
 const POLL_MS = 2_000;
 const POLL_LIMIT_MS = 10 * 60_000;
 
@@ -72,13 +71,6 @@ export function McpMarketSettings() {
   const [busy, setBusy] = useState<string | null>(null);
   const [waiting, setWaiting] = useState<string | null>(null);
   const [message, setMessage] = useState<{ id: string; text: string } | null>(null);
-  const [showUnverified, setShowUnverified] = useState(() => {
-    try {
-      return window.localStorage.getItem(SHOW_UNVERIFIED_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -147,10 +139,7 @@ export function McpMarketSettings() {
     }
   };
 
-  const shown = (cards ?? []).filter(
-    (card) => card.verified || showUnverified || card.status !== "not_added",
-  );
-  const hiddenCount = (cards ?? []).filter((card) => !card.verified).length;
+  const shown = cards ?? [];
 
   return (
     <SettingsSection id="mcp-market" title="MCP">
@@ -183,6 +172,12 @@ export function McpMarketSettings() {
             description={
               <>
                 {card.description}
+                {card.nameTakenIn.length > 0 ? (
+                  <span className="mt-1 block text-warning-foreground">
+                    {card.nameTakenIn.join("・")} の設定に同じ名前（amu-mcp-{card.id}
+                    ）のサーバーがあるため、{card.nameTakenIn.join("・")} では使っていません。
+                  </span>
+                ) : null}
                 {message?.id === card.id ? (
                   <span className="mt-1 block text-foreground">{message.text}</span>
                 ) : null}
@@ -234,25 +229,6 @@ export function McpMarketSettings() {
           />
         );
       })}
-      {hiddenCount > 0 ? (
-        <SettingsRow
-          title="確認中のサービスも出す"
-          description="Amu でのログインと動作をまだ確かめ終えていないサービスです。"
-          control={
-            <Switch
-              checked={showUnverified}
-              onCheckedChange={(checked) => {
-                setShowUnverified(checked);
-                try {
-                  window.localStorage.setItem(SHOW_UNVERIFIED_KEY, checked ? "1" : "0");
-                } catch {
-                  // Shown for this visit only.
-                }
-              }}
-            />
-          }
-        />
-      ) : null}
     </SettingsSection>
   );
 }

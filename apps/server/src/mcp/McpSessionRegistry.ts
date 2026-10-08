@@ -40,11 +40,6 @@ export interface McpSessionRegistryShape {
    * credential even when it goes a long time without touching an MCP tool.
    */
   readonly touch: (threadId: ThreadId) => Effect.Effect<void>;
-  /**
-   * Whether a provider session still holds a live credential. Unlike
-   * `resolve`, this is no sign of life (Amu's MCP market proxy asks it).
-   */
-  readonly isProviderSessionLive: (providerSessionId: string) => Effect.Effect<boolean>;
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
@@ -212,15 +207,6 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     issue,
     resolve,
     touch,
-    isProviderSessionLive: Effect.fn("McpSessionRegistry.isProviderSessionLive")(
-      function* (providerSessionId) {
-        const timestamp = yield* currentTimeMillis;
-        const { records } = yield* SynchronizedRef.get(state);
-        return Array.from(pruneDead(records, timestamp).values()).some(
-          (record) => record.scope.thread.providerSessionId === providerSessionId,
-        );
-      },
-    ),
     // Amu: the MCP market's credentials live and end with these.
     revokeProviderSession: Effect.fn("McpSessionRegistry.revokeProviderSession")(
       function* (providerSessionId) {
