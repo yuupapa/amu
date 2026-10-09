@@ -147,13 +147,24 @@ export class CreatorService extends Context.Service<
       bindingId: CreatorBindingId,
       tabId: string,
     ) => Effect.Effect<CreatorBinding, CreatorError>;
+    /**
+     * The same rule as `attachTab`, synchronously and without reading the
+     * setting, for `PreviewManager.open`'s `beforePublish` hook: the tab is
+     * bound before its `opened` event reaches any subscriber. `false` when the
+     * binding is gone or already holds another tab.
+     */
+    readonly attachTabNow: (bindingId: CreatorBindingId, tabId: string) => boolean;
     readonly revoke: (bindingId: CreatorBindingId) => Effect.Effect<void>;
     readonly revokeAll: Effect.Effect<void>;
     /** The live binding, regardless of epoch. */
     readonly requireBinding: (
       bindingId: CreatorBindingId,
     ) => Effect.Effect<CreatorBinding, CreatorError>;
-    /** For MCP: the newest live binding of `projectId` whose destination is `threadId`. */
+    /**
+     * For MCP: the newest live binding of `projectId` whose destination is
+     * `threadId`. Like every binding check it needs the setting on and the
+     * desktop app.
+     */
     readonly requireBindingForThread: (
       projectId: CreatorProjectId,
       threadId: ThreadId,
@@ -651,10 +662,22 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const attachTabNow: CreatorService["Service"]["attachTabNow"] = (bindingId, tabId) => {
+    const binding = bindings.get(bindingId);
+    if (binding === undefined) return false;
+    if (binding.tabId === tabId) return true;
+    if (binding.tabId !== null) return false;
+    bindings.set(bindingId, { ...binding, tabId });
+    return true;
+  };
+
   const requireBindingForThread: CreatorService["Service"]["requireBindingForThread"] = Effect.fn(
     "CreatorService.requireBindingForThread",
   )(function* (projectId, threadId) {
     yield* ensureEnabled;
+    if (config.mode !== "desktop" || !channel.available) {
+      return yield* Effect.fail(operationError("unavailable", "desktop_only"));
+    }
     const matches = [...bindings.values()].filter(
       (binding) => binding.projectId === projectId && binding.destination.threadId === threadId,
     );
@@ -959,6 +982,7 @@ const make = Effect.gen(function* () {
   return CreatorService.of({
     bind,
     attachTab,
+    attachTabNow,
     revoke,
     revokeAll,
     requireBinding,

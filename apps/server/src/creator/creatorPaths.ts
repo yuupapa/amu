@@ -12,6 +12,35 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
+/**
+ * The real path of `target` when it lies inside the real path of `workspace`,
+ * else `null`. A relative `target` is taken from `workspace`. Both sides are
+ * `realpath`ed first, so `..`, a link inside the workspace pointing out, and a
+ * workspace reached through a link (macOS `/tmp`, `/var`) are all judged by
+ * where they really are. A path that does not exist is refused.
+ *
+ * `WorkspaceFileSystem.resolveReadTarget` is not used here: it does not check
+ * that an absolute path stays inside the workspace.
+ */
+export const realPathInside = async (workspace: string, target: string): Promise<string | null> => {
+  let realWorkspace: string;
+  let realTarget: string;
+  try {
+    realWorkspace = await NodeFSP.realpath(workspace);
+    realTarget = await NodeFSP.realpath(NodePath.resolve(realWorkspace, target));
+  } catch {
+    return null;
+  }
+  const relative = NodePath.relative(realWorkspace, realTarget);
+  if (relative === "") return realTarget;
+  const escapes =
+    relative === ".." || relative.startsWith(`..${NodePath.sep}`) || NodePath.isAbsolute(relative);
+  return escapes ? null : realTarget;
+};
+
+export const isInsideRealRoot = async (workspace: string, target: string): Promise<boolean> =>
+  (await realPathInside(workspace, target)) !== null;
+
 export interface LinkScanOptions {
   readonly maxEntries?: number;
   readonly timeoutMs?: number;

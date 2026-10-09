@@ -100,7 +100,6 @@ import {
   type PullRequestRef,
   WS_METHODS,
   WsRpcGroup,
-  CreatorOperationError,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import {
@@ -178,6 +177,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as CreatorOpen from "./creator/CreatorOpen.ts";
 import * as CreatorSender from "./creator/CreatorSender.ts";
 import * as CreatorService from "./creator/CreatorService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
@@ -252,11 +252,6 @@ import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
-// Opening a Creator tab is wired by a later task.
-const creatorNotImplemented = new CreatorOperationError({
-  code: "not_implemented",
-  detail: "Amu Creator is not implemented on this server yet.",
-});
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
 
 const resolveDiscoveryForConfig = <A, E, R>(
@@ -1195,6 +1190,7 @@ const layerWsRpc = (
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
   creator: CreatorService.CreatorService["Service"],
   creatorSender: CreatorSender.CreatorSender["Service"],
+  creatorOpen: CreatorOpen.CreatorOpen["Service"],
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2899,7 +2895,9 @@ const layerWsRpc = (
         [WS_METHODS.previewClearProfile]: (input) => serverBrowser.clearProfile(input.profileId),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
-        [WS_METHODS.creatorOpenByUser]: (_input) => Effect.fail(creatorNotImplemented),
+        // The user's own pick (desktop folder or file picker), so outside the workspace is fine.
+        [WS_METHODS.creatorOpenByUser]: (input) =>
+          creatorOpen.open({ path: input.path, threadId: input.threadId, openedBy: "user" }),
         [WS_METHODS.creatorSetEpoch]: (input) => creator.setEpoch(input).pipe(Effect.asVoid),
         [WS_METHODS.creatorSaveDraft]: (input) => creator.saveDraft(input),
         [WS_METHODS.creatorUpdateComment]: (input) => creator.updateComment(input),
@@ -3150,6 +3148,7 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const creator = yield* CreatorService.CreatorService;
     const creatorSender = yield* CreatorSender.CreatorSender;
+    const creatorOpen = yield* CreatorOpen.CreatorOpen;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
@@ -3208,6 +3207,7 @@ export const layer = Layer.unwrap(
               serverBrowser,
               creator,
               creatorSender,
+              creatorOpen,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

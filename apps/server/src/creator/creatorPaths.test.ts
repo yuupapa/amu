@@ -5,7 +5,7 @@ import * as NodePath from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { scanForOutwardLinks } from "./creatorPaths.ts";
+import { isInsideRealRoot, realPathInside, scanForOutwardLinks } from "./creatorPaths.ts";
 
 let dirs: string[] = [];
 const temp = async () => {
@@ -173,5 +173,71 @@ describe("scanForOutwardLinks", () => {
       ok: false,
       reason: "not_directory",
     });
+  });
+});
+
+describe("isInsideRealRoot", () => {
+  /** `<base>/work` (the workspace) with `project/`, plus `<base>/outside/` next to it. */
+  const workspace = async () => {
+    const base = await temp();
+    const work = NodePath.join(base, "work");
+    await NodeFSP.mkdir(NodePath.join(work, "project"), { recursive: true });
+    await NodeFSP.mkdir(NodePath.join(base, "outside"));
+    return { base, work };
+  };
+
+  it("allows a folder inside the workspace, by relative or absolute path", async () => {
+    const { work } = await workspace();
+    expect(await isInsideRealRoot(work, "project")).toBe(true);
+    expect(await isInsideRealRoot(work, NodePath.join(work, "project"))).toBe(true);
+    expect(await realPathInside(work, "project")).toBe(NodePath.join(work, "project"));
+  });
+
+  it("allows the workspace itself", async () => {
+    const { work } = await workspace();
+    expect(await isInsideRealRoot(work, ".")).toBe(true);
+    expect(await isInsideRealRoot(work, work)).toBe(true);
+  });
+
+  it("refuses an absolute path outside the workspace", async () => {
+    const { base, work } = await workspace();
+    expect(await isInsideRealRoot(work, NodePath.join(base, "outside"))).toBe(false);
+    expect(await isInsideRealRoot(work, "/")).toBe(false);
+  });
+
+  it("refuses a relative path that climbs out", async () => {
+    const { work } = await workspace();
+    expect(await isInsideRealRoot(work, "project/../../outside")).toBe(false);
+    expect(await isInsideRealRoot(work, "..")).toBe(false);
+  });
+
+  it("refuses a sibling whose name only starts with the workspace's", async () => {
+    const { base, work } = await workspace();
+    await NodeFSP.mkdir(NodePath.join(base, "work-evil"));
+    expect(await isInsideRealRoot(work, NodePath.join(base, "work-evil"))).toBe(false);
+    expect(await isInsideRealRoot(work, "../work-evil")).toBe(false);
+  });
+
+  it("refuses a link inside the workspace that points outside", async () => {
+    const { base, work } = await workspace();
+    await NodeFSP.symlink(NodePath.join(base, "outside"), NodePath.join(work, "escape"));
+    expect(await isInsideRealRoot(work, "escape")).toBe(false);
+    expect(await isInsideRealRoot(work, NodePath.join(work, "escape"))).toBe(false);
+  });
+
+  it("compares real paths when the workspace itself is reached through a link", async () => {
+    const { base, work } = await workspace();
+    const alias = NodePath.join(base, "alias");
+    await NodeFSP.symlink(work, alias);
+    expect(await isInsideRealRoot(alias, NodePath.join(work, "project"))).toBe(true);
+    expect(await isInsideRealRoot(work, NodePath.join(alias, "project"))).toBe(true);
+    expect(await realPathInside(alias, "project")).toBe(NodePath.join(work, "project"));
+    expect(await isInsideRealRoot(alias, NodePath.join(base, "outside"))).toBe(false);
+  });
+
+  it("refuses a path that does not exist", async () => {
+    const { work } = await workspace();
+    expect(await isInsideRealRoot(work, "missing")).toBe(false);
+    expect(await isInsideRealRoot(NodePath.join(work, "missing"), ".")).toBe(false);
   });
 });

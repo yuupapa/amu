@@ -59,6 +59,8 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as CreatorOpen from "./creator/CreatorOpen.ts";
+import * as CreatorPreviewSupervisor from "./creator/CreatorPreviewSupervisor.ts";
 import * as CreatorSender from "./creator/CreatorSender.ts";
 import * as CreatorService from "./creator/CreatorService.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -694,11 +696,15 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerPullRequestService),
   // The stream route and the WebSocket RPCs share one browser. Amu Creator binds only
   // when that desktop channel is available, so it shares the same channel instance.
-  // The sender runs on the same CreatorService instance as the WebSocket handlers.
+  // The sender and the opener run on the same CreatorService instance as the
+  // WebSocket handlers and the MCP tools. The opener owns the HyperFrames previews.
   Layer.provide(
     Layer.mergeAll(
       ServerBrowser.layer,
-      CreatorSender.layer.pipe(Layer.provideMerge(CreatorService.layer)),
+      Layer.mergeAll(
+        CreatorSender.layer,
+        CreatorOpen.layer.pipe(Layer.provide(CreatorPreviewSupervisor.layer)),
+      ).pipe(Layer.provideMerge(CreatorService.layer)),
     ).pipe(Layer.provide(DesktopBrowserChannel.layer)),
   ),
   // Server browser tabs and HTML render previews install and run the same headless browser.
