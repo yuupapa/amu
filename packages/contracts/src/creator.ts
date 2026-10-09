@@ -256,6 +256,8 @@ export const CreatorProposalHistory = Schema.Struct({
   commandId: Schema.NullOr(CommandId),
   messageId: Schema.NullOr(MessageId),
   outcome: CreatorProposalOutcome,
+  /** Why a proposal was rejected (kept short). */
+  reason: Schema.optional(NullableField),
   finishedAt: IsoDateTime,
 });
 export type CreatorProposalHistory = typeof CreatorProposalHistory.Type;
