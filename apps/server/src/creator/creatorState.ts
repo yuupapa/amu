@@ -197,7 +197,7 @@ const findProposal = (state: CreatorStoreFile, id: CreatorProposalId) =>
   state.proposals.find((proposal) => proposal.id === id);
 
 /**
- * Shared edit path. Refuses while sending; a reserved comment voids its proposal
+ * Shared edit path (`gated` edits share the "draft" rate window with createDraft). Refuses while sending; a reserved comment voids its proposal
  * first; `sent` and later keep their status (the UI compares `sentVersion`).
  */
 const editComment = (
@@ -205,10 +205,15 @@ const editComment = (
   id: CreatorCommentId,
   ctx: CreatorStateContext,
   change: (comment: CreatorComment) => CreatorComment,
+  options: { readonly gated: boolean } = { gated: false },
 ): StateResult<CreatorComment> => {
   const current = findComment(state, id);
   if (current === undefined) return fail("not_found");
   if (current.status === "sending") return fail("sending");
+  // Last check, so a refused call never uses a slot of the shared draft window.
+  if (options.gated && !ctx.gate.allow(ctx.rateKey, "draft", ctx.now.getTime())) {
+    return fail("rate_limited");
+  }
   const voided = releaseReservedComment(state, current, ctx);
   const base = findComment(voided, id) ?? current;
   const next: CreatorComment = { ...change(base), revision: base.revision + 1 };
@@ -304,7 +309,9 @@ export const updateComment = (
   ctx: CreatorStateContext,
 ): StateResult<CreatorComment> => {
   if (!validComment(input.comment)) return fail("invalid");
-  return editComment(state, input.id, ctx, (comment) => ({ ...comment, comment: input.comment }));
+  return editComment(state, input.id, ctx, (comment) => ({ ...comment, comment: input.comment }), {
+    gated: true,
+  });
 };
 
 export const setPlace = (
@@ -313,7 +320,9 @@ export const setPlace = (
   ctx: CreatorStateContext,
 ): StateResult<CreatorComment> => {
   if (input.place !== null && !isPlace(input.place)) return fail("invalid");
-  return editComment(state, input.id, ctx, (comment) => ({ ...comment, place: input.place }));
+  return editComment(state, input.id, ctx, (comment) => ({ ...comment, place: input.place }), {
+    gated: true,
+  });
 };
 
 /** Accepts the shot only if it was taken for the comment's current revision. */

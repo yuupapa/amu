@@ -188,6 +188,47 @@ describe("creatorState", () => {
     expect(setPlace(s, { id: s.comments[0]!.id, place: badPlace }, ctx(2_000)).ok).toBe(false);
   });
 
+  it("shares one draft window across create, updateComment and setPlace", () => {
+    const gate = makeRateGate();
+    const created = ok(
+      createDraft(emptyCreatorState(), { timeSec: 1, projectRevision: "r1" }, ctx(0, gate)),
+    );
+    const id = created.value.id;
+    const second = ok(updateComment(created.state, { id, comment: "a" }, ctx(100, gate)));
+    expect(updateComment(second.state, { id, comment: "b" }, ctx(200, gate))).toMatchObject({
+      ok: false,
+      reason: "rate_limited",
+    });
+    const place: CreatorPlace = {
+      x: 0.5,
+      y: 0.5,
+      compositionFile: null,
+      elementSelector: null,
+      elementLabel: null,
+    };
+    expect(setPlace(second.state, { id, place }, ctx(300, gate))).toMatchObject({
+      ok: false,
+      reason: "rate_limited",
+    });
+    // A refused call used no slot: the window frees at 1,000 ms (the create at 0), then one slot is left.
+    expect(setPlace(second.state, { id, place }, ctx(1_000, gate)).ok).toBe(true);
+    // Refusals by validation, not_found or sending do not consume a slot either.
+    const fresh = makeRateGate();
+    expect(updateComment(second.state, { id, comment: "あ".repeat(2_001) }, ctx(0, fresh)).ok).toBe(
+      false,
+    );
+    expect(
+      updateComment(
+        second.state,
+        { id: created.value.id.replace(/.$/, "f") as typeof id, comment: "x" },
+        ctx(0, fresh),
+      ).ok,
+    ).toBe(false);
+    expect(fresh.allow("proj", "draft", 0)).toBe(true);
+    expect(fresh.allow("proj", "draft", 0)).toBe(true);
+    expect(fresh.allow("proj", "draft", 0)).toBe(false);
+  });
+
   it("refuses the 201st comment", () => {
     let s = emptyCreatorState();
     for (let i = 0; i < CREATOR_LIMITS.maxComments; i += 1) {
