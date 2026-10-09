@@ -26,6 +26,7 @@ import * as Stream from "effect/Stream";
 import * as Ndjson from "effect/encoding/Ndjson";
 
 import * as ServerConfig from "../config.ts";
+import { openFdReadStream } from "../fdReadStream.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { subscribeBeforeSnapshotWithoutMutex } from "../utils/subscribeBeforeSnapshot.ts";
 
@@ -465,11 +466,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
     const fd = config.desktopTelemetryFd;
     const readable = yield* Effect.acquireRelease(
       Effect.try({
-        try: () =>
-          NodeFS.createReadStream("", {
-            fd,
-            autoClose: true,
-          }),
+        try: () => openFdReadStream(fd),
         catch: (cause) => new DesktopTelemetryStreamFailed({ fd, cause }),
       }),
       (stream) =>

@@ -8,6 +8,9 @@
  * the real CLI in ./binCli.ts.
  */
 import { isEntrypoint } from "./entrypoint.ts";
+import { installSocketTypeOfServiceGuard } from "./socketTypeOfServiceGuard.ts";
+
+installSocketTypeOfServiceGuard();
 
 if (
   isEntrypoint({
