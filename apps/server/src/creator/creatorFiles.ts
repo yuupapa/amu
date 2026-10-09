@@ -111,7 +111,7 @@ const unsafe = (message: string, cause?: unknown) =>
   new CreatorFileError("unsafe_path", message, cause === undefined ? undefined : { cause });
 
 /** Re-reads one directory with `lstat` and requires the same dev/ino and no symlink. */
-const verifyDir = async (stamp: DirStamp): Promise<void> => {
+export const verifyDir = async (stamp: DirStamp): Promise<void> => {
   let stats;
   try {
     stats = await NodeFSP.lstat(stamp.path, { bigint: true });
@@ -138,7 +138,7 @@ const verifyShotDirs = async (store: ProjectStore) => {
 };
 
 /** Creates the directory if needed (0o700), then records it. Refuses a symlink or non-directory. */
-const ensureDir = async (path: string): Promise<DirStamp> => {
+export const ensureDir = async (path: string): Promise<DirStamp> => {
   try {
     await NodeFSP.mkdir(path, { mode: 0o700 });
   } catch (cause) {

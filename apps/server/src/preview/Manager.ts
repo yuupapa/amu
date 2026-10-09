@@ -10,6 +10,7 @@
  * fail an in-progress `navigate()`).
  */
 import {
+  type CreatorTabInfo,
   type PreviewCloseInput,
   type PreviewEvent,
   type PreviewError,
@@ -48,6 +49,11 @@ export class PreviewManager extends Context.Service<
     readonly open: (
       input: PreviewOpenInput & {
         readonly automationOwner?: string;
+        /**
+         * Server-internal: marks an Amu Creator tab. Not part of `PreviewOpenInput`, so the
+         * public `preview.open` RPC cannot set it.
+         */
+        readonly creator?: CreatorTabInfo;
         /** Runs before the `opened` event publishes, so subscribers find state keyed by the tab. */
         readonly beforePublish?: (snapshot: PreviewSessionSnapshot) => void;
       },
@@ -225,6 +231,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           ? { automationOwner: input.automationOwner }
           : {}),
         ...(input.reveal === undefined ? {} : { reveal: input.reveal }),
+        ...(input.creator === undefined ? {} : { creator: input.creator }),
         updatedAt,
       };
       yield* SynchronizedRef.modifyEffect(stateRef, (state) =>
