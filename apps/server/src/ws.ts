@@ -178,6 +178,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as CreatorSender from "./creator/CreatorSender.ts";
 import * as CreatorService from "./creator/CreatorService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -251,7 +252,7 @@ import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
-// Opening a Creator tab and sending a proposal are wired by later tasks.
+// Opening a Creator tab is wired by a later task.
 const creatorNotImplemented = new CreatorOperationError({
   code: "not_implemented",
   detail: "Amu Creator is not implemented on this server yet.",
@@ -1193,6 +1194,7 @@ const layerWsRpc = (
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
   creator: CreatorService.CreatorService["Service"],
+  creatorSender: CreatorSender.CreatorSender["Service"],
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2906,12 +2908,18 @@ const layerWsRpc = (
         [WS_METHODS.creatorDeleteComment]: (input) => creator.deleteComment(input),
         [WS_METHODS.creatorPropose]: (input) => creator.propose(input),
         [WS_METHODS.creatorCancelProposal]: (input) => creator.cancelProposal(input),
-        [WS_METHODS.creatorConfirmSend]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorHaltSend]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorConfirmSend]: (input) => creatorSender.confirmSend(input),
+        [WS_METHODS.creatorHaltSend]: (input) => creatorSender.haltSend(input),
         [WS_METHODS.creatorConfirmByUser]: (input) => creator.confirmByUser(input),
         [WS_METHODS.creatorReadShot]: (input) => creator.readShot(input),
         [WS_METHODS.creatorList]: (input) => creator.list(input),
-        [WS_METHODS.creatorSubscribe]: (input) => creator.changes(input),
+        // Starting a subscription also settles sends left open (in the background).
+        [WS_METHODS.creatorSubscribe]: (input) =>
+          Stream.unwrap(
+            creatorSender
+              .reconcileInBackground(input.bindingId)
+              .pipe(Effect.as(creator.changes(input))),
+          ),
         [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
         [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
         [WS_METHODS.deviceList]: (input) =>
@@ -3141,6 +3149,7 @@ export const layer = Layer.unwrap(
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const creator = yield* CreatorService.CreatorService;
+    const creatorSender = yield* CreatorSender.CreatorSender;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
@@ -3198,6 +3207,7 @@ export const layer = Layer.unwrap(
               previewAutomationBroker,
               serverBrowser,
               creator,
+              creatorSender,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

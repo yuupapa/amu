@@ -28,6 +28,7 @@ import {
   emptyCreatorState,
   finishSend,
   markAttempt,
+  noteSendReason,
   propose,
   releaseHalted,
   replaceDraft,
@@ -430,6 +431,25 @@ describe("creatorState", () => {
     );
     s = ok(finishSend(s, { proposalId: p.value.id, outcome: "accepted" }, ctx(3_400))).state;
     expect(s.comments[0]!.status).toBe("sent");
+  });
+
+  it("noteSendReason changes only the reason of a started send", () => {
+    const d = draft();
+    const p = prop(d.state, [d.value.id], 3_000);
+    expect(noteSendReason(p.state, { proposalId: p.value.id, reason: "x" })).toMatchObject({
+      ok: false,
+      reason: "not_sending",
+    });
+    const halted = ok(
+      requestHalt(ok(send(p.state, p.value, 3_100)).state, { proposalId: p.value.id }),
+    ).state;
+    const noted = ok(noteSendReason(halted, { proposalId: p.value.id, reason: "unverified" }));
+    expect(noted.state.proposals[0]!.send).toMatchObject({
+      state: "halted",
+      reason: "unverified",
+      haltRequested: true,
+    });
+    expect(noted.state.revision).toBe(halted.revision + 1);
   });
 
   it("releaseHalted only works from halted or stuck", () => {

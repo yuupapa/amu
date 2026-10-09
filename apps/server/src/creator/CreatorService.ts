@@ -32,6 +32,7 @@ import {
   type CreatorOperationErrorCode,
   type CreatorProjectId,
   type CreatorProposal,
+  type CreatorProposalId,
   type CreatorProposeInput,
   type CreatorReadShotInput,
   type CreatorReadShotResult,
@@ -188,6 +189,15 @@ export class CreatorService extends Context.Service<
     readonly readShot: (
       input: CreatorReadShotInput,
     ) => Effect.Effect<CreatorReadShotResult, CreatorError>;
+    /**
+     * For the sender: the bytes of a shot one of the proposal's items pins
+     * (sha256-checked). Does not check the setting or a binding.
+     */
+    readonly readProposalShot: (
+      projectId: CreatorProjectId,
+      proposalId: CreatorProposalId,
+      ref: CreatorShotRef,
+    ) => Effect.Effect<Uint8Array, CreatorError>;
     readonly list: (input: CreatorBindingRef) => Effect.Effect<CreatorSnapshot, CreatorError>;
     /** The current snapshot, then one per change. Fails when the binding is revoked. */
     readonly changes: (input: CreatorBindingRef) => Stream.Stream<CreatorSnapshot, CreatorError>;
@@ -245,6 +255,9 @@ const operationError = (code: CreatorOperationErrorCode, detail: string) =>
   new CreatorOperationError({ code, detail });
 
 const stateError = (reason: CreatorStateFailure) => operationError(STATE_CODES[reason], reason);
+
+/** The wire error for a refused state transition, as every Creator operation reports it. */
+export const creatorStateError = stateError;
 
 const fileErrorCode = (cause: unknown): CreatorOperationErrorCode => {
   if (!(cause instanceof CreatorFileError)) return "unavailable";
@@ -871,6 +884,29 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const readProposalShot: CreatorService["Service"]["readProposalShot"] = (
+    projectId,
+    proposalId,
+    ref,
+  ) =>
+    surface(
+      locked(projectId, Effect.void, (loaded) =>
+        Effect.gen(function* () {
+          const proposal = loaded.state.proposals.find((entry) => entry.id === proposalId);
+          const pinned = proposal?.items.some(
+            (item) =>
+              item.shot !== null &&
+              item.shot.commentId === ref.commentId &&
+              item.shot.revision === ref.revision &&
+              item.shot.sha256 === ref.sha256,
+          );
+          if (pinned !== true) return yield* Effect.fail(operationError("not_found", "shot"));
+          const bytes = yield* fileOp("read_shot", () => readShotFile(loaded.store, ref));
+          return new Uint8Array(bytes);
+        }),
+      ),
+    );
+
   const currentState = (projectId: CreatorProjectId, guard: Effect.Effect<unknown, CreatorError>) =>
     surface(locked(projectId, guard, (loaded) => Effect.succeed(loaded.state)));
 
@@ -938,6 +974,7 @@ const make = Effect.gen(function* () {
     confirmByUser,
     resolve,
     readShot,
+    readProposalShot,
     list,
     changes,
     withProjectState,

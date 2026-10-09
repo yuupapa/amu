@@ -613,6 +613,14 @@ export const markAttempt = (
     };
   });
 
+/** Records why a started send is still open (for example, its outcome could not be verified). */
+export const noteSendReason = (
+  state: CreatorStoreFile,
+  input: { readonly proposalId: CreatorProposalId; readonly reason: string | null },
+  _ctx?: CreatorStateContext,
+): StateResult<CreatorProposal> =>
+  updateSend(state, input.proposalId, (send) => ({ ...send, reason: input.reason }));
+
 /** The user asked to stop resending. Reservation and pinned content stay. Idempotent. */
 export const requestHalt = (
   state: CreatorStoreFile,
