@@ -102,8 +102,19 @@ const harness = (options: HarnessOptions = {}) =>
       amuCreatorEnabled: options.enabled ?? true,
     });
     const changes = yield* PubSub.unbounded<ServerSettings>();
+    // Every authority check reads the settings: once before the project lock and
+    // once inside it. A hook runs right after a given read returned its value, so a
+    // test can change authority exactly between the two checks.
+    let reads = 0;
+    const readHooks: Array<{ readonly at: number; readonly run: Effect.Effect<void> }> = [];
     const settingsLayer = Layer.mock(ServerSettingsService)({
-      getSettings: Ref.get(settingsRef),
+      getSettings: Effect.gen(function* () {
+        const current = yield* Ref.get(settingsRef);
+        reads += 1;
+        const due = readHooks.filter((hook) => hook.at === reads);
+        for (const hook of due) yield* hook.run;
+        return current;
+      }),
       streamChanges: Stream.fromPubSub(changes),
       subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
     });
@@ -141,7 +152,12 @@ const harness = (options: HarnessOptions = {}) =>
         yield* service.setEpoch({ bindingId: binding.bindingId, epoch: 1, generation: 0 });
         return { bindingId: binding.bindingId, epoch: 1 };
       });
-    return { service, config, setEnabled, projectDir, shotsDir, listShots, open };
+    /** Runs `run` right after the `count`-th settings read from now. */
+    const onRead = (count: number, run: Effect.Effect<void>) =>
+      Effect.sync(() => {
+        readHooks.push({ at: reads + count, run });
+      });
+    return { service, config, setEnabled, projectDir, shotsDir, listShots, open, onRead };
   });
 
 const draft = (
@@ -728,6 +744,83 @@ it.layer(NodeServices.layer)("CreatorService", (it) => {
       expect(confirmed.status).toBe("confirmed");
       yield* service.deleteComment({ ...binding, commentId: sentId });
       expect((yield* service.list(binding)).comments).toHaveLength(0);
+    }).pipe(Effect.scoped),
+  );
+  it.effect("an interrupted write finishes before the project lock is released", () =>
+    Effect.gen(function* () {
+      const { service, open, projectDir } = yield* harness();
+      const binding = yield* open();
+      yield* draft(service, binding, "one");
+      const inside = yield* Deferred.make<void>();
+      const added = baseComment({ number: 2, comment: "two" });
+      // The step returns at once and the commit starts writing comments.json;
+      // the interrupt arrives while that write is in progress.
+      const writing = yield* service
+        .withProjectState(PROJECT_A, (state) =>
+          Deferred.succeed(inside, undefined).pipe(
+            Effect.as({
+              next: { ...state, nextNumber: 3, comments: [...state.comments, added] },
+              value: null,
+            }),
+          ),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(inside);
+      yield* Fiber.interrupt(writing);
+      const snapshot = yield* service.list(binding);
+      expect(snapshot.revision).toBe(2);
+      expect(snapshot.comments.map((comment) => comment.comment)).toEqual(["one", "two"]);
+      // The next save builds on the interrupted one, and disk matches memory.
+      yield* draft(service, binding, "three");
+      const onDisk = yield* Effect.promise(() =>
+        NodeFSP.readFile(NodePath.join(projectDir(PROJECT_A), "comments.json"), "utf8"),
+      );
+      const stored = JSON.parse(onDisk) as CreatorStoreFile;
+      expect(stored.revision).toBe(3);
+      expect(stored.comments.map((comment) => comment.comment)).toEqual(["one", "two", "three"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a call admitted before a revoke cannot commit after it", () =>
+    Effect.gen(function* () {
+      const { service, open, onRead } = yield* harness();
+      const binding = yield* open();
+      // Read 1 admits the save; the revoke lands before its check inside the lock.
+      yield* onRead(2, service.revoke(binding.bindingId));
+      expect(yield* Effect.flip(draft(service, binding))).toMatchObject(opError("unauthorized"));
+      const reopened = yield* open();
+      expect((yield* service.list(reopened)).comments).toHaveLength(0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a call admitted before the setting goes off cannot commit after it", () =>
+    Effect.gen(function* () {
+      const { service, open, onRead, setEnabled } = yield* harness();
+      const binding = yield* open();
+      // Read 1 (before the lock) still sees the setting on; every later read sees it off.
+      yield* onRead(1, setEnabled(false));
+      const refused = yield* Effect.flip(draft(service, binding));
+      expect(refused._tag).toBe("CreatorDisabledError");
+      yield* setEnabled(true);
+      const reopened = yield* open();
+      expect((yield* service.list(reopened)).comments).toHaveLength(0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("the orphan sweep goes on past an entry it cannot remove", () =>
+    Effect.gen(function* () {
+      const { service, open, config, listShots } = yield* harness();
+      const store = yield* seedStore(config.stateDir, PROJECT_A, emptyCreatorState());
+      const strays = Array.from({ length: 9 }, () => `${NodeCrypto.randomUUID()}-r1.png`);
+      const folder = `${NodeCrypto.randomUUID()}-r1.png`;
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(NodePath.join(store.shots.path, folder));
+        for (const name of strays)
+          await NodeFSP.writeFile(NodePath.join(store.shots.path, name), "x");
+      });
+      const binding = yield* open();
+      yield* service.list(binding);
+      expect(yield* listShots(PROJECT_A)).toEqual([folder]);
     }).pipe(Effect.scoped),
   );
 });

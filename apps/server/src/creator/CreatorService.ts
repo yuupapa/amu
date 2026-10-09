@@ -194,6 +194,7 @@ export class CreatorService extends Context.Service<
     /**
      * Runs `f` under the project's lock with the current state. A non-null `next`
      * is size-checked, written and published. Does not check the setting.
+     * `f` runs uninterruptibly while holding the lock: keep it to state work, never a send.
      */
     readonly withProjectState: <A, E, R>(
       projectId: CreatorProjectId,
@@ -476,12 +477,14 @@ const make = Effect.gen(function* () {
   const sweepOrphans = (loaded: LoadedProject) =>
     fileOp("sweep_shots", async () => {
       const referenced = referencedShots(loaded.state);
+      const failed: unknown[] = [];
       for (const name of await listShotFiles(loaded.store)) {
         const parsed = parseShotFileName(name);
-        if (parsed !== null && !referenced.has(shotKey(parsed))) {
-          await removeShot(loaded.store, parsed);
-        }
+        if (parsed === null || referenced.has(shotKey(parsed))) continue;
+        // One odd entry (a folder, a symlink) must not stop the rest of the sweep.
+        await removeShot(loaded.store, parsed).catch((cause: unknown) => failed.push(cause));
       }
+      if (failed.length > 0) throw new AggregateError(failed, "some shot files were not removed");
     }).pipe(
       Effect.catchCause((cause) => Effect.logWarning("Amu Creator shot sweep failed", { cause })),
     );
@@ -501,14 +504,27 @@ const make = Effect.gen(function* () {
           ),
         );
 
-  /** Runs `f` holding the project's lock with its loaded state. */
+  /**
+   * Runs `guard`, then `f`, holding the project's lock with its loaded state.
+   * Waiting for the lock can be interrupted; the section itself cannot, so a
+   * cancelled request never releases the lock while a write is still running
+   * (a late rename would roll `comments.json` back). `guard` re-checks the
+   * caller's authority inside the lock, so a revoke or a setting flip that
+   * lands while the call waits is honoured.
+   */
   const locked = <A, E, R>(
     projectId: CreatorProjectId,
+    guard: Effect.Effect<unknown, CreatorError>,
     f: (loaded: LoadedProject, entry: ProjectEntry) => Effect.Effect<A, E, R>,
   ) => {
     const entry = entryOf(projectId);
     return entry.lock.withPermits(1)(
-      load(projectId, entry).pipe(Effect.flatMap((loaded) => f(loaded, entry))),
+      Effect.uninterruptible(
+        guard.pipe(
+          Effect.andThen(load(projectId, entry)),
+          Effect.flatMap((loaded) => f(loaded, entry)),
+        ),
+      ),
     );
   };
 
@@ -557,13 +573,14 @@ const make = Effect.gen(function* () {
   /** Applies a pure transition under the project lock and commits it. */
   const runPure = <V>(
     projectId: CreatorProjectId,
+    guard: Effect.Effect<unknown, CreatorError>,
     transition: (
       state: CreatorStoreFile,
       ctx: CreatorStateContext,
     ) => StateResult<V> | CreatorOperationError,
   ) =>
     surface(
-      locked(projectId, (loaded, entry) =>
+      locked(projectId, guard, (loaded, entry) =>
         Effect.gen(function* () {
           const ctx = yield* stateContext(projectId);
           const result = transition(loaded.state, ctx);
@@ -645,14 +662,18 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /** `f` gets the binding and a guard that repeats the same check inside the project lock. */
   const withBinding = <A>(
     ref: CreatorBindingRef,
-    f: (binding: CreatorBinding) => Effect.Effect<A, CreatorError>,
-  ) => requireOperable(ref).pipe(Effect.flatMap(f));
+    f: (
+      binding: CreatorBinding,
+      guard: Effect.Effect<unknown, CreatorError>,
+    ) => Effect.Effect<A, CreatorError>,
+  ) => requireOperable(ref).pipe(Effect.flatMap((binding) => f(binding, requireOperable(ref))));
 
   const saveDraft: CreatorService["Service"]["saveDraft"] = (input) =>
-    withBinding(input, (binding) =>
-      runPure(binding.projectId, (state, ctx) => {
+    withBinding(input, (binding, guard) =>
+      runPure(binding.projectId, guard, (state, ctx) => {
         const commentId = input.commentId;
         if (commentId === undefined) {
           return createDraft(
@@ -681,9 +702,10 @@ const make = Effect.gen(function* () {
     );
 
   const updateComment: CreatorService["Service"]["updateComment"] = (input) =>
-    withBinding(input, (binding) =>
+    withBinding(input, (binding, guard) =>
       runPure(
         binding.projectId,
+        guard,
         (state, ctx) =>
           expectRevision(state, input.commentId, input.expectedRevision) ??
           updateCommentState(state, { id: input.commentId, comment: input.comment }, ctx),
@@ -691,9 +713,10 @@ const make = Effect.gen(function* () {
     );
 
   const setPlace: CreatorService["Service"]["setPlace"] = (input) =>
-    withBinding(input, (binding) =>
+    withBinding(input, (binding, guard) =>
       runPure(
         binding.projectId,
+        guard,
         (state, ctx) =>
           expectRevision(state, input.commentId, input.expectedRevision) ??
           setPlaceState(state, { id: input.commentId, place: input.place }, ctx),
@@ -701,15 +724,15 @@ const make = Effect.gen(function* () {
     );
 
   const deleteComment: CreatorService["Service"]["deleteComment"] = (input) =>
-    withBinding(input, (binding) =>
-      runPure(binding.projectId, (state, ctx) =>
+    withBinding(input, (binding, guard) =>
+      runPure(binding.projectId, guard, (state, ctx) =>
         deleteCommentState(state, { id: input.commentId }, ctx),
       ).pipe(Effect.asVoid),
     );
 
   const propose: CreatorService["Service"]["propose"] = (input) =>
-    withBinding(input, (binding) =>
-      runPure(binding.projectId, (state, ctx) =>
+    withBinding(input, (binding, guard) =>
+      runPure(binding.projectId, guard, (state, ctx) =>
         proposeState(
           state,
           {
@@ -723,15 +746,15 @@ const make = Effect.gen(function* () {
     );
 
   const cancelProposal: CreatorService["Service"]["cancelProposal"] = (input) =>
-    withBinding(input, (binding) =>
-      runPure(binding.projectId, (state, ctx) =>
+    withBinding(input, (binding, guard) =>
+      runPure(binding.projectId, guard, (state, ctx) =>
         cancelProposalState(state, { proposalId: input.proposalId }, ctx),
       ).pipe(Effect.asVoid),
     );
 
   const confirmByUser: CreatorService["Service"]["confirmByUser"] = (input) =>
-    withBinding(input, (binding) =>
-      runPure(binding.projectId, (state, ctx) =>
+    withBinding(input, (binding, guard) =>
+      runPure(binding.projectId, guard, (state, ctx) =>
         confirmByUserState(state, { ids: [input.commentId] }, ctx),
       ).pipe(
         Effect.flatMap(({ state }) => {
@@ -745,7 +768,9 @@ const make = Effect.gen(function* () {
 
   const resolve: CreatorService["Service"]["resolve"] = (projectId, ids, note) =>
     ensureEnabled.pipe(
-      Effect.andThen(runPure(projectId, (state, ctx) => resolveState(state, { ids, note }, ctx))),
+      Effect.andThen(
+        runPure(projectId, ensureEnabled, (state, ctx) => resolveState(state, { ids, note }, ctx)),
+      ),
       Effect.asVoid,
     );
 
@@ -754,9 +779,9 @@ const make = Effect.gen(function* () {
    * before the shot file is written, and a failed store write removes it again.
    */
   const attachShot: CreatorService["Service"]["attachShot"] = (input) =>
-    withBinding(input, (binding) =>
+    withBinding(input, (binding, guard) =>
       surface(
-        locked(binding.projectId, (loaded, entry) =>
+        locked(binding.projectId, guard, (loaded, entry) =>
           Effect.gen(function* () {
             const { state, store } = loaded;
             const comment = state.comments.find((entry) => entry.id === input.commentId);
@@ -829,9 +854,9 @@ const make = Effect.gen(function* () {
     );
 
   const readShot: CreatorService["Service"]["readShot"] = (input) =>
-    withBinding(input, (binding) =>
+    withBinding(input, (binding, guard) =>
       surface(
-        locked(binding.projectId, (loaded) =>
+        locked(binding.projectId, guard, (loaded) =>
           Effect.gen(function* () {
             const shot = referencedShots(loaded.state).get(
               shotKey({ commentId: input.commentId, revision: input.revision }),
@@ -846,12 +871,12 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const currentState = (projectId: CreatorProjectId) =>
-    surface(locked(projectId, (loaded) => Effect.succeed(loaded.state)));
+  const currentState = (projectId: CreatorProjectId, guard: Effect.Effect<unknown, CreatorError>) =>
+    surface(locked(projectId, guard, (loaded) => Effect.succeed(loaded.state)));
 
   const list: CreatorService["Service"]["list"] = (input) =>
-    withBinding(input, (binding) =>
-      currentState(binding.projectId).pipe(
+    withBinding(input, (binding, guard) =>
+      currentState(binding.projectId, guard).pipe(
         Effect.map((state) => snapshotOf(binding.projectId, state)),
       ),
     );
@@ -862,7 +887,7 @@ const make = Effect.gen(function* () {
         const binding = yield* requireOperable(input);
         // Subscribe before reading so no change between the two is lost.
         const subscription = yield* PubSub.subscribe(events);
-        const initial = yield* currentState(binding.projectId);
+        const initial = yield* currentState(binding.projectId, requireOperable(input));
         const revoked = Effect.fail(operationError("unauthorized", "binding_revoked"));
         if (!bindings.has(binding.bindingId)) return Stream.fromEffect(revoked);
         let last = initial.revision;
@@ -885,7 +910,7 @@ const make = Effect.gen(function* () {
 
   const withProjectState: CreatorService["Service"]["withProjectState"] = (projectId, f) =>
     surface(
-      locked(projectId, (loaded, entry) =>
+      locked(projectId, Effect.void, (loaded, entry) =>
         Effect.gen(function* () {
           const ctx = yield* stateContext(projectId);
           const step = yield* f(loaded.state, ctx);
