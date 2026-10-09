@@ -9,7 +9,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { emptyCreatorState } from "./creatorState.ts";
 import {
+  CreatorFileError,
   listShotFiles,
+  parseShotFileName,
   openCreatorRoot,
   openProjectStore,
   readShot,
@@ -88,8 +90,16 @@ describe("creatorFiles", () => {
         await NodeFSP.symlink(outside, store.path);
       },
     };
-    await expect(writeStoreAtomic(store, empty, hooks)).rejects.toThrow();
+    // The reason must be the folder check, not an incidental ENOENT from rename.
+    await expect(writeStoreAtomic(store, empty, hooks)).rejects.toMatchObject({
+      name: "CreatorFileError",
+      reason: "unsafe_path",
+    });
     expect(await NodeFSP.readdir(outside)).toEqual([]);
+    // Our temp is left orphaned in the moved folder; nothing was unlinked through the symlink.
+    const moved = await NodeFSP.readdir(`${store.path}.moved`);
+    expect(moved.filter((n) => n.endsWith(".tmp"))).toHaveLength(1);
+    expect(moved).not.toContain("comments.json");
   });
 
   it("detects the swap just before the temp file is opened", async () => {
@@ -102,7 +112,9 @@ describe("creatorFiles", () => {
         await NodeFSP.symlink(outside, store.path);
       },
     };
-    await expect(writeStoreAtomic(store, empty, hooks)).rejects.toThrow();
+    await expect(writeStoreAtomic(store, empty, hooks)).rejects.toMatchObject({
+      reason: "unsafe_path",
+    });
     expect(await NodeFSP.readdir(outside)).toEqual([]);
   });
 
@@ -198,6 +210,9 @@ describe("creatorFiles", () => {
         { commentId: "../../evil", revision: 1 },
         { commentId: NodeCrypto.randomUUID().toUpperCase(), revision: 1 },
         { commentId: NodeCrypto.randomUUID(), revision: -1 },
+        { commentId: NodeCrypto.randomUUID(), revision: 0 },
+        { commentId: "a".repeat(36), revision: 1 },
+        { commentId: "0123456789abcdef0123456789abcdef----", revision: 1 },
         { commentId: NodeCrypto.randomUUID(), revision: 1.5 },
         { commentId: NodeCrypto.randomUUID(), revision: Number.MAX_SAFE_INTEGER + 2 },
       ];
@@ -238,6 +253,45 @@ describe("creatorFiles", () => {
       expect(names).toContain(shotFile(c));
       expect(names).not.toContain(shotFile(b));
       expect(names).toHaveLength(3);
+    });
+
+    it("reports the already-evicted refs when eviction fails midway", async () => {
+      const store = await newStore();
+      const outside = await temp();
+      const a = shotRef(1);
+      const b = shotRef(1);
+      await sparse(store, shotRef(1), 46 * MB); // kept; both a and b must go to fit
+      await sparse(store, a, 3 * MB);
+      await sparse(store, b, 3 * MB);
+      const hooks = {
+        // After the eviction plan: make b no longer a regular file.
+        beforeOpen: async () => {
+          const file = NodePath.join(store.shots.path, shotFile(b));
+          await NodeFSP.rm(file);
+          await NodeFSP.symlink(outside, file);
+        },
+      };
+      const png = Buffer.alloc(3 * MB);
+      const newRef = shotRef(1);
+      const failure = await writeShot(store, newRef, png, { evictable: [a, b], hooks }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(CreatorFileError);
+      expect((failure as CreatorFileError).evicted.map((r) => r.commentId)).toEqual([a.commentId]);
+      const names = await NodeFSP.readdir(store.shots.path);
+      expect(names).not.toContain(shotFile(a));
+      expect(names).not.toContain(shotFile(newRef));
+    });
+
+    it("round-trips file names through parseShotFileName and refuses leading zeros", () => {
+      const ref = shotRef(12);
+      expect(parseShotFileName(shotFile(ref))).toEqual({
+        commentId: ref.commentId,
+        revision: 12,
+      });
+      expect(parseShotFileName(`${ref.commentId}-r012.png`)).toBeNull();
+      expect(parseShotFileName(`${ref.commentId}-r0.png`)).toBeNull();
     });
 
     it("refuses, removing nothing, when evicting every evictable shot is not enough", async () => {

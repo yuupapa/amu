@@ -29,8 +29,10 @@ import { emptyCreatorState } from "./creatorState.ts";
 const { constants } = NodeFS;
 const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const PROJECT_ID = /^[a-f0-9]{32}$/;
-const COMMENT_ID = /^[0-9a-f-]{36}$/;
-const SHOT_FILE = /^([0-9a-f-]{36})-r(\d+)\.png$/;
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const COMMENT_ID = new RegExp(`^${UUID}$`);
+/** Revision is a positive integer with no leading zero, so parse and format round-trip. */
+const SHOT_FILE = new RegExp(`^(${UUID})-r([1-9]\\d*)\\.png$`);
 const STORE_FILE = "comments.json";
 
 export type CreatorFileErrorReason =
@@ -40,14 +42,22 @@ export type CreatorFileErrorReason =
   | "exists"
   | "not_found"
   | "over_budget"
-  | "hash_mismatch";
+  | "hash_mismatch"
+  | "evict_failed";
 
 export class CreatorFileError extends Error {
   readonly reason: CreatorFileErrorReason;
-  constructor(reason: CreatorFileErrorReason, message: string, options?: { cause?: unknown }) {
-    super(message, options);
+  /** Shots already removed when a `writeShot` eviction failed midway; the caller clears them from state. */
+  readonly evicted: ReadonlyArray<ShotName>;
+  constructor(
+    reason: CreatorFileErrorReason,
+    message: string,
+    options?: { cause?: unknown; evicted?: ReadonlyArray<ShotName> },
+  ) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = "CreatorFileError";
     this.reason = reason;
+    this.evicted = options?.evicted ?? [];
   }
 }
 
@@ -302,8 +312,8 @@ const shotFileName = (ref: ShotName): string => {
   if (!COMMENT_ID.test(ref.commentId)) {
     throw new CreatorFileError("invalid_name", "commentId is not a lowercase uuid");
   }
-  if (!Number.isSafeInteger(ref.revision) || ref.revision < 0) {
-    throw new CreatorFileError("invalid_name", "revision must be a non-negative safe integer");
+  if (!Number.isSafeInteger(ref.revision) || ref.revision < 1) {
+    throw new CreatorFileError("invalid_name", "revision must be a positive safe integer");
   }
   return `${ref.commentId}-r${ref.revision}.png`;
 };
@@ -420,14 +430,23 @@ export const writeShot = async (
     closed = true;
 
     const evicted: ShotName[] = [];
-    for (const item of toEvict) {
-      await verifyShotDirs(store);
-      const itemPath = NodePath.join(store.shots.path, item.name);
-      const itemStats = await NodeFSP.lstat(itemPath).catch(() => null);
-      if (itemStats === null) continue;
-      if (!itemStats.isFile()) throw unsafe(`not a regular file: ${item.name}`);
-      await NodeFSP.unlink(itemPath);
-      evicted.push(item.ref);
+    try {
+      for (const item of toEvict) {
+        await verifyShotDirs(store);
+        const itemPath = NodePath.join(store.shots.path, item.name);
+        const itemStats = await NodeFSP.lstat(itemPath).catch(() => null);
+        if (itemStats === null) continue;
+        if (!itemStats.isFile()) throw unsafe(`not a regular file: ${item.name}`);
+        await NodeFSP.unlink(itemPath);
+        evicted.push(item.ref);
+      }
+    } catch (cause) {
+      // The new shot is unlinked below; tell the caller which old ones are already gone.
+      throw new CreatorFileError(
+        cause instanceof CreatorFileError ? cause.reason : "evict_failed",
+        cause instanceof Error ? cause.message : "eviction failed",
+        { cause, evicted },
+      );
     }
     return { sha256: sha256Hex(png), bytes: png.byteLength, evicted };
   } catch (error) {
