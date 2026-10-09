@@ -18,6 +18,7 @@
  */
 import { CREATOR_LIMITS } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
@@ -58,6 +59,8 @@ export interface CreatorPreviewOptions {
   readonly maxPreviews?: number;
   /** Time between SIGTERM and SIGKILL when stopping a process group. */
   readonly killGraceMs?: number;
+  /** Test seam: runs after a new slot is admitted and before its launch is forked. */
+  readonly afterAdmit?: Effect.Effect<void>;
 }
 
 export interface CreatorPreview {
@@ -76,7 +79,9 @@ export type CreatorPreviewStartFailure =
   | "timeout"
   | "exited"
   | "bad_output"
-  | "stopped";
+  | "stopped"
+  | "invalid_root"
+  | "internal";
 
 export class CreatorPreviewStartError extends Data.TaggedError("CreatorPreviewStartError")<{
   readonly reason: CreatorPreviewStartFailure;
@@ -260,17 +265,32 @@ export const make = Effect.fn("CreatorPreviewSupervisor.make")(function* (
       }
       yield* Deferred.succeed(slot.ready, { url: result.value.value, port, pid });
     }).pipe(
-      Effect.catch((error) => stopSlot(root, slot, error)),
+      // Defects too, so a bug in a launch still frees its slot. Interruption
+      // (supervisor closing) is left to the scope's finalizer.
+      Effect.catchCause((cause) =>
+        Cause.hasInterrupts(cause)
+          ? Effect.failCause(cause)
+          : stopSlot(
+              root,
+              slot,
+              Option.getOrElse(Cause.findErrorOption(cause), () =>
+                startError("internal", `Unexpected failure: ${String(Cause.squash(cause))}`),
+              ),
+            ),
+      ),
       // Interrupted only when the supervisor's scope closes; its finalizer stops the slot.
       Effect.onInterrupt(() =>
         Deferred.fail(slot.ready, startError("stopped", "Amu Creator preview supervisor stopped")),
       ),
     );
 
-  const ensure: CreatorPreviewSupervisor["Service"]["ensure"] = Effect.fn(
-    "CreatorPreviewSupervisor.ensure",
-  )(function* (root) {
-    while (true) {
+  /**
+   * Admits a slot (or finds one) and, for a new slot, forks its launch. Runs
+   * uninterruptibly so an admitted slot is always launched, which in turn
+   * always ends in ready or a stop that frees it.
+   */
+  const admit = (root: string) =>
+    Effect.gen(function* () {
       const decision = yield* Ref.modify(
         slots,
         (
@@ -296,17 +316,31 @@ export const make = Effect.fn("CreatorPreviewSupervisor.make")(function* (
           return [{ kind: "start", slot }, new Map(map).set(root, slot)];
         },
       );
+      if (decision.kind === "start") {
+        if (options.afterAdmit !== undefined) yield* options.afterAdmit;
+        // Forked into the supervisor's scope: the start goes on for the other
+        // waiters even if this caller is interrupted.
+        yield* launch(root, decision.slot).pipe(Effect.forkIn(serviceScope));
+      }
+      return decision;
+    }).pipe(Effect.uninterruptible);
+
+  const ensure: CreatorPreviewSupervisor["Service"]["ensure"] = Effect.fn(
+    "CreatorPreviewSupervisor.ensure",
+  )(function* (root) {
+    // POSIX only (process groups), so an absolute path starts with `/`.
+    if (!root.startsWith("/")) {
+      return yield* startError("invalid_root", "The serving root must be an absolute path");
+    }
+    while (true) {
+      // Only the waits below can be interrupted.
+      const decision = yield* admit(root);
       if (decision.kind === "limit") {
         return yield* new CreatorPreviewLimitError({ limit: maxPreviews });
       }
       if (decision.kind === "wait") {
         yield* Deferred.await(decision.slot.closed);
         continue;
-      }
-      if (decision.kind === "start") {
-        // Forked into the supervisor's scope: the start goes on for the other
-        // waiters even if this caller is interrupted.
-        yield* launch(root, decision.slot).pipe(Effect.forkIn(serviceScope));
       }
       return yield* Deferred.await(decision.slot.ready);
     }

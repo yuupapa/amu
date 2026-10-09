@@ -6,10 +6,12 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as NetService from "@t3tools/shared/Net";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import * as Supervisor from "./CreatorPreviewSupervisor.ts";
 
@@ -255,4 +257,65 @@ it.live("a preview that exits after it was ready frees its slot and starts again
       }),
     );
   }),
+);
+
+it.live("an ensure interrupted right after admitting its slot still starts or frees it", () =>
+  Effect.gen(function* () {
+    const root = yield* makeRoot("ready");
+    const other = yield* makeRoot("ready");
+    const admitted = yield* Deferred.make<void>();
+    yield* withSupervisor(
+      {
+        maxPreviews: 1,
+        // Test seam: runs between admission and the start of the launch.
+        afterAdmit: Deferred.succeed(admitted, undefined).pipe(
+          Effect.andThen(Effect.sleep("50 millis")),
+        ),
+      },
+      (supervisor) =>
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(supervisor.ensure(root));
+          yield* Deferred.await(admitted);
+          yield* Fiber.interrupt(fiber);
+          // The slot was started (not left admitted forever): a new ensure gets it.
+          const ready = yield* supervisor
+            .ensure(root)
+            .pipe(Effect.timeoutOption("5 seconds"), Effect.map(Option.getOrUndefined));
+          expect(ready?.url).toContain(`/#project/${NodePath.basename(root)}`);
+          yield* supervisor.stop(root);
+          yield* supervisor.ensure(other);
+        }),
+    );
+  }),
+);
+
+it.live("a defect while launching frees the slot", () =>
+  Effect.gen(function* () {
+    const broken = yield* makeRoot("ready");
+    const ready = yield* makeRoot("ready");
+    const command: Supervisor.CreatorPreviewCommand = {
+      file: fakeCommand.file,
+      args: (root, port) => {
+        if (root === broken) throw new Error("boom");
+        return fakeCommand.args(root, port);
+      },
+    };
+    yield* withSupervisor({ maxPreviews: 1, command }, (supervisor) =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(supervisor.ensure(broken));
+        expect(startError(exit)).toMatchObject({ reason: "internal" });
+        yield* supervisor.ensure(ready);
+      }),
+    );
+  }),
+);
+
+it.live("refuses a relative root without taking a slot", () =>
+  withSupervisor({ maxPreviews: 1 }, (supervisor) =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(supervisor.ensure("relative/project"));
+      expect(startError(exit)).toMatchObject({ reason: "invalid_root" });
+      yield* supervisor.ensure(yield* makeRoot("ready"));
+    }),
+  ),
 );

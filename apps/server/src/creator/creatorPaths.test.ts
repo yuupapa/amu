@@ -76,6 +76,48 @@ describe("scanForOutwardLinks", () => {
     expect(await scanForOutwardLinks(root)).toMatchObject({ ok: false, reason: "outward_link" });
   });
 
+  it("refuses a dangling link whose `..` climbs out through an in-root link", async () => {
+    const { root } = await fixture();
+    // `self` points at the root (inside). Read lexically, `self/../escape.json` is
+    // `<root>/escape.json`; resolved for real it is `<base>/escape.json`.
+    await NodeFSP.symlink(".", NodePath.join(root, "self"));
+    await NodeFSP.symlink("self/../escape.json", NodePath.join(root, "x"));
+    expect(await scanForOutwardLinks(root)).toEqual({
+      ok: false,
+      reason: "outward_link",
+      path: NodePath.join(root, "x"),
+    });
+  });
+
+  it("allows a dangling link through plain in-root folders, even with `..`", async () => {
+    const { root } = await fixture();
+    await NodeFSP.symlink("assets/../assets/new/later.png", NodePath.join(root, "later.png"));
+    expect(await scanForOutwardLinks(root)).toEqual({ ok: true });
+  });
+
+  it("refuses a link it cannot resolve for a reason other than a missing target", async () => {
+    const { root } = await fixture();
+    const locked = NodePath.join(root, "assets");
+    await NodeFSP.writeFile(NodePath.join(locked, "a.png"), "");
+    await NodeFSP.symlink("assets/a.png", NodePath.join(root, "a.png"));
+    await NodeFSP.chmod(locked, 0o000);
+    try {
+      // realpath fails with EACCES, not ENOENT.
+      expect(await scanForOutwardLinks(root)).toMatchObject({
+        ok: false,
+        path: NodePath.join(root, "a.png"),
+      });
+    } finally {
+      await NodeFSP.chmod(locked, 0o700);
+    }
+  });
+
+  it("refuses a link that loops", async () => {
+    const { root } = await fixture();
+    await NodeFSP.symlink("loop", NodePath.join(root, "loop"));
+    expect(await scanForOutwardLinks(root)).toMatchObject({ ok: false });
+  });
+
   it("does not follow a link into the folder it points at", async () => {
     const { root, base } = await fixture();
     // A link inside the root to a folder inside the root that itself holds an outward link.

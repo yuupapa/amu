@@ -38,15 +38,54 @@ class ScanStop extends Error {
   }
 }
 
-/** Whether a link at `linkPath` (inside `root`) ends up inside `root`. */
+const errno = (error: unknown): string | undefined =>
+  typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code: unknown }).code)
+    : undefined;
+
+/**
+ * Judges a dangling link (its target does not exist yet) by walking its target
+ * text one component at a time from the link's real folder, the way the kernel
+ * would. A `..` is applied to a real folder, so it cannot be fooled by a link the
+ * way a lexical `path.resolve` can. Refused when an existing component is itself
+ * a link or cannot be checked, or when a `..` follows a missing component.
+ */
+const danglingStaysInside = async (root: string, linkPath: string): Promise<boolean> => {
+  const target = await NodeFSP.readlink(linkPath);
+  let current = NodePath.isAbsolute(target)
+    ? NodePath.parse(target).root
+    : await NodeFSP.realpath(NodePath.dirname(linkPath));
+  let missing = false;
+  for (const part of target.split(NodePath.sep)) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (missing) return false;
+      current = NodePath.dirname(current);
+      continue;
+    }
+    current = NodePath.join(current, part);
+    if (missing) continue;
+    try {
+      if ((await NodeFSP.lstat(current)).isSymbolicLink()) return false;
+    } catch (error) {
+      if (errno(error) !== "ENOENT") return false;
+      missing = true;
+    }
+  }
+  return isInside(root, current);
+};
+
+/**
+ * Whether a link at `linkPath` (inside `root`) ends up inside `root`. Throws
+ * (the scan reports `unreadable`) when it cannot be resolved for any reason
+ * other than a missing target, such as a loop or a permission error.
+ */
 const linkStaysInside = async (root: string, linkPath: string): Promise<boolean> => {
   try {
     return isInside(root, await NodeFSP.realpath(linkPath));
-  } catch {
-    // Dangling or looping: judge by where its text points. Every link on the
-    // way inside the root is itself checked by the scan.
-    const target = await NodeFSP.readlink(linkPath);
-    return isInside(root, NodePath.resolve(NodePath.dirname(linkPath), target));
+  } catch (error) {
+    if (errno(error) !== "ENOENT") throw error;
+    return danglingStaysInside(root, linkPath);
   }
 };
 

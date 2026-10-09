@@ -31,7 +31,12 @@ export const REVIEW_LIMITS = {
   maxVideoBytes: 4 * 1024 ** 3,
   ffprobeTimeoutMs: 10_000,
   ffprobeMaxOutputBytes: 64 * 1024,
+  /** A probed duration above this (6 hours) is treated as unreadable. */
+  maxDurationSec: 6 * 60 * 60,
 } as const;
+
+const isUsableDuration = (seconds: number) =>
+  Number.isFinite(seconds) && seconds > 0 && seconds <= REVIEW_LIMITS.maxDurationSec;
 
 export type FfprobeFailure = "timeout" | "overflow" | "failed" | "bad_output";
 
@@ -65,6 +70,10 @@ const errno = (error: unknown): string | undefined =>
  */
 export const runFfprobe = (file: string, options: FfprobeOptions = {}): Promise<number> =>
   new Promise((resolve, reject) => {
+    if (!NodePath.isAbsolute(file)) {
+      reject(new FfprobeError("failed", "ffprobe needs an absolute path"));
+      return;
+    }
     const timeoutMs = options.timeoutMs ?? REVIEW_LIMITS.ffprobeTimeoutMs;
     const maxOutputBytes = options.maxOutputBytes ?? REVIEW_LIMITS.ffprobeMaxOutputBytes;
     const child = NodeChildProcess.spawn(
@@ -73,6 +82,12 @@ export const runFfprobe = (file: string, options: FfprobeOptions = {}): Promise<
         ...(options.argsPrefix ?? []),
         "-v",
         "error",
+        // Local files only, and only the demuxers for the accepted extensions, so
+        // a playlist or concat file cannot make ffprobe open other inputs.
+        "-protocol_whitelist",
+        "file",
+        "-format_whitelist",
+        "mov,mp4,matroska,webm",
         "-show_entries",
         "format=duration",
         "-of",
@@ -119,7 +134,7 @@ export const runFfprobe = (file: string, options: FfprobeOptions = {}): Promise<
           format?: { duration?: unknown };
         };
         const duration = Number(parsed.format?.duration);
-        if (Number.isFinite(duration) && duration > 0) return resolve(duration);
+        if (isUsableDuration(duration)) return resolve(duration);
       } catch {
         // falls through to bad_output
       }
@@ -244,7 +259,7 @@ export const makeReviewProject = async (
       throw new CreatorFileError("too_large", `Videos over ${maxVideoBytes} bytes are refused`);
     }
     const durationSec = await options.ffprobe(copy);
-    if (!(Number.isFinite(durationSec) && durationSec > 0)) {
+    if (!isUsableDuration(durationSec)) {
       throw new FfprobeError("bad_output", "ffprobe did not report a duration");
     }
     await verifyAll(dirs);

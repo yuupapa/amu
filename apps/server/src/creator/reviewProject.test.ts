@@ -239,6 +239,29 @@ describe("runFfprobe", () => {
     expect(await result).toBe(12.5);
   });
 
+  it("limits ffprobe to local files and video containers", async () => {
+    const { result, pidFile } = await fake("ok");
+    await result;
+    const args = (await NodeFSP.readFile(`${pidFile}.args`, "utf8")).split("\n");
+    const at = (flag: string) => args[args.indexOf(flag) + 1];
+    expect(at("-protocol_whitelist")).toBe("file");
+    expect(at("-format_whitelist")).toBe("mov,mp4,matroska,webm");
+    expect(args.at(-1)).toBe(NodePath.join(NodePath.dirname(pidFile), "v.mp4"));
+  });
+
+  it("refuses a relative path without running ffprobe", async () => {
+    const pidFile = NodePath.join(await temp(), "pid");
+    await expect(
+      runFfprobe("v.mp4", { command: process.execPath, argsPrefix: [FAKE, "ok", pidFile] }),
+    ).rejects.toMatchObject({ name: "FfprobeError", reason: "failed" });
+    await expect(NodeFSP.lstat(pidFile)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("treats a duration of zero or over 6 hours as unreadable", async () => {
+    await expect((await fake("zero")).result).rejects.toMatchObject({ reason: "bad_output" });
+    await expect((await fake("long")).result).rejects.toMatchObject({ reason: "bad_output" });
+  });
+
   it("gives up after the time limit and kills the child", async () => {
     const { result, pidFile } = await fake("slow", { timeoutMs: 300 });
     await expect(result).rejects.toMatchObject({ name: "FfprobeError", reason: "timeout" });
