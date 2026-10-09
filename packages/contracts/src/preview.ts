@@ -11,6 +11,7 @@
 import { Schema } from "effect";
 import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
+import { CreatorTabInfo } from "./creator.ts";
 
 export const PREVIEW_URL_MAX_LENGTH = 2_048;
 export const CONFIGURED_LOCAL_SERVER_URLS_MAX_ITEMS = 32;
@@ -210,6 +211,11 @@ export const PreviewSessionSnapshot = Schema.Struct({
   reveal: Schema.optional(Schema.Boolean),
   /** A fresh presentation request, including whether it overrides automatic-floating settings. */
   revealRequest: Schema.optional(Schema.Struct({ id: Schema.String, force: Schema.Boolean })),
+  /**
+   * Set by the server when the tab was opened by Amu Creator. Only the snapshot carries it:
+   * the public `PreviewOpenInput` cannot request a Creator binding.
+   */
+  creator: Schema.optional(CreatorTabInfo),
   updatedAt: Schema.String,
 });
 export type PreviewSessionSnapshot = typeof PreviewSessionSnapshot.Type;

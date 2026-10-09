@@ -100,6 +100,7 @@ import {
   type PullRequestRef,
   WS_METHODS,
   WsRpcGroup,
+  CreatorOperationError,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import {
@@ -249,6 +250,11 @@ import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
+// Amu Creator RPCs are declared in contracts; CreatorService lands in a later task.
+const creatorNotImplemented = new CreatorOperationError({
+  code: "not_implemented",
+  detail: "Amu Creator is not implemented on this server yet.",
+});
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
 
 const resolveDiscoveryForConfig = <A, E, R>(
@@ -2889,6 +2895,21 @@ const layerWsRpc = (
         [WS_METHODS.previewClearProfile]: (input) => serverBrowser.clearProfile(input.profileId),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
+        [WS_METHODS.creatorOpenByUser]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorSetEpoch]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorSaveDraft]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorUpdateComment]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorSetPlace]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorAttachShot]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorDeleteComment]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorPropose]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorCancelProposal]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorConfirmSend]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorHaltSend]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorConfirmByUser]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorReadShot]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorList]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorSubscribe]: (_input) => Stream.fail(creatorNotImplemented),
         [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
         [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
         [WS_METHODS.deviceList]: (input) =>

@@ -232,6 +232,30 @@ import {
   TerminalWriteInput,
 } from "./terminal.ts";
 import {
+  CreatorAttachShotInput,
+  CreatorCancelProposalInput,
+  CreatorComment,
+  CreatorConfirmByUserInput,
+  CreatorConfirmSendInput,
+  CreatorDeleteCommentInput,
+  CreatorError,
+  CreatorHaltSendInput,
+  CreatorListInput,
+  CreatorOpenByUserInput,
+  CreatorOpenResult,
+  CreatorProposal,
+  CreatorProposeInput,
+  CreatorReadShotInput,
+  CreatorReadShotResult,
+  CreatorSaveDraftInput,
+  CreatorSendResult,
+  CreatorSetEpochInput,
+  CreatorSetPlaceInput,
+  CreatorSnapshot,
+  CreatorSubscribeInput,
+  CreatorUpdateCommentInput,
+} from "./creator.ts";
+import {
   DiscoveredLocalServerList,
   ConfiguredLocalServerUrls,
   PreviewCloseInput,
@@ -424,6 +448,23 @@ export const WS_METHODS = {
   previewList: "preview.list",
   previewClearProfile: "preview.clearProfile",
   previewReportStatus: "preview.reportStatus",
+
+  // Amu Creator methods
+  creatorOpenByUser: "creator.openByUser",
+  creatorSetEpoch: "creator.setEpoch",
+  creatorSaveDraft: "creator.saveDraft",
+  creatorUpdateComment: "creator.updateComment",
+  creatorSetPlace: "creator.setPlace",
+  creatorAttachShot: "creator.attachShot",
+  creatorDeleteComment: "creator.deleteComment",
+  creatorPropose: "creator.propose",
+  creatorCancelProposal: "creator.cancelProposal",
+  creatorConfirmSend: "creator.confirmSend",
+  creatorHaltSend: "creator.haltSend",
+  creatorConfirmByUser: "creator.confirmByUser",
+  creatorReadShot: "creator.readShot",
+  creatorList: "creator.list",
+  creatorSubscribe: "creator.subscribe",
 
   // Device methods
   deviceConfigure: "device.configure",
@@ -1443,6 +1484,96 @@ const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, 
   stream: true,
 });
 
+const CreatorRpcError = Schema.Union([CreatorError, EnvironmentAuthorizationError]);
+
+const WsCreatorOpenByUserRpc = Rpc.make(WS_METHODS.creatorOpenByUser, {
+  payload: CreatorOpenByUserInput,
+  success: CreatorOpenResult,
+  error: CreatorRpcError,
+});
+
+const WsCreatorSetEpochRpc = Rpc.make(WS_METHODS.creatorSetEpoch, {
+  payload: CreatorSetEpochInput,
+  error: CreatorRpcError,
+});
+
+const WsCreatorSaveDraftRpc = Rpc.make(WS_METHODS.creatorSaveDraft, {
+  payload: CreatorSaveDraftInput,
+  success: CreatorComment,
+  error: CreatorRpcError,
+});
+
+const WsCreatorUpdateCommentRpc = Rpc.make(WS_METHODS.creatorUpdateComment, {
+  payload: CreatorUpdateCommentInput,
+  success: CreatorComment,
+  error: CreatorRpcError,
+});
+
+const WsCreatorSetPlaceRpc = Rpc.make(WS_METHODS.creatorSetPlace, {
+  payload: CreatorSetPlaceInput,
+  success: CreatorComment,
+  error: CreatorRpcError,
+});
+
+const WsCreatorAttachShotRpc = Rpc.make(WS_METHODS.creatorAttachShot, {
+  payload: CreatorAttachShotInput,
+  success: CreatorComment,
+  error: CreatorRpcError,
+});
+
+const WsCreatorDeleteCommentRpc = Rpc.make(WS_METHODS.creatorDeleteComment, {
+  payload: CreatorDeleteCommentInput,
+  error: CreatorRpcError,
+});
+
+const WsCreatorProposeRpc = Rpc.make(WS_METHODS.creatorPropose, {
+  payload: CreatorProposeInput,
+  success: CreatorProposal,
+  error: CreatorRpcError,
+});
+
+const WsCreatorCancelProposalRpc = Rpc.make(WS_METHODS.creatorCancelProposal, {
+  payload: CreatorCancelProposalInput,
+  error: CreatorRpcError,
+});
+
+const WsCreatorConfirmSendRpc = Rpc.make(WS_METHODS.creatorConfirmSend, {
+  payload: CreatorConfirmSendInput,
+  success: CreatorSendResult,
+  error: CreatorRpcError,
+});
+
+const WsCreatorHaltSendRpc = Rpc.make(WS_METHODS.creatorHaltSend, {
+  payload: CreatorHaltSendInput,
+  success: CreatorSendResult,
+  error: CreatorRpcError,
+});
+
+const WsCreatorConfirmByUserRpc = Rpc.make(WS_METHODS.creatorConfirmByUser, {
+  payload: CreatorConfirmByUserInput,
+  success: CreatorComment,
+  error: CreatorRpcError,
+});
+
+const WsCreatorReadShotRpc = Rpc.make(WS_METHODS.creatorReadShot, {
+  payload: CreatorReadShotInput,
+  success: CreatorReadShotResult,
+  error: CreatorRpcError,
+});
+
+const WsCreatorListRpc = Rpc.make(WS_METHODS.creatorList, {
+  payload: CreatorListInput,
+  success: CreatorSnapshot,
+  error: CreatorRpcError,
+});
+
+const WsCreatorSubscribeRpc = Rpc.make(WS_METHODS.creatorSubscribe, {
+  payload: CreatorSubscribeInput,
+  success: CreatorSnapshot,
+  error: CreatorRpcError,
+  stream: true,
+});
+
 const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(WS_METHODS.subscribeDiscoveredLocalServers, {
   payload: Schema.Struct({
     configuredUrls: Schema.optional(ConfiguredLocalServerUrls),
@@ -1893,6 +2024,21 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewClearProfileRpc,
   WsPreviewReportStatusRpc,
   WsSubscribePreviewEventsRpc,
+  WsCreatorOpenByUserRpc,
+  WsCreatorSetEpochRpc,
+  WsCreatorSaveDraftRpc,
+  WsCreatorUpdateCommentRpc,
+  WsCreatorSetPlaceRpc,
+  WsCreatorAttachShotRpc,
+  WsCreatorDeleteCommentRpc,
+  WsCreatorProposeRpc,
+  WsCreatorCancelProposalRpc,
+  WsCreatorConfirmSendRpc,
+  WsCreatorHaltSendRpc,
+  WsCreatorConfirmByUserRpc,
+  WsCreatorReadShotRpc,
+  WsCreatorListRpc,
+  WsCreatorSubscribeRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsDeviceConfigureRpc,
   WsDeviceListRpc,
