@@ -178,6 +178,7 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as CreatorService from "./creator/CreatorService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
@@ -250,7 +251,7 @@ import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
-// Amu Creator RPCs are declared in contracts; CreatorService lands in a later task.
+// Opening a Creator tab and sending a proposal are wired by later tasks.
 const creatorNotImplemented = new CreatorOperationError({
   code: "not_implemented",
   detail: "Amu Creator is not implemented on this server yet.",
@@ -1191,6 +1192,7 @@ const layerWsRpc = (
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
+  creator: CreatorService.CreatorService["Service"],
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2896,20 +2898,20 @@ const layerWsRpc = (
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
         [WS_METHODS.creatorOpenByUser]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorSetEpoch]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorSaveDraft]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorUpdateComment]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorSetPlace]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorAttachShot]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorDeleteComment]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorPropose]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorCancelProposal]: (_input) => Effect.fail(creatorNotImplemented),
+        [WS_METHODS.creatorSetEpoch]: (input) => creator.setEpoch(input).pipe(Effect.asVoid),
+        [WS_METHODS.creatorSaveDraft]: (input) => creator.saveDraft(input),
+        [WS_METHODS.creatorUpdateComment]: (input) => creator.updateComment(input),
+        [WS_METHODS.creatorSetPlace]: (input) => creator.setPlace(input),
+        [WS_METHODS.creatorAttachShot]: (input) => creator.attachShot(input),
+        [WS_METHODS.creatorDeleteComment]: (input) => creator.deleteComment(input),
+        [WS_METHODS.creatorPropose]: (input) => creator.propose(input),
+        [WS_METHODS.creatorCancelProposal]: (input) => creator.cancelProposal(input),
         [WS_METHODS.creatorConfirmSend]: (_input) => Effect.fail(creatorNotImplemented),
         [WS_METHODS.creatorHaltSend]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorConfirmByUser]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorReadShot]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorList]: (_input) => Effect.fail(creatorNotImplemented),
-        [WS_METHODS.creatorSubscribe]: (_input) => Stream.fail(creatorNotImplemented),
+        [WS_METHODS.creatorConfirmByUser]: (input) => creator.confirmByUser(input),
+        [WS_METHODS.creatorReadShot]: (input) => creator.readShot(input),
+        [WS_METHODS.creatorList]: (input) => creator.list(input),
+        [WS_METHODS.creatorSubscribe]: (input) => creator.changes(input),
         [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
         [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
         [WS_METHODS.deviceList]: (input) =>
@@ -3138,6 +3140,7 @@ export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
+    const creator = yield* CreatorService.CreatorService;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
@@ -3194,6 +3197,7 @@ export const layer = Layer.unwrap(
               clientAnalyticsProps,
               previewAutomationBroker,
               serverBrowser,
+              creator,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

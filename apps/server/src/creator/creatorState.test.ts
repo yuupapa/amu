@@ -30,6 +30,7 @@ import {
   markAttempt,
   propose,
   releaseHalted,
+  replaceDraft,
   requestHalt,
   resolve,
   revisionKeyOf,
@@ -227,6 +228,43 @@ describe("creatorState", () => {
     expect(fresh.allow("proj", "draft", 0)).toBe(true);
     expect(fresh.allow("proj", "draft", 0)).toBe(true);
     expect(fresh.allow("proj", "draft", 0)).toBe(false);
+  });
+
+  it("replaces a draft's text, place and position in one gated edit", () => {
+    const gate = makeRateGate();
+    const created = ok(
+      createDraft(emptyCreatorState(), { timeSec: 1, projectRevision: "r1" }, ctx(0, gate)),
+    );
+    const id = created.value.id;
+    const place: CreatorPlace = {
+      x: 0.1,
+      y: 0.2,
+      compositionFile: null,
+      elementSelector: null,
+      elementLabel: null,
+    };
+    const replaced = ok(
+      replaceDraft(
+        created.state,
+        { id, timeSec: 4, projectRevision: "r2", comment: "new", place },
+        ctx(10, gate),
+      ),
+    );
+    expect(replaced.value).toMatchObject({
+      timeSec: 4,
+      projectRevision: "r2",
+      comment: "new",
+      place,
+      revision: 2,
+    });
+    expect(replaced.state.revision).toBe(created.state.revision + 1);
+    expect(
+      replaceDraft(
+        replaced.state,
+        { id, timeSec: 5, projectRevision: "r2", comment: "x", place: null },
+        ctx(20, gate),
+      ),
+    ).toMatchObject({ ok: false, reason: "rate_limited" });
   });
 
   it("refuses the 201st comment", () => {

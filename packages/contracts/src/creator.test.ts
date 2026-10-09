@@ -98,6 +98,9 @@ describe("Creator ids", () => {
       expect(() => decodeId(UUID.toUpperCase())).toThrow();
       expect(() => decodeId(`${UUID.slice(0, 35)}/`)).toThrow();
       expect(() => decodeId("../../etc/passwd-0000000000000000000")).toThrow();
+      // Right length and alphabet, wrong 8-4-4-4-12 grouping.
+      expect(() => decodeId("------------------------------------")).toThrow();
+      expect(() => decodeId(UUID.replaceAll("-", "").padEnd(36, "0"))).toThrow();
     }
   });
   it("accepts a 32-char hex project id only", () => {

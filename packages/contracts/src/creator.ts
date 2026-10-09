@@ -67,21 +67,21 @@ export const CREATOR_LIMITS = {
   maxPreviews: 3,
 } as const;
 
-const UUID_V4_LIKE = /^[0-9a-f-]{36}$/;
+const LOWERCASE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PROJECT_ID = /^[a-f0-9]{32}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /** Server-issued, lowercase UUID. Used in file names, so nothing else is accepted. */
-export const CreatorCommentId = Schema.String.check(Schema.isPattern(UUID_V4_LIKE)).pipe(
+export const CreatorCommentId = Schema.String.check(Schema.isPattern(LOWERCASE_UUID)).pipe(
   Schema.brand("CreatorCommentId"),
 );
 export type CreatorCommentId = typeof CreatorCommentId.Type;
-export const CreatorProposalId = Schema.String.check(Schema.isPattern(UUID_V4_LIKE)).pipe(
+export const CreatorProposalId = Schema.String.check(Schema.isPattern(LOWERCASE_UUID)).pipe(
   Schema.brand("CreatorProposalId"),
 );
 export type CreatorProposalId = typeof CreatorProposalId.Type;
 /** A binding is the authority granted by one `open`; it dies with the tab. */
-export const CreatorBindingId = Schema.String.check(Schema.isPattern(UUID_V4_LIKE)).pipe(
+export const CreatorBindingId = Schema.String.check(Schema.isPattern(LOWERCASE_UUID)).pipe(
   Schema.brand("CreatorBindingId"),
 );
 export type CreatorBindingId = typeof CreatorBindingId.Type;

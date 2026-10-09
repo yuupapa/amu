@@ -303,6 +303,43 @@ export const createDraft = (
   );
 };
 
+/** `saveDraft` with an id: replace text, place and position in one gated edit. */
+export const replaceDraft = (
+  state: CreatorStoreFile,
+  input: {
+    readonly id: CreatorCommentId;
+    readonly timeSec: number;
+    readonly projectRevision: string;
+    readonly comment: string;
+    readonly place: CreatorPlace | null;
+  },
+  ctx: CreatorStateContext,
+): StateResult<CreatorComment> => {
+  const projectRevision = input.projectRevision.trim();
+  if (
+    !validTimeSec(input.timeSec) ||
+    projectRevision.length === 0 ||
+    projectRevision.length > CREATOR_LIMITS.maxField ||
+    !validComment(input.comment) ||
+    (input.place !== null && !isPlace(input.place))
+  ) {
+    return fail("invalid");
+  }
+  return editComment(
+    state,
+    input.id,
+    ctx,
+    (comment) => ({
+      ...comment,
+      timeSec: input.timeSec,
+      projectRevision,
+      comment: input.comment,
+      place: input.place,
+    }),
+    { gated: true },
+  );
+};
+
 export const updateComment = (
   state: CreatorStoreFile,
   input: { readonly id: CreatorCommentId; readonly comment: string },
