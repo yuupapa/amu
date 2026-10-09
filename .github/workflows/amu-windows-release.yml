@@ -232,6 +232,16 @@ jobs:
             Write-Host "$what listens on $($found.LocalPort): $((Get-Process -Id $found.OwningProcess).Path)"
             return $found
           }
+          New-Item -ItemType Directory -Force screenshots | Out-Null
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Save-Screen([string]$name) {
+            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+            $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $bitmap.Save((Join-Path screenshots "$name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+            $graphics.Dispose(); $bitmap.Dispose()
+          }
 
           $upstreamInstaller = Get-ChildItem upstream -Filter "T3-Code-*-x64.exe" | Select-Object -First 1
           Start-Process $upstreamInstaller.FullName -ArgumentList "/S" -Wait
@@ -259,6 +269,9 @@ jobs:
           if (-not (Test-Path $runtime)) { throw "$runtime was not created." }
           Get-ChildItem $runtime -Depth 0 | Select-Object -ExpandProperty FullName
           if (Test-Path (Join-Path $env:USERPROFILE ".t3")) { throw "Amu wrote to ~/.t3, upstream T3 Code's folder." }
+          # Give the window time to render so the screenshot shows the real first screen.
+          Start-Sleep -Seconds 20
+          Save-Screen "1-amu"
 
           $upstream = Start-Process $upstreamApp.FullName -PassThru
           $upstreamDir = $upstreamApp.DirectoryName
@@ -266,6 +279,8 @@ jobs:
           if (-not (Get-NetTCPConnection -LocalPort 5233 -State Listen -ErrorAction SilentlyContinue)) { throw "Amu stopped listening once T3 Code started." }
           if ($amu.HasExited) { throw "Amu exited once T3 Code started." }
           Write-Host "Amu and upstream T3 Code run side by side."
+          Start-Sleep -Seconds 10
+          Save-Screen "2-amu-and-upstream"
 
           # Stop only the process trees this step started.
           taskkill /PID $amu.Id /T /F | Out-Null
@@ -279,6 +294,15 @@ jobs:
           if (-not (Test-Path $runtime)) { throw "Uninstall removed $runtime." }
           if (-not (Test-Path $upstreamApp.FullName)) { throw "Uninstalling Amu removed upstream T3 Code." }
           Write-Host "Uninstalled Amu; $runtime and upstream T3 Code are still there."
+
+      - name: Keep the smoke test screenshots
+        if: ${{ inputs.dry_run && always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: amu-windows-screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Upload to the draft release and publish it
         if: ${{ !inputs.dry_run }}
