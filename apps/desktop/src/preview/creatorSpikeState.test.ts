@@ -93,4 +93,36 @@ describe("creator spike state", () => {
     expect(s.propose(gen, ids.slice(0, 2)).ok).toBe(true);
     expect(s.propose(gen, ids.slice(2, 4)).ok).toBe(false);
   });
+
+  it("accepts a time-only comment with no location", () => {
+    let t = 0;
+    const s = createSpikeState(() => (t += 1000));
+    const gen = s.activate();
+    const r = s.acceptDraft(
+      gen,
+      draft({ x: null, y: null, compositionFile: null, elementSelector: null }),
+    );
+    expect(r.ok && r.value.x).toBeNull();
+    expect(s.acceptDraft(gen, draft({ x: 0.5, y: null })).ok).toBe(false);
+  });
+
+  it("adds a location later and bumps the revision", () => {
+    let t = 0;
+    const s = createSpikeState(() => (t += 1000));
+    const gen = s.activate();
+    const r = s.acceptDraft(gen, draft({ x: null, y: null }));
+    if (!r.ok) throw new Error("setup");
+    const located = s.setLocation(gen, r.value.id, {
+      x: 0.29,
+      y: 0.6,
+      compositionFile: "compositions/sc05-shinbashira.html",
+      elementSelector: "#sc05-core-rect",
+    });
+    expect(located.ok && located.value.revision).toBe(2);
+    expect(located.ok && located.value.elementSelector).toBe("#sc05-core-rect");
+    expect(
+      s.setLocation(gen, r.value.id, { x: 2, y: 0.6, compositionFile: null, elementSelector: null })
+        .ok,
+    ).toBe(false);
+  });
 });

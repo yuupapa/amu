@@ -9,6 +9,7 @@ import { SPIKE_LIMITS, clampToViewport, isUsableRect } from "./creatorSpikeGeome
 import {
   CREATOR_SPIKE_ACTIVATE,
   CREATOR_SPIKE_DRAFT,
+  CREATOR_SPIKE_LOCATE,
   CREATOR_SPIKE_PROPOSE,
   CREATOR_SPIKE_STATE,
   CREATOR_SPIKE_UPDATE,
@@ -96,19 +97,11 @@ export const registerCreatorSpike = (wc: WebContents, tabId: string): void => {
     generation = state.activate();
     wc.send(CREATOR_SPIKE_ACTIVATE, { generation });
     log("activated", { origin, generation });
+    // A reload keeps this tab's comments; show them right away.
+    pushState();
   });
 
-  wc.ipc.on(CREATOR_SPIKE_DRAFT, async (event, gen: unknown, draft: unknown, cropRect: unknown) => {
-    if (!isMainFrame(event) || tooBig(draft)) {
-      log("draft-rejected", { reason: "frame-or-size" });
-      return;
-    }
-    const result = state.acceptDraft(gen as number, (draft ?? {}) as Record<string, unknown>);
-    log("draft", result);
-    if (!result.ok) {
-      pushState();
-      return;
-    }
+  const capture = async (gen: unknown, pinId: string, cropRect: unknown) => {
     // The guest is a webview, so read its own viewport from an isolated world the page cannot patch.
     const [vw, vh] = (await wc.executeJavaScriptInIsolatedWorld(999, [
       { code: "[window.innerWidth, window.innerHeight]" },
@@ -137,10 +130,10 @@ export const registerCreatorSpike = (wc: WebContents, tabId: string): void => {
             image.getSize().width > SPIKE_LIMITS.maxShotLongEdge
               ? image.resize({ width: SPIKE_LIMITS.maxShotLongEdge })
               : image;
-          const shotPath = join(dir, "shots", `${result.value.id}.png`);
+          const shotPath = join(dir, "shots", `${pinId}.png`);
           writeFileSync(shotPath, resized.toPNG());
-          state.setShot(result.value.id, shotPath);
-          log("shot", { pinId: result.value.id, shotPath, size: resized.getSize(), cropRect });
+          state.setShot(pinId, shotPath);
+          log("shot", { pinId: pinId, shotPath, size: resized.getSize(), cropRect });
         }
       } finally {
         capturing = false;
@@ -148,8 +141,37 @@ export const registerCreatorSpike = (wc: WebContents, tabId: string): void => {
     } else {
       log("shot-skipped", { capturing, cropRect, viewport });
     }
+  };
+
+  wc.ipc.on(CREATOR_SPIKE_DRAFT, async (event, gen: unknown, draft: unknown, cropRect: unknown) => {
+    if (!isMainFrame(event) || tooBig(draft)) {
+      log("draft-rejected", { reason: "frame-or-size" });
+      return;
+    }
+    const result = state.acceptDraft(gen as number, (draft ?? {}) as Record<string, unknown>);
+    log("draft", result);
+    if (!result.ok) {
+      pushState();
+      return;
+    }
+    await capture(gen, result.value.id, cropRect);
     pushState();
   });
+
+  wc.ipc.on(
+    CREATOR_SPIKE_LOCATE,
+    async (event, gen: unknown, pinId: unknown, place: unknown, cropRect: unknown) => {
+      if (!isMainFrame(event) || tooBig(place)) return;
+      const result = state.setLocation(
+        gen as number,
+        String(pinId),
+        (place ?? {}) as Record<string, unknown>,
+      );
+      log("locate", result);
+      if (result.ok) await capture(gen, result.value.id, cropRect);
+      pushState();
+    },
+  );
 
   wc.ipc.on(CREATOR_SPIKE_UPDATE, (event, gen: unknown, pinId: unknown, comment: unknown) => {
     if (!isMainFrame(event)) return;

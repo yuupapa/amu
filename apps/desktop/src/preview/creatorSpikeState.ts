@@ -8,8 +8,8 @@ export type Pin = {
   id: string;
   number: number;
   timeSec: number;
-  x: number;
-  y: number;
+  x: number | null;
+  y: number | null;
   compositionFile: string | null;
   elementSelector: string | null;
   comment: string;
@@ -65,7 +65,8 @@ export const createSpikeState = (now: () => number) => {
       if (typeof timeSec !== "number" || !Number.isFinite(timeSec) || timeSec < 0) {
         return fail("bad-time");
       }
-      if (!finite01(x) || !finite01(y)) return fail("bad-point");
+      const noPlace = x === null && y === null;
+      if (!noPlace && (!finite01(x) || !finite01(y))) return fail("bad-point");
       if (!shortText(compositionFile ?? null) || !shortText(elementSelector ?? null)) {
         return fail("bad-label");
       }
@@ -77,8 +78,8 @@ export const createSpikeState = (now: () => number) => {
         id: randomUUID(),
         number: nextNumber++,
         timeSec,
-        x,
-        y,
+        x: noPlace ? null : (x as number),
+        y: noPlace ? null : (y as number),
         compositionFile: (compositionFile as string | null | undefined) ?? null,
         elementSelector: (elementSelector as string | null | undefined) ?? null,
         comment,
@@ -88,6 +89,27 @@ export const createSpikeState = (now: () => number) => {
       };
       pins.set(pin.id, pin);
       return { ok: true, value: pin };
+    },
+    setLocation: (gen: number, pinId: string, place: Record<string, unknown>): Result<Pin> => {
+      if (gen !== generation) return fail("stale-generation");
+      const pin = pins.get(pinId);
+      if (!pin) return fail("no-pin");
+      const { x, y, compositionFile, elementSelector } = place;
+      if (!finite01(x) || !finite01(y)) return fail("bad-point");
+      if (!shortText(compositionFile ?? null) || !shortText(elementSelector ?? null)) {
+        return fail("bad-label");
+      }
+      const next: Pin = {
+        ...pin,
+        x,
+        y,
+        compositionFile: (compositionFile as string | null | undefined) ?? null,
+        elementSelector: (elementSelector as string | null | undefined) ?? null,
+        revision: pin.revision + 1,
+        status: pin.status === "sent" ? "sent" : "draft",
+      };
+      pins.set(pinId, next);
+      return { ok: true, value: next };
     },
     setShot: (pinId: string, shotPath: string): void => {
       const pin = pins.get(pinId);
