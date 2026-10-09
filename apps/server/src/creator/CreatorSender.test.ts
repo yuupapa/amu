@@ -30,6 +30,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { createDeterministicAttachmentId } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -49,6 +50,8 @@ const destination: CreatorDestination = {
   threadId: ThreadId.make("thread-1"),
 };
 const PROJECT = CreatorService.creatorProjectIdOf("/work/shinbashira");
+/** Automatic resends of one proposal are at least this far apart. */
+const RESEND_PAUSE = "30 seconds";
 
 const place: CreatorPlace = {
   x: 0.7,
@@ -85,6 +88,8 @@ interface World {
   archived: boolean;
   receiptQueryFails: boolean;
   threadQueryFails: boolean;
+  /** Runs once, inside the next thread read. */
+  onThreadRead: Effect.Effect<void> | null;
   behavior: SendBehavior;
 }
 
@@ -175,6 +180,7 @@ const makeWorld = (): World => ({
   archived: false,
   receiptQueryFails: false,
   threadQueryFails: false,
+  onThreadRead: null,
   behavior: accept,
 });
 
@@ -182,28 +188,36 @@ const getProjectThreadRecords =
   (world: World): ThreadManagement.ThreadManagementServiceShape["getProjectThreadRecords"] =>
   (input, _fields, filter) =>
     Effect.suspend(() => {
-      if (world.threadQueryFails) {
-        return Effect.fail(
-          new ThreadManagement.ThreadManagementProjectionLoadError({
-            projectId: input.projectId,
-            threadId: input.threadId,
-            cause: "projection read failed",
-          }),
-        );
-      }
-      const messages = [...world.messages.values()].filter(
-        (message) => filter?.messageIds === undefined || filter.messageIds.includes(message.id),
-      );
-      return Effect.succeed({
-        thread: {
-          id: input.threadId,
-          projectId: input.projectId,
-          archivedAt: world.archived ? NOW : null,
-          deletedAt: null,
-        },
-        messages,
-      } as never);
-    });
+      const hook = world.onThreadRead;
+      world.onThreadRead = null;
+      return hook ?? Effect.void;
+    }).pipe(
+      Effect.andThen(
+        Effect.suspend(() => {
+          if (world.threadQueryFails) {
+            return Effect.fail(
+              new ThreadManagement.ThreadManagementProjectionLoadError({
+                projectId: input.projectId,
+                threadId: input.threadId,
+                cause: "projection read failed",
+              }),
+            );
+          }
+          const messages = [...world.messages.values()].filter(
+            (message) => filter?.messageIds === undefined || filter.messageIds.includes(message.id),
+          );
+          return Effect.succeed({
+            thread: {
+              id: input.threadId,
+              projectId: input.projectId,
+              archivedAt: world.archived ? NOW : null,
+              deletedAt: null,
+            },
+            messages,
+          } as never);
+        }),
+      ),
+    );
 
 const layerWorld = (world: World) =>
   Layer.mergeAll(
@@ -225,8 +239,36 @@ const layerWorld = (world: World) =>
     }),
   );
 
+/** A command-readiness gate the test opens and closes. */
+const makeGate = Effect.gen(function* () {
+  const opened = yield* Deferred.make<void>();
+  const blocked = yield* Deferred.make<void>();
+  const state = { open: true };
+  return {
+    gate: Effect.suspend(() =>
+      state.open
+        ? Effect.void
+        : Deferred.succeed(blocked, undefined).pipe(Effect.andThen(Deferred.await(opened))),
+    ),
+    close: Effect.sync(() => {
+      state.open = false;
+    }),
+    open: Effect.sync(() => {
+      state.open = true;
+    }).pipe(Effect.andThen(Deferred.succeed(opened, undefined))),
+    /** Completes once a caller is waiting at the closed gate. */
+    blocked: Deferred.await(blocked),
+  };
+});
+
 /** One state dir and one destination thread; `start` builds a server lifetime over them. */
-const harness = (options: { readonly enabled?: boolean } = {}) =>
+const harness = (
+  options: {
+    readonly enabled?: boolean;
+    /** Stands in for the server's command-readiness gate. */
+    readonly commandGate?: Effect.Effect<void>;
+  } = {},
+) =>
   Effect.gen(function* () {
     const configContext = yield* Layer.build(
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-creator-sender-" }),
@@ -240,8 +282,20 @@ const harness = (options: { readonly enabled?: boolean } = {}) =>
       amuCreatorEnabled: options.enabled ?? true,
     });
     const changes = yield* PubSub.unbounded<ServerSettings>();
+    // A hook runs right after the given settings read (counted from when it is set).
+    let reads = 0;
+    const readHooks: Array<{ readonly at: number; readonly run: Effect.Effect<void> }> = [];
+    const onSettingsRead = (count: number, run: Effect.Effect<void>) =>
+      Effect.sync(() => {
+        readHooks.push({ at: reads + count, run });
+      });
     const settingsLayer = Layer.mock(ServerSettingsService)({
-      getSettings: Ref.get(settingsRef),
+      getSettings: Effect.gen(function* () {
+        const current = yield* Ref.get(settingsRef);
+        reads += 1;
+        for (const hook of readHooks.filter((entry) => entry.at === reads)) yield* hook.run;
+        return current;
+      }),
       streamChanges: Stream.fromPubSub(changes),
       subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
     });
@@ -249,11 +303,14 @@ const harness = (options: { readonly enabled?: boolean } = {}) =>
       Ref.updateAndGet(settingsRef, (settings) => ({
         ...settings,
         amuCreatorEnabled: enabled,
-      })).pipe(Effect.flatMap((settings) => PubSub.publish(changes, settings)));
+      })).pipe(
+        Effect.flatMap((settings) => PubSub.publish(changes, settings)),
+        Effect.asVoid,
+      );
     const world = makeWorld();
     const start = Effect.gen(function* () {
       const context = yield* Layer.build(
-        CreatorSender.layerWithoutStartupGate.pipe(
+        CreatorSender.layerTest(options.commandGate ?? Effect.void).pipe(
           Layer.provideMerge(CreatorService.layer),
           Layer.provide(
             Layer.mergeAll(
@@ -292,7 +349,7 @@ const harness = (options: { readonly enabled?: boolean } = {}) =>
           ),
         ) as CreatorStoreFile,
     );
-    return { config, world, setEnabled, start, storeFile };
+    return { config, world, setEnabled, onSettingsRead, start, storeFile };
   });
 
 type Instance =
@@ -476,6 +533,7 @@ it.layer(NodeServices.layer)("CreatorSender", (it) => {
       yield* confirm(first, binding, yield* proposal(first, binding));
       expect(world.calls).toHaveLength(1);
 
+      yield* TestClock.adjust(RESEND_PAUSE);
       world.behavior = accept;
       const second = yield* start;
       yield* second.sender.startupDone;
@@ -645,6 +703,7 @@ it.layer(NodeServices.layer)("CreatorSender", (it) => {
       const binding = yield* instance.open;
       const created = yield* proposal(instance, binding);
       yield* confirm(instance, binding, created);
+      yield* TestClock.adjust(RESEND_PAUSE);
       world.receiptQueryFails = true;
       const result = yield* instance.sender.haltSend({ ...binding, proposalId: created.id });
       expect(result.state).toBe("halted");
@@ -670,21 +729,25 @@ it.layer(NodeServices.layer)("CreatorSender", (it) => {
       const first = yield* start;
       const binding = yield* first.open;
       yield* confirm(first, binding, yield* proposal(first, binding));
+      yield* TestClock.adjust(RESEND_PAUSE);
       yield* first.sender.reconcile(PROJECT);
       expect(world.calls).toHaveLength(2);
       expect((yield* storeFile).proposals[0]!.send).toMatchObject({ attempts: 1 });
 
+      yield* TestClock.adjust(RESEND_PAUSE);
       const second = yield* start;
       yield* second.sender.startupDone;
       expect((yield* storeFile).proposals[0]!.send).toMatchObject({
         attempts: 2,
         state: "sending",
       });
+      yield* TestClock.adjust(RESEND_PAUSE);
       yield* second.sender.reconcile(PROJECT);
       expect((yield* storeFile).proposals[0]!.send).toMatchObject({
         attempts: 3,
         state: "stuck",
       });
+      yield* TestClock.adjust(RESEND_PAUSE);
       yield* second.sender.reconcile(PROJECT);
       expect(world.calls).toHaveLength(4);
     }).pipe(Effect.scoped),
@@ -698,6 +761,7 @@ it.layer(NodeServices.layer)("CreatorSender", (it) => {
       const binding = yield* instance.open;
       const created = yield* proposal(instance, binding);
       yield* confirm(instance, binding, created);
+      yield* TestClock.adjust(RESEND_PAUSE);
       yield* setEnabled(false);
       yield* instance.sender.reconcile(PROJECT);
       expect(world.calls).toHaveLength(1);
@@ -719,6 +783,7 @@ it.layer(NodeServices.layer)("CreatorSender", (it) => {
       const binding = yield* instance.open;
       yield* confirm(instance, binding, yield* proposal(instance, binding));
       world.behavior = accept;
+      yield* TestClock.adjust(RESEND_PAUSE);
       yield* instance.sender.reconcileOpen;
       expect(yield* statuses(instance, binding)).toEqual(["sent"]);
       yield* instance.sender.reconcileOpen;
@@ -744,6 +809,150 @@ it.layer(NodeServices.layer)("CreatorSender", (it) => {
       expect(
         yield* confirm(instance, { bindingId: binding.bindingId, epoch: 2 }, created),
       ).toMatchObject({ state: "accepted" });
+    }).pipe(Effect.scoped),
+  );
+  it.effect("a setting turned off during confirmation stops the dispatch", () =>
+    Effect.gen(function* () {
+      const { world, start, setEnabled } = yield* harness();
+      const instance = yield* start;
+      const binding = yield* instance.open;
+      const created = yield* proposal(instance, binding);
+      // Turned off while confirmSend reads the destination thread, after its admission.
+      world.onThreadRead = setEnabled(false);
+      expect(yield* confirm(instance, binding, created)).toMatchObject({ state: "sending" });
+      expect(world.calls).toHaveLength(0);
+      yield* setEnabled(true);
+      yield* TestClock.adjust(RESEND_PAUSE);
+      yield* instance.sender.reconcile(PROJECT);
+      expect(world.calls).toHaveLength(1);
+      const reopened = yield* instance.open;
+      expect(yield* statuses(instance, reopened)).toEqual(["sent"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a setting turned off during a reconcile pass stops the resend", () =>
+    Effect.gen(function* () {
+      const { world, start, setEnabled, storeFile } = yield* harness();
+      world.behavior = lostBeforeCommit;
+      const instance = yield* start;
+      const binding = yield* instance.open;
+      yield* confirm(instance, binding, yield* proposal(instance, binding));
+      yield* TestClock.adjust(RESEND_PAUSE);
+      // The pass starts with the setting on; it goes off while the thread is read.
+      world.onThreadRead = setEnabled(false);
+      yield* instance.sender.reconcile(PROJECT);
+      expect(world.calls).toHaveLength(1);
+      expect((yield* storeFile).proposals[0]!.send).toMatchObject({ attempts: 0 });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a confirmed send waits for the server to accept commands", () =>
+    Effect.gen(function* () {
+      const gate = yield* makeGate;
+      const { world, start } = yield* harness({ commandGate: gate.gate });
+      const instance = yield* start;
+      yield* instance.sender.startupDone;
+      const binding = yield* instance.open;
+      const created = yield* proposal(instance, binding);
+      yield* gate.close;
+      const fiber = yield* confirm(instance, binding, created).pipe(Effect.forkScoped);
+      yield* gate.blocked;
+      expect(world.calls).toHaveLength(0);
+      yield* gate.open;
+      expect(yield* Fiber.join(fiber)).toMatchObject({ state: "accepted" });
+      expect(world.calls).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a resend waits for the server to accept commands", () =>
+    Effect.gen(function* () {
+      const gate = yield* makeGate;
+      const { world, start } = yield* harness({ commandGate: gate.gate });
+      world.behavior = lostBeforeCommit;
+      const instance = yield* start;
+      yield* instance.sender.startupDone;
+      const binding = yield* instance.open;
+      yield* confirm(instance, binding, yield* proposal(instance, binding));
+      world.behavior = accept;
+      yield* TestClock.adjust(RESEND_PAUSE);
+      yield* gate.close;
+      const fiber = yield* instance.sender.reconcile(PROJECT).pipe(Effect.forkScoped);
+      yield* gate.blocked;
+      expect(world.calls).toHaveLength(1);
+      yield* gate.open;
+      yield* Fiber.join(fiber);
+      expect(world.calls).toHaveLength(2);
+      expect(yield* statuses(instance, binding)).toEqual(["sent"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a revoke that lands after confirmSend was admitted does not cancel it", () =>
+    Effect.gen(function* () {
+      const { world, start, onSettingsRead } = yield* harness();
+      const instance = yield* start;
+      yield* instance.sender.startupDone;
+      const binding = yield* instance.open;
+      const created = yield* proposal(instance, binding);
+      // Read 1 admits the call; read 2 starts the pre-send reconcile. The revoke lands there.
+      yield* onSettingsRead(
+        2,
+        instance.service
+          .setEpoch({ bindingId: binding.bindingId, epoch: 2, generation: null })
+          .pipe(Effect.asVoid, Effect.orDie),
+      );
+      expect(yield* confirm(instance, binding, created)).toMatchObject({ state: "accepted" });
+      expect(world.calls).toHaveLength(1);
+      // A confirmSend that arrives after the revoke is refused.
+      expect(yield* Effect.flip(confirm(instance, binding, created))).toMatchObject(
+        opError("stale_epoch"),
+      );
+      expect(world.calls).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a halt between beginSend and dispatch is settled by the periodic pass", () =>
+    Effect.gen(function* () {
+      const gate = yield* makeGate;
+      const { world, start } = yield* harness({ commandGate: gate.gate });
+      const instance = yield* start;
+      yield* instance.sender.startupDone;
+      const binding = yield* instance.open;
+      const created = yield* proposal(instance, binding);
+      yield* gate.close;
+      const fiber = yield* confirm(instance, binding, created).pipe(Effect.forkScoped);
+      // The record is pinned; the dispatch waits at the gate.
+      yield* gate.blocked;
+      expect(yield* instance.sender.haltSend({ ...binding, proposalId: created.id })).toMatchObject(
+        { state: "halted" },
+      );
+      yield* gate.open;
+      expect(yield* Fiber.join(fiber)).toMatchObject({ state: "halted" });
+      expect(world.calls).toHaveLength(0);
+      yield* instance.sender.reconcileOpen;
+      expect(yield* statuses(instance, binding)).toEqual(["draft"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("automatic resends of one proposal are at least 30 seconds apart", () =>
+    Effect.gen(function* () {
+      const { world, start, storeFile } = yield* harness();
+      world.behavior = lostBeforeCommit;
+      const instance = yield* start;
+      const binding = yield* instance.open;
+      yield* confirm(instance, binding, yield* proposal(instance, binding));
+      // A storm of triggers right after the send resends nothing.
+      for (let index = 0; index < 3; index += 1) {
+        yield* instance.sender.reconcile(PROJECT);
+        yield* instance.sender.reconcileOpen;
+      }
+      yield* TestClock.adjust("29 seconds");
+      yield* instance.sender.reconcile(PROJECT);
+      expect(world.calls).toHaveLength(1);
+      yield* TestClock.adjust("1 second");
+      yield* instance.sender.reconcile(PROJECT);
+      yield* instance.sender.reconcile(PROJECT);
+      expect(world.calls).toHaveLength(2);
+      expect((yield* storeFile).proposals[0]!.send).toMatchObject({ attempts: 1 });
     }).pipe(Effect.scoped),
   );
 });

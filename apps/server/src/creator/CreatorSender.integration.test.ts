@@ -22,6 +22,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -123,7 +124,7 @@ const harness = Effect.gen(function* () {
   };
   const context = yield* Layer.build(
     Layer.mergeAll(
-      CreatorSender.layerWithoutStartupGate.pipe(
+      CreatorSender.layerTest(Effect.void).pipe(
         Layer.provideMerge(CreatorService.layer),
         Layer.provide(
           Layer.mergeAll(
@@ -231,6 +232,8 @@ it.layer(NodeServices.layer)("CreatorSender with the real orchestrator", (it) =>
       expect(yield* statuses).toEqual(["sending"]);
 
       faults.before = Effect.void;
+      // Automatic resends of one proposal are at least 30 seconds apart.
+      yield* TestClock.adjust("30 seconds");
       yield* sender.reconcile(PROJECT);
       const after = yield* landed;
       expect(after.receipt).toBe("accepted");

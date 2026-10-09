@@ -433,6 +433,17 @@ describe("creatorState", () => {
     expect(s.comments[0]!.status).toBe("sent");
   });
 
+  it("markAttempt stamps the attempt time when given a clock", () => {
+    const d = draft();
+    const p = prop(d.state, [d.value.id], 3_000);
+    const sending = ok(send(p.state, p.value, 3_100)).state;
+    const counted = ok(markAttempt(sending, { proposalId: p.value.id }, ctx(40_000)));
+    expect(counted.state.proposals[0]!.send).toMatchObject({
+      attempts: 1,
+      attemptedAt: at(40_000).toISOString(),
+    });
+  });
+
   it("noteSendReason changes only the reason of a started send", () => {
     const d = draft();
     const p = prop(d.state, [d.value.id], 3_000);

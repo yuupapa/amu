@@ -17,6 +17,10 @@
  * releasing the reservation happens under the proposal lock, and only when
  * nothing is in flight, no receipt exists and the thread has no message with
  * the id. A failed or timed-out query counts as "not proven".
+ *
+ * Every dispatch waits for the server's command-readiness gate and re-reads the
+ * setting just before it goes out; automatic resends of one proposal are at
+ * least 30 s apart (`attemptedAt`), however many triggers fire.
  */
 import {
   ChatAttachmentId,
@@ -75,6 +79,8 @@ import {
 const QUERY_TIMEOUT = Duration.seconds(10);
 /** How often open sends are reconciled while any exist. */
 const POLL_INTERVAL = Duration.seconds(30);
+/** Automatic resends of one proposal are at least this far apart, however often reconcile runs. */
+const RESEND_PAUSE_MS = 30_000;
 const PROJECT_DIR = /^[a-f0-9]{32}$/;
 
 // Failures that prove the message was not accepted. The first three are raised
@@ -187,7 +193,14 @@ const attempt = <A, E, R>(
     }),
   );
 
-const make = (ready: Effect.Effect<void, ServerRuntimeStartup.ServerRuntimeStartupError>) =>
+interface SenderOptions {
+  /** Completes once the server accepts commands; every dispatch waits for it. */
+  readonly commandGate: Effect.Effect<void, ServerRuntimeStartup.ServerRuntimeStartupError>;
+  /** Interval of the periodic pass; null runs none (tests drive `reconcileOpen`). */
+  readonly pollInterval: Duration.Duration | null;
+}
+
+const make = ({ commandGate, pollInterval }: SenderOptions) =>
   Effect.gen(function* () {
     const creator = yield* CreatorService.CreatorService;
     const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
@@ -483,13 +496,29 @@ const make = (ready: Effect.Effect<void, ServerRuntimeStartup.ServerRuntimeStart
     ) =>
       Effect.gen(function* () {
         const proposalId = proposal.id;
-        const started = yield* Effect.sync(() => {
-          if (haltRequested(proposalId)) return false;
-          inFlight.add(proposalId);
-          return true;
-        });
-        if (!started) return outcomeOf(yield* readState(projectId), proposalId);
+        // Registered first: whatever returns early below (a halt, the setting, the
+        // gate) leaves an open record that the periodic pass must settle.
         openProjects.add(projectId);
+        // Same readiness gate as the other WebSocket commands. While it waits, the
+        // record stays `sending`; a failed startup leaves it for a later reconcile.
+        const ready = yield* commandGate.pipe(
+          Effect.as(true),
+          Effect.catch((error) =>
+            Effect.logWarning("Amu Creator send waits: commands not ready", { error }).pipe(
+              Effect.as(false),
+            ),
+          ),
+        );
+        // The setting may have gone off since this send or pass was admitted.
+        const allowed = ready && (yield* creatorEnabled);
+        const started =
+          allowed &&
+          (yield* Effect.sync(() => {
+            if (haltRequested(proposalId)) return false;
+            inFlight.add(proposalId);
+            return true;
+          }));
+        if (!started) return outcomeOf(yield* readState(projectId), proposalId);
         const exit = yield* ThreadMessageIntake.sendToThread({
           projectId: proposal.destination.projectId,
           threadId: proposal.destination.threadId,
@@ -569,10 +598,20 @@ const make = (ready: Effect.Effect<void, ServerRuntimeStartup.ServerRuntimeStart
           yield* settleAccepted(projectId, proposalId, send, thread.message);
           return;
         }
-        const counted = yield* apply(projectId, (current) =>
-          haltRequested(proposalId)
-            ? { ok: false, reason: "not_sending" }
-            : markAttempt(current, { proposalId }),
+        // Counted under the project lock, with the setting, a halt and the pause
+        // since the last attempt checked at that moment.
+        const counted = yield* creator.withProjectState(projectId, (current, ctx) =>
+          creatorEnabled.pipe(
+            Effect.map((enabled) => {
+              const last = Date.parse(findProposal(current, proposalId)?.send?.attemptedAt ?? "");
+              const due = !(ctx.now.getTime() - last < RESEND_PAUSE_MS);
+              const result: StateResult<CreatorProposal> =
+                enabled && due && !haltRequested(proposalId)
+                  ? markAttempt(current, { proposalId }, ctx)
+                  : { ok: false, reason: "not_sending" };
+              return { next: result.ok ? result.state : null, value: result };
+            }),
+          ),
         );
         if (!counted.ok) return;
         yield* restoreAttachments(projectId, counted.value, send);
@@ -645,20 +684,25 @@ const make = (ready: Effect.Effect<void, ServerRuntimeStartup.ServerRuntimeStart
     const confirmSend: CreatorSender["Service"]["confirmSend"] = Effect.fn(
       "CreatorSender.confirmSend",
     )(function* (input) {
+      // Authority (binding, epoch, generation, proposal owner) is decided once, at
+      // admission: a revoke that lands after this does not cancel an approved send
+      // (plan H). The setting is checked again right before the dispatch.
       const binding = yield* authorize(input);
       const projectId = binding.projectId;
+      const admitted = findProposal(yield* readState(projectId), input.proposalId);
+      if (admitted === undefined) {
+        return yield* Effect.fail(operationError("not_found", "proposal"));
+      }
+      if (admitted.bindingId !== binding.bindingId) {
+        return yield* Effect.fail(operationError("unauthorized", "other_binding"));
+      }
       yield* reconcile(projectId);
       return yield* lockOf(input.proposalId).withPermits(1)(
         Effect.gen(function* () {
-          // A revoke or a newer epoch may have landed while this waited.
-          yield* authorize(input);
           const state = yield* readState(projectId);
           const proposal = findProposal(state, input.proposalId);
           if (proposal === undefined) {
             return yield* Effect.fail(operationError("not_found", "proposal"));
-          }
-          if (proposal.bindingId !== binding.bindingId) {
-            return yield* Effect.fail(operationError("unauthorized", "other_binding"));
           }
           if (proposal.send !== null) {
             return yield* Effect.fail(operationError("conflict", "already_sending"));
@@ -743,18 +787,20 @@ const make = (ready: Effect.Effect<void, ServerRuntimeStartup.ServerRuntimeStart
       );
 
     const startup = yield* Deferred.make<void>();
-    yield* ready.pipe(
+    yield* commandGate.pipe(
       Effect.andThen(storedProjects),
       Effect.flatMap((projectIds) => Effect.forEach(projectIds, reconcile, { discard: true })),
       logFailure("Amu Creator startup reconcile failed", {}),
       Effect.ensuring(Deferred.succeed(startup, undefined)),
       Effect.forkIn(scope),
     );
-    yield* Effect.sleep(POLL_INTERVAL).pipe(
-      Effect.andThen(reconcileOpen),
-      Effect.forever,
-      Effect.forkIn(scope),
-    );
+    if (pollInterval !== null) {
+      yield* Effect.sleep(pollInterval).pipe(
+        Effect.andThen(reconcileOpen),
+        Effect.forever,
+        Effect.forkIn(scope),
+      );
+    }
 
     return CreatorSender.of({
       confirmSend,
@@ -771,9 +817,14 @@ export const layer = Layer.effect(
   CreatorSender,
   Effect.gen(function* () {
     const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-    return yield* make(startup.awaitCommandReady);
+    return yield* make({
+      commandGate: startup.awaitCommandReady,
+      pollInterval: POLL_INTERVAL,
+    });
   }),
 ).pipe(Layer.provide(CommandReceiptStore.layerFromApplicationReceipts));
 
-/** For tests: the startup reconcile runs at once and receipts come from the context. */
-export const layerWithoutStartupGate = Layer.effect(CreatorSender, make(Effect.void));
+/** For tests: the given readiness gate, no periodic pass, receipts from the context. */
+export const layerTest = (
+  commandGate: Effect.Effect<void, ServerRuntimeStartup.ServerRuntimeStartupError>,
+) => Layer.effect(CreatorSender, make({ commandGate, pollInterval: null }));

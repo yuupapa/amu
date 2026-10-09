@@ -597,11 +597,14 @@ const updateSend = (
   );
 };
 
-/** One more resend attempt; the third makes the send `stuck`. Only a `sending` send counts. */
+/**
+ * One more resend attempt; the third makes the send `stuck`. Only a `sending` send
+ * counts. With a clock, `attemptedAt` becomes the time of this attempt.
+ */
 export const markAttempt = (
   state: CreatorStoreFile,
   input: { readonly proposalId: CreatorProposalId },
-  _ctx?: CreatorStateContext,
+  ctx?: CreatorStateContext,
 ): StateResult<CreatorProposal> =>
   updateSend(state, input.proposalId, (send) => {
     if (send.state !== "sending") return "not_sending";
@@ -609,6 +612,7 @@ export const markAttempt = (
     return {
       ...send,
       attempts,
+      attemptedAt: ctx === undefined ? send.attemptedAt : iso(ctx),
       state: attempts >= CREATOR_MAX_SEND_ATTEMPTS ? "stuck" : "sending",
     };
   });
