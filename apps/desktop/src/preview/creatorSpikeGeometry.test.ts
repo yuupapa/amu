@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   SPIKE_LIMITS,
+  clampToViewport,
   isUsableRect,
   normalizePoint,
   pinCropRect,
@@ -74,5 +75,21 @@ it("exposes the spec limits", () => {
     maxLabel: 200,
     maxPinsPerProposal: 30,
     maxShotLongEdge: 1280,
+  });
+});
+
+describe("clampToViewport", () => {
+  const viewport = { width: 1100, height: 688 };
+  it("keeps the visible part of a crop that runs past the bottom edge", () => {
+    expect(clampToViewport({ x: 15, y: 330, width: 730, height: 410 }, viewport)).toEqual({
+      x: 15,
+      y: 330,
+      width: 730,
+      height: 358,
+    });
+  });
+  it("returns null when nothing of the crop is visible or the input is not a rect", () => {
+    expect(clampToViewport({ x: 1200, y: 0, width: 50, height: 50 }, viewport)).toBeNull();
+    expect(clampToViewport({ x: "a", y: 0, width: 50, height: 50 }, viewport)).toBeNull();
   });
 });

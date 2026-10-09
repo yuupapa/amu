@@ -22,13 +22,23 @@ let generation = 0;
 let pinMode = false;
 let pins: SpikePin[] = [];
 
+type Player = HTMLElement & { currentTime?: number; pause?: () => void };
+const player = (): Player | null => document.querySelector<Player>("hyperframes-player");
+// Studio renders the composition inside <hyperframes-player>'s shadow root.
 const previewIframe = (): HTMLIFrameElement | null =>
-  document.querySelector<HTMLIFrameElement>('iframe[title="HyperFrames Composition"]');
+  player()?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe") ?? null;
 
 /** Tries each candidate in order; Task 5 records which one answered. */
+let lastTimeSource = "none";
 const probeTime = (): number | null => {
+  const fromPlayer = player()?.currentTime;
+  if (typeof fromPlayer === "number" && Number.isFinite(fromPlayer)) {
+    lastTimeSource = "player.currentTime";
+    return fromPlayer;
+  }
   const w = previewIframe()?.contentWindow as (Window & Record<string, unknown>) | null | undefined;
   if (!w) return null;
+  lastTimeSource = "__timelines.main";
   const timelines = w["__timelines"] as Record<string, { time?: () => number }> | undefined;
   const main = timelines?.["main"]?.time?.();
   if (typeof main === "number" && Number.isFinite(main)) return main;
@@ -58,15 +68,16 @@ const elementAt = (nx: number, ny: number) => {
   const r = root.getBoundingClientRect();
   let el = doc.elementFromPoint(r.x + nx * r.width, r.y + ny * r.height) as HTMLElement | null;
   while (el && !el.id) el = el.parentElement;
-  const host = el?.closest<HTMLElement>("[data-composition-src]");
+  // The assembled preview keeps the source file on the scene host as data-composition-file.
+  const host = el?.closest<HTMLElement>("[data-composition-file]");
   return {
-    compositionFile: host?.getAttribute("data-composition-src")?.slice(0, 200) ?? null,
+    compositionFile: host?.getAttribute("data-composition-file")?.slice(0, 200) ?? null,
     elementSelector: el?.id ? `#${el.id}`.slice(0, 200) : null,
   };
 };
 
 const pausePlayback = () => {
-  document.querySelector<HTMLButtonElement>('button[aria-label="Pause"]')?.click();
+  player()?.pause?.();
 };
 const nextFrames = (n: number) =>
   new Promise<void>((resolve) => {
@@ -152,9 +163,22 @@ const placePin = async (event: MouseEvent, pageX: number, pageY: number) => {
   }, 300);
 };
 
+// Studio selects elements on pointerdown, so in pin mode swallow the whole
+// press sequence over the composition before Studio sees it.
+const swallowOverComposition = (e: MouseEvent) => {
+  if (!pinMode || panel.contains(e.target as Node)) return;
+  const comp = compRectInPage();
+  if (comp && normalizePoint(comp, e.clientX, e.clientY)) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+};
+for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "dblclick"]) {
+  window.addEventListener(type, swallowOverComposition as EventListener, true);
+}
 // Studio may put its own canvas layer above the iframe (clicks land in the top
 // document) or let clicks reach the iframe (they land in the iframe document).
-document.addEventListener("click", (e) => void placePin(e, e.clientX, e.clientY), true);
+window.addEventListener("click", (e) => void placePin(e, e.clientX, e.clientY), true);
 const hookIframe = () => {
   const iframe = previewIframe();
   const doc = iframe?.contentDocument as (Document & Record<string, unknown>) | null | undefined;
@@ -186,5 +210,6 @@ ipcRenderer.on(CREATOR_SPIKE_STATE, (_e, payload: { generation: number; pins: Sp
 
 (window as unknown as Record<string, unknown>)["__amuCreatorSpike"] = {
   probeTime,
+  timeSource: () => lastTimeSource,
   generation: () => generation,
 };

@@ -61,3 +61,19 @@ export const isUsableRect = (
     r.x >= 0 && r.y >= 0 && r.x + r.width <= viewport.width && r.y + r.height <= viewport.height
   );
 };
+
+/** Intersects a crop with the visible viewport; null when nothing is visible. */
+export const clampToViewport = (
+  rect: Record<string, unknown>,
+  viewport: { width: number; height: number },
+): Rect | null => {
+  const { x, y, width, height } = rect;
+  if (![x, y, width, height].every((v) => typeof v === "number" && Number.isFinite(v))) return null;
+  const r = rect as Rect;
+  const left = Math.max(0, r.x);
+  const top = Math.max(0, r.y);
+  const right = Math.min(viewport.width, r.x + r.width);
+  const bottom = Math.min(viewport.height, r.y + r.height);
+  if (right <= left || bottom <= top) return null;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+};

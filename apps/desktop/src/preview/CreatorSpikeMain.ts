@@ -1,11 +1,11 @@
 // @effect-diagnostics globalDate:off nodeBuiltinImport:off - Throwaway stage-0 spike, gated by AMU_CREATOR_SPIKE=1.
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { dialog, type IpcMainEvent, type WebContents } from "electron";
+import { BrowserWindow, type IpcMainEvent, type WebContents } from "electron";
 
-import { SPIKE_LIMITS, isUsableRect } from "./creatorSpikeGeometry.ts";
+import { SPIKE_LIMITS, clampToViewport, isUsableRect } from "./creatorSpikeGeometry.ts";
 import {
   CREATOR_SPIKE_ACTIVATE,
   CREATOR_SPIKE_DRAFT,
@@ -17,6 +17,53 @@ import {
 import { createSpikeState } from "./creatorSpikeState.ts";
 
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1):\d+$/;
+
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/**
+ * Trusted confirmation owned by Amu's main process, outside the guest page.
+ * The stage-0 spike uses a small window instead of a native alert so it can be
+ * driven over CDP; the real feature shows this inside Amu's renderer.
+ */
+const confirmInAmuWindow = (
+  snapshot: ReadonlyArray<{
+    number: number;
+    timeSec: number;
+    comment: string;
+    shotPath: string | null;
+  }>,
+): Promise<"send" | "cancel"> =>
+  new Promise((resolve) => {
+    const rows = snapshot
+      .map((p) => {
+        const img = p.shotPath
+          ? `<img src="data:image/png;base64,${readFileSync(p.shotPath).toString("base64")}">`
+          : "<div class=noimg>画像なし</div>";
+        return `<li><b>#${p.number}</b> ${p.timeSec.toFixed(1)}秒<p>${escapeHtml(p.comment) || "（指示なし）"}</p>${img}</li>`;
+      })
+      .join("");
+    const html = `<!doctype html><meta charset=utf-8><title>Amu Creator 送信確認</title><style>body{font:14px system-ui;margin:16px}ul{padding:0;list-style:none}li{border-top:1px solid #ddd;padding:8px 0}img{max-width:100%;border-radius:6px}button{font-size:14px;padding:6px 14px;margin-right:8px}</style><h3>Amu Creator: ${snapshot.length} 件を送信しますか？（模擬）</h3><div><button id=send onclick="location.href='amu-confirm://send'">送信（模擬）</button><button id=cancel onclick="location.href='amu-confirm://cancel'">取り消し</button></div><ul>${rows}</ul>`;
+    const win = new BrowserWindow({
+      width: 560,
+      height: 640,
+      alwaysOnTop: true,
+      title: "Amu Creator 送信確認",
+      webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+    });
+    let settled = false;
+    const settle = (answer: "send" | "cancel") => {
+      if (settled) return;
+      settled = true;
+      resolve(answer);
+      if (!win.isDestroyed()) win.close();
+    };
+    win.webContents.on("will-navigate", (event, url) => {
+      event.preventDefault();
+      settle(url.startsWith("amu-confirm://send") ? "send" : "cancel");
+    });
+    win.on("closed", () => settle("cancel"));
+    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  });
 
 export const registerCreatorSpike = (wc: WebContents, tabId: string): void => {
   if (!creatorSpikeEnabled()) return;
@@ -67,6 +114,13 @@ export const registerCreatorSpike = (wc: WebContents, tabId: string): void => {
       { code: "[window.innerWidth, window.innerHeight]" },
     ])) as [number, number];
     const viewport = { width: vw, height: vh };
+    // Zoomed or partly scrolled previews can push the crop past the viewport;
+    // keep the visible part instead of dropping the shot.
+    const visible =
+      typeof cropRect === "object" && cropRect !== null
+        ? clampToViewport(cropRect as Record<string, unknown>, viewport)
+        : null;
+    cropRect = visible;
     if (!capturing && isUsableRect(cropRect, viewport, viewport.width * viewport.height)) {
       capturing = true;
       try {
@@ -109,20 +163,8 @@ export const registerCreatorSpike = (wc: WebContents, tabId: string): void => {
     log("propose", proposal);
     pushState();
     if (!proposal.ok) return;
-    const lines = proposal.value.snapshot.map(
-      (p) =>
-        `#${p.number} ${p.timeSec.toFixed(1)}s ${p.comment}${p.shotPath ? "" : "（画像なし）"}`,
-    );
-    const options = {
-      type: "question" as const,
-      buttons: ["送信（模擬）", "取り消し"],
-      defaultId: 1,
-      cancelId: 1,
-      message: `Amu Creator: ${proposal.value.snapshot.length} 件を送信しますか？`,
-      detail: lines.join("\n"),
-    };
-    const { response } = await dialog.showMessageBox(options);
-    if (response !== 0) {
+    const response = await confirmInAmuWindow(proposal.value.snapshot);
+    if (response !== "send") {
       log("proposal-cancelled", { id: proposal.value.id });
       return;
     }
