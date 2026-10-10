@@ -11,6 +11,7 @@ import {
 import { useThreadFind } from "./useThreadFind";
 import { orchestrationEnvironment } from "~/state/orchestration";
 import { requestThreadFindOpen } from "./threadFindActionBus";
+import { ChatPaneContext, SINGLE_CHAT_PANE } from "../ChatPaneContext";
 
 const queries = vi.hoisted(() => ({
   results: new Map<string, OrchestrationV2SearchThreadResult>(),
@@ -716,5 +717,55 @@ describe("V2 find state", () => {
       renderer?.update(<Probe environmentId={a} />);
     });
     expect(find.isOpen).toBe(false);
+  });
+});
+
+describe("split pane find requests", () => {
+  function PaneProbe({
+    focused,
+    onState,
+  }: {
+    focused: boolean;
+    onState: (state: ReturnType<typeof useThreadFind>) => void;
+  }) {
+    return (
+      <ChatPaneContext.Provider value={{ ...SINGLE_CHAT_PANE, isSplit: true, isFocused: focused }}>
+        <PaneFind onState={onState} />
+      </ChatPaneContext.Provider>
+    );
+  }
+  function PaneFind({ onState }: { onState: (state: ReturnType<typeof useThreadFind>) => void }) {
+    const state = useThreadFind({
+      thread: { environmentId: a, threadId },
+      enabled: true,
+      content: undefined,
+    });
+    useLayoutEffect(() => {
+      onState(state);
+    });
+    return null;
+  }
+
+  it("opens find only in the focused pane", async () => {
+    let focusedPane: ReturnType<typeof useThreadFind> | undefined;
+    let otherPane: ReturnType<typeof useThreadFind> | undefined;
+    const tree = (focusedFirst: boolean) => (
+      <>
+        <PaneProbe focused={focusedFirst} onState={(state) => (focusedPane = state)} />
+        <PaneProbe focused={!focusedFirst} onState={(state) => (otherPane = state)} />
+      </>
+    );
+    await act(async () => {
+      renderer = create(tree(true));
+    });
+    await act(async () => requestThreadFindOpen());
+    expect(focusedPane?.isOpen).toBe(true);
+    expect(otherPane?.isOpen).toBe(false);
+
+    await act(async () => focusedPane?.close());
+    await act(async () => renderer?.update(tree(false)));
+    await act(async () => requestThreadFindOpen());
+    expect(focusedPane?.isOpen).toBe(false);
+    expect(otherPane?.isOpen).toBe(true);
   });
 });

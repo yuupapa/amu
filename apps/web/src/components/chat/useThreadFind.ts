@@ -15,6 +15,7 @@ import {
   stepThreadFindIndex,
 } from "./threadFind";
 import { subscribeThreadFindOpen } from "./threadFindActionBus";
+import { useChatPane } from "../ChatPaneContext";
 import { toastManager } from "../ui/toast";
 
 const EMPTY_SKILLS: readonly InlineSkill[] = [];
@@ -92,7 +93,9 @@ export function useThreadFind({
     });
   }, [enabled, state.query, state.threadKey, threadKey]);
   const close = useCallback(() => setState(CLOSED_FIND), []);
-  useEffect(() => subscribeThreadFindOpen(open), [open]);
+  // Amu split panes: a command palette "Find" opens search only in the focused pane.
+  const paneFocused = useChatPane().isFocused;
+  useEffect(() => (paneFocused ? subscribeThreadFindOpen(open) : undefined), [open, paneFocused]);
 
   const remote = useServerResults(
     isOpen ? thread : null,

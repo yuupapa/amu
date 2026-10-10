@@ -8366,6 +8366,7 @@ export default function ChatView(props: ChatViewProps) {
     };
     const dismissFind = (event: KeyboardEvent) => {
       if (
+        !paneFocusedRef.current ||
         event.key !== "Escape" ||
         !isThreadFindActive ||
         event.defaultPrevented ||
@@ -8441,6 +8442,7 @@ export default function ChatView(props: ChatViewProps) {
   // A focused desktop browser page forwards these chords as menu actions.
   useEffect(() => {
     return window.desktopBridge?.onMenuAction((action) => {
+      if (!paneFocusedRef.current) return;
       if (action === "rightPanel.toggle") toggleRightPanel();
       else if (action === "rightPanel.toggleMaximized") toggleRightPanelMaximized();
     });
