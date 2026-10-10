@@ -445,6 +445,13 @@ export const CreatorHaltSendInput = Schema.Struct({
 });
 export type CreatorHaltSendInput = typeof CreatorHaltSendInput.Type;
 
+/** The user checked the thread after a `conflict` and accepts the send as done. */
+export const CreatorAcknowledgeConflictInput = Schema.Struct({
+  ...Binding,
+  proposalId: CreatorProposalId,
+});
+export type CreatorAcknowledgeConflictInput = typeof CreatorAcknowledgeConflictInput.Type;
+
 export const CreatorSendResult = Schema.Struct({
   proposalId: CreatorProposalId,
   state: CreatorSendState,

@@ -28,6 +28,7 @@ import {
   CreatorOperationError,
   MessageId,
   type ChatAttachment,
+  type CreatorAcknowledgeConflictInput,
   type CreatorBindingId,
   type CreatorConfirmSendInput,
   type CreatorDestination,
@@ -65,6 +66,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as CreatorService from "./CreatorService.ts";
 import { buildCreatorMessage } from "./creatorMessage.ts";
 import {
+  acknowledgeConflict as acknowledgeConflictState,
   beginSend,
   finishSend,
   markAttempt,
@@ -120,6 +122,10 @@ export class CreatorSender extends Context.Service<
     /** Stops resending at once; returns to draft only when the send provably did not land. */
     readonly haltSend: (
       input: CreatorHaltSendInput,
+    ) => Effect.Effect<CreatorSendResult, CreatorError>;
+    /** The user checked the thread after a `conflict`: finish it as sent. Only a conflict. */
+    readonly acknowledgeConflict: (
+      input: CreatorAcknowledgeConflictInput,
     ) => Effect.Effect<CreatorSendResult, CreatorError>;
     /** Settles every started send of the project; resends only while Creator is on. Never fails. */
     readonly reconcile: (projectId: CreatorProjectId) => Effect.Effect<void>;
@@ -779,6 +785,29 @@ const make = ({ commandGate, pollInterval }: SenderOptions) =>
       },
     );
 
+    const acknowledgeConflict: CreatorSender["Service"]["acknowledgeConflict"] = Effect.fn(
+      "CreatorSender.acknowledgeConflict",
+    )(function* (input) {
+      // Like haltSend, any live binding of the project may settle it; nothing is sent.
+      const binding = yield* authorize(input);
+      const projectId = binding.projectId;
+      return yield* lockOf(input.proposalId).withPermits(1)(
+        Effect.gen(function* () {
+          const state = yield* readState(projectId);
+          if (
+            findProposal(state, input.proposalId) === undefined &&
+            state.history.some((entry) => entry.id === input.proposalId)
+          ) {
+            return outcomeOf(state, input.proposalId);
+          }
+          yield* applyOrFail(projectId, (current, ctx) =>
+            acknowledgeConflictState(current, { proposalId: input.proposalId }, ctx),
+          );
+          return outcomeOf(yield* readState(projectId), input.proposalId);
+        }),
+      );
+    });
+
     const reconcileInBackground: CreatorSender["Service"]["reconcileInBackground"] = (bindingId) =>
       creator.requireBinding(bindingId).pipe(
         Effect.flatMap((binding) => reconcile(binding.projectId).pipe(Effect.forkIn(scope))),
@@ -805,6 +834,7 @@ const make = ({ commandGate, pollInterval }: SenderOptions) =>
     return CreatorSender.of({
       confirmSend,
       haltSend,
+      acknowledgeConflict,
       reconcile,
       reconcileOpen,
       reconcileInBackground,

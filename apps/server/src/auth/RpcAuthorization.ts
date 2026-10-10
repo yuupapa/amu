@@ -197,6 +197,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.creatorCancelProposal]: AuthPreviewOperateScope,
   [WS_METHODS.creatorConfirmSend]: AuthOrchestrationOperateScope,
   [WS_METHODS.creatorHaltSend]: AuthOrchestrationOperateScope,
+  [WS_METHODS.creatorAcknowledgeConflict]: AuthOrchestrationOperateScope,
   [WS_METHODS.creatorConfirmByUser]: AuthOrchestrationOperateScope,
   [WS_METHODS.creatorReadShot]: AuthOrchestrationReadScope,
   [WS_METHODS.creatorList]: AuthOrchestrationReadScope,

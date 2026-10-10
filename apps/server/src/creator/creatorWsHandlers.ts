@@ -8,6 +8,7 @@
 import {
   CreatorOperationError,
   WS_METHODS,
+  type CreatorAcknowledgeConflictInput,
   type CreatorAttachShotInput,
   type CreatorCancelProposalInput,
   type CreatorConfirmByUserInput,
@@ -77,6 +78,8 @@ export const makeCreatorWsHandlers = ({
       gate(() => creatorSender.confirmSend(input)),
     [WS_METHODS.creatorHaltSend]: (input: CreatorHaltSendInput) =>
       gate(() => creatorSender.haltSend(input)),
+    [WS_METHODS.creatorAcknowledgeConflict]: (input: CreatorAcknowledgeConflictInput) =>
+      gate(() => creatorSender.acknowledgeConflict(input)),
     [WS_METHODS.creatorConfirmByUser]: (input: CreatorConfirmByUserInput) =>
       gate(() => creator.confirmByUser(input)),
     [WS_METHODS.creatorReadShot]: (input: CreatorReadShotInput) =>

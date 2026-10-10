@@ -187,6 +187,10 @@
       "types": "./src/state/presentation.ts",
       "default": "./src/state/presentation.ts"
     },
+    "./state/creator": {
+      "types": "./src/state/creator.ts",
+      "default": "./src/state/creator.ts"
+    },
     "./state/device": {
       "types": "./src/state/device.ts",
       "default": "./src/state/device.ts"

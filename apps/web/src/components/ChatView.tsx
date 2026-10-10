@@ -581,6 +581,8 @@ import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { Button, InlineButton } from "./ui/button";
 import { useLunaAuto } from "../amu/useLunaAuto";
 import { useSwitchNotice } from "../amu/useSwitchNotice";
+import { CreatorSessionHost } from "../amu/creator/CreatorSessionHost";
+import { useCreatorOpener } from "../amu/creator/useCreatorOpener";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -2351,6 +2353,7 @@ export default function ChatView(props: ChatViewProps) {
     selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
   );
   const activePreviewState = useThreadPreviewState(activeThreadRef);
+  const creatorOpener = useCreatorOpener(activeThreadRef ?? null);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
   const previewSessionsReady = !activeEnvironmentServerBrowser || activePreviewState.listLoaded;
   const resolvePreviewRuntimeTabId = useMemo(
@@ -11955,6 +11958,9 @@ export default function ChatView(props: ChatViewProps) {
             {canOperatePreview && activeThreadRef && activeEnvironmentServerBrowser ? (
               <PreviewSessionSync threadRef={activeThreadRef} />
             ) : null}
+            {canOperatePreview && activeThreadRef ? (
+              <CreatorSessionHost threadRef={activeThreadRef} />
+            ) : null}
             {activeThreadRef &&
             activePreviewMiniPlayer &&
             previewMiniPlayerVisible &&
@@ -12081,6 +12087,7 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
           deviceAvailable={activeThreadRef !== null}
+          creatorOpener={creatorOpener}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -12139,6 +12146,7 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestAvailable={pullRequestSurfaceAvailable}
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
             deviceAvailable={activeThreadRef !== null}
+            creatorOpener={creatorOpener}
           >
             {rightPanelContent}
           </RightPanelTabs>

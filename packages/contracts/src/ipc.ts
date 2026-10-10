@@ -1438,6 +1438,8 @@ export interface DesktopPreviewBridge {
   ) => Promise<DesktopPreviewCreatorApproveResult>;
   /** Sends panel state to the tab's overlay. False when the session is not live or it is too big. */
   pushCreatorState: (tabId: string, state: unknown) => Promise<boolean>;
+  /** File picker for a video to review in Amu Creator (.mp4, .mov, .webm); null when cancelled. */
+  pickCreatorVideo: () => Promise<string | null>;
 }
 
 export type ConfirmDialogVariant = "default" | "destructive";

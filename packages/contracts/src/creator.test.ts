@@ -214,6 +214,6 @@ describe("RPC contract", () => {
     for (const method of Object.values(WS_METHODS).filter((m) => m.startsWith("creator."))) {
       expect(WsRpcGroup.requests.has(method)).toBe(true);
     }
-    expect(Object.values(WS_METHODS).filter((m) => m.startsWith("creator."))).toHaveLength(15);
+    expect(Object.values(WS_METHODS).filter((m) => m.startsWith("creator."))).toHaveLength(16);
   });
 });

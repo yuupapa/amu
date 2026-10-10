@@ -628,6 +628,61 @@ it.layer(NodeServices.layer)("CreatorSender", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("the user's acknowledgement finishes a conflict as sent, and nothing else", () =>
+    Effect.gen(function* () {
+      const { world, start } = yield* harness();
+      world.behavior = mismatched;
+      const instance = yield* start;
+      const binding = yield* instance.open;
+      const created = yield* proposal(instance, binding);
+      const acknowledge = instance.sender.acknowledgeConflict({
+        ...binding,
+        proposalId: created.id,
+      });
+      // Not started yet: nothing to acknowledge.
+      expect(yield* Effect.flip(acknowledge)).toMatchObject(opError("conflict"));
+      expect(yield* confirm(instance, binding, created)).toMatchObject({ state: "conflict" });
+      // A stale epoch cannot acknowledge.
+      expect(
+        yield* Effect.flip(
+          instance.sender.acknowledgeConflict({ ...binding, epoch: 0, proposalId: created.id }),
+        ),
+      ).toMatchObject(opError("stale_epoch"));
+
+      expect(yield* acknowledge).toEqual({
+        proposalId: created.id,
+        state: "accepted",
+        reason: null,
+      });
+      const snapshot = yield* instance.service.list(binding);
+      expect(snapshot.proposals).toHaveLength(0);
+      expect(snapshot.comments[0]).toMatchObject({
+        status: "sent",
+        sentMessageId: MessageId.make(`creator:${created.id}`),
+      });
+      // Acknowledging never sends anything, and a second one is a no-op report.
+      expect(world.calls).toHaveLength(1);
+      expect(yield* acknowledge).toMatchObject({ state: "accepted" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("acknowledging a send that is not in conflict is refused and changes nothing", () =>
+    Effect.gen(function* () {
+      const { world, start } = yield* harness();
+      world.behavior = lostBeforeCommit;
+      const instance = yield* start;
+      const binding = yield* instance.open;
+      const created = yield* proposal(instance, binding);
+      expect(yield* confirm(instance, binding, created)).toMatchObject({ state: "sending" });
+      expect(
+        yield* Effect.flip(
+          instance.sender.acknowledgeConflict({ ...binding, proposalId: created.id }),
+        ),
+      ).toMatchObject(opError("conflict"));
+      expect(yield* statuses(instance, binding)).toEqual(["sending"]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("reconcile also checks the content behind a found receipt", () =>
     Effect.gen(function* () {
       const { world, start } = yield* harness();

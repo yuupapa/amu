@@ -190,6 +190,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.creatorCancelProposal]: "creator",
   [WS_METHODS.creatorConfirmSend]: "creator",
   [WS_METHODS.creatorHaltSend]: "creator",
+  [WS_METHODS.creatorAcknowledgeConflict]: "creator",
   [WS_METHODS.creatorConfirmByUser]: "creator",
   [WS_METHODS.creatorReadShot]: "creator",
   [WS_METHODS.creatorList]: "creator",

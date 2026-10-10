@@ -59,6 +59,7 @@ export type CreatorStateFailure =
   | "already_sending"
   | "not_sending"
   | "not_halted"
+  | "not_conflict"
   | "not_sent"
   | "not_resolved";
 
@@ -575,6 +576,21 @@ export const finishSend = (
     ),
     proposal,
   );
+};
+
+/**
+ * The user looked at the destination thread after a `conflict` and accepts it as
+ * sent: the comments become `sent` with their pinned content. Only a conflict.
+ */
+export const acknowledgeConflict = (
+  state: CreatorStoreFile,
+  input: { readonly proposalId: CreatorProposalId },
+  ctx: CreatorStateContext,
+): StateResult<CreatorProposal> => {
+  const proposal = findProposal(state, input.proposalId);
+  if (proposal === undefined) return fail("not_found");
+  if (proposal.send?.state !== "conflict") return fail("not_conflict");
+  return finishSend(state, { proposalId: proposal.id, outcome: "accepted" }, ctx);
 };
 
 const updateSend = (

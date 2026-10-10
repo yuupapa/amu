@@ -275,6 +275,7 @@ const STATE_CODES: Record<CreatorStateFailure, CreatorOperationErrorCode> = {
   already_sending: "conflict",
   not_sending: "conflict",
   not_halted: "conflict",
+  not_conflict: "conflict",
   not_sent: "conflict",
   not_resolved: "conflict",
 };

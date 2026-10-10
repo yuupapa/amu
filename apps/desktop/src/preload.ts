@@ -433,5 +433,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_APPROVE_CHANNEL, input),
     pushCreatorState: (tabId, state) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_PUSH_STATE_CHANNEL, { tabId, state }),
+    pickCreatorVideo: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_PICK_VIDEO_CHANNEL),
   },
 } satisfies DesktopBridge);

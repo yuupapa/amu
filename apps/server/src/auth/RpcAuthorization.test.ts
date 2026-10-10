@@ -168,10 +168,11 @@ describe("RPC authorization scopes", () => {
     const creatorMethods = Object.values(WS_METHODS).filter((method) =>
       method.startsWith("creator."),
     );
-    expect(creatorMethods).toHaveLength(15);
+    expect(creatorMethods).toHaveLength(16);
     for (const method of [
       WS_METHODS.creatorConfirmSend,
       WS_METHODS.creatorHaltSend,
+      WS_METHODS.creatorAcknowledgeConflict,
       WS_METHODS.creatorConfirmByUser,
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);

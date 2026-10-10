@@ -12,6 +12,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
@@ -189,6 +190,43 @@ describe("preview IPC methods", () => {
             main: Effect.succeedSome({ webContents: { id: 7 } }),
           } as unknown as ElectronWindow.ElectronWindow["Service"]),
           Layer.succeed(PreviewManager.PreviewManager, manager),
+        ),
+      ),
+    );
+  });
+
+  effectIt.effect("opens the Creator video picker only for the app window's renderer", () => {
+    const picks: Array<ElectronDialog.ElectronDialogPickFilesInput> = [];
+    const dialog = {
+      pickFiles: (input: ElectronDialog.ElectronDialogPickFilesInput) =>
+        Effect.sync(() => {
+          picks.push(input);
+          return ["/Users/me/Movies/review.mov"];
+        }),
+    } as unknown as ElectronDialog.ElectronDialog["Service"];
+    return Effect.gen(function* () {
+      for (const event of [{ sender: { id: 42 } }, undefined]) {
+        const exit = yield* Effect.exit(PreviewIpc.pickCreatorVideo.handler(undefined, event));
+        expect(Exit.isFailure(exit)).toBe(true);
+      }
+      expect(picks).toEqual([]);
+      const picked = yield* PreviewIpc.pickCreatorVideo.handler(undefined, { sender: { id: 7 } });
+      expect(picked).toBe("/Users/me/Movies/review.mov");
+      expect(picks).toHaveLength(1);
+      expect(picks[0]?.multiple).toBe(false);
+      expect(picks[0]?.filters.flatMap((filter) => filter.extensions)).toEqual([
+        "mp4",
+        "mov",
+        "webm",
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeedSome({ webContents: { id: 7 } }),
+            focusedMainOrFirst: Effect.succeedNone,
+          } as unknown as ElectronWindow.ElectronWindow["Service"]),
+          Layer.succeed(ElectronDialog.ElectronDialog, dialog),
         ),
       ),
     );

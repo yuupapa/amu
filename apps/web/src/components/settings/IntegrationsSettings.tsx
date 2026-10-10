@@ -623,6 +623,37 @@ function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) 
   );
 }
 
+/** Server setting `amuCreatorEnabled`: the Creator tabs, their WS calls and the agents' creator tools. */
+function AmuCreatorSettings() {
+  const { scope, environment: selected } = useSettingsScope();
+  const enabled = useScopedSettings((settings) => settings.amuCreatorEnabled);
+  const updateSettings = useUpdateScopedSettings();
+  const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
+  const environmentId = connected ? selected.environmentId : null;
+  const canConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const projectScope = scope.kind === "project" || scope.kind === "checkout";
+
+  return (
+    <SettingsSection id="amu-creator" title="Amu Creator（試験版）">
+      <SettingsRow
+        {...searchableSetting("amu-creator")}
+        serverScoped
+        settingKeys={["amuCreatorEnabled"]}
+        description="HyperFrames のプレビューに修正コメントのパネルを重ね、止めた位置のコメントを確認のうえスレッドへ送れるようにします。AI も Amu Creator を開いてコメントを読めます。デスクトップアプリだけで使えます。"
+        control={
+          <ScopedSwitch
+            settingKeys={["amuCreatorEnabled"]}
+            checked={enabled}
+            disabled={!isElectron || !canConfigure || projectScope || environmentId === null}
+            aria-label="Amu Creator（試験版）"
+            onCheckedChange={(checked) => updateSettings({ amuCreatorEnabled: Boolean(checked) })}
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 function DeviceIntegrationSettings() {
   const { search, environment: selected } = useSettingsScope();
   const settings = useScopedSettings();
@@ -1549,6 +1580,7 @@ export function IntegrationsSettingsPanel() {
         )}
       </SettingsSection>
       <DeviceIntegrationSettings />
+      <AmuCreatorSettings />
     </SettingsPageContainer>
   );
 }

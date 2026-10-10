@@ -232,6 +232,7 @@ import {
   TerminalWriteInput,
 } from "./terminal.ts";
 import {
+  CreatorAcknowledgeConflictInput,
   CreatorAttachShotInput,
   CreatorCancelProposalInput,
   CreatorComment,
@@ -461,6 +462,7 @@ export const WS_METHODS = {
   creatorCancelProposal: "creator.cancelProposal",
   creatorConfirmSend: "creator.confirmSend",
   creatorHaltSend: "creator.haltSend",
+  creatorAcknowledgeConflict: "creator.acknowledgeConflict",
   creatorConfirmByUser: "creator.confirmByUser",
   creatorReadShot: "creator.readShot",
   creatorList: "creator.list",
@@ -1549,6 +1551,12 @@ const WsCreatorHaltSendRpc = Rpc.make(WS_METHODS.creatorHaltSend, {
   error: CreatorRpcError,
 });
 
+const WsCreatorAcknowledgeConflictRpc = Rpc.make(WS_METHODS.creatorAcknowledgeConflict, {
+  payload: CreatorAcknowledgeConflictInput,
+  success: CreatorSendResult,
+  error: CreatorRpcError,
+});
+
 const WsCreatorConfirmByUserRpc = Rpc.make(WS_METHODS.creatorConfirmByUser, {
   payload: CreatorConfirmByUserInput,
   success: CreatorComment,
@@ -2035,6 +2043,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCreatorCancelProposalRpc,
   WsCreatorConfirmSendRpc,
   WsCreatorHaltSendRpc,
+  WsCreatorAcknowledgeConflictRpc,
   WsCreatorConfirmByUserRpc,
   WsCreatorReadShotRpc,
   WsCreatorListRpc,

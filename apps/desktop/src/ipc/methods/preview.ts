@@ -35,6 +35,7 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as NodeURL from "node:url";
 
+import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
@@ -535,6 +536,27 @@ export const pushCreatorState = DesktopIpc.makeIpcMethod({
     yield* ensureCreatorRenderer(event);
     const manager = yield* PreviewManager.PreviewManager;
     return yield* manager.pushCreatorState(tabId, state);
+  }),
+});
+
+/** Video kinds Amu Creator opens for review (the server checks the extension again). */
+const CREATOR_VIDEO_EXTENSIONS = ["mp4", "mov", "webm"];
+
+export const pickCreatorVideo = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_PICK_VIDEO_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.NullOr(Schema.String),
+  handler: Effect.fn("desktop.ipc.preview.pickCreatorVideo")(function* (_input, event) {
+    yield* ensureCreatorRenderer(event);
+    const dialog = yield* ElectronDialog.ElectronDialog;
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const paths = yield* dialog.pickFiles({
+      owner: yield* electronWindow.focusedMainOrFirst,
+      defaultPath: Option.none(),
+      multiple: false,
+      filters: [{ name: "Video", extensions: CREATOR_VIDEO_EXTENSIONS }],
+    });
+    return paths[0] ?? null;
   }),
 });
 
