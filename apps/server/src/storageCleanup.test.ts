@@ -478,6 +478,26 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
+  // Amu: users keep API keys in ignored `.env` files. Without an explicit
+  // weaker choice, cleanup must retain them as it did before keep policies.
+  it.live.each([
+    ["the default settings", undefined],
+    ["a missing policy value", null],
+  ] as const)("keeps a worktree with an ignored .env under %s", ([, policy]) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, fs, worktree, setPolicy } = yield* cleanupFixture;
+        expect(DEFAULT_SERVER_SETTINGS.storageCleanup.worktreeKeepWhen).toBe("any-local-files");
+        if (policy === null) setPolicy(undefined as unknown as WorktreeKeepWhen);
+        yield* fs.writeFileString(`${worktree}/.env`, "API_KEY=secret\n");
+        const report = yield* service.runNow;
+        expect(report.entries.filter((entry) => entry.kind === "worktree")).toMatchObject([
+          { outcome: "kept", reason: "Has ignored files (.env)" },
+        ]);
+        expect(yield* fs.readFileString(`${worktree}/.env`)).toBe("API_KEY=secret\n");
+      }),
+    ),
+  );
   it.live("preserves tracked edits written after the final status check", () =>
     runCleanupTest(
       Effect.gen(function* () {

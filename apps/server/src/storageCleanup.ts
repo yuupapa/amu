@@ -297,7 +297,13 @@ const make = Effect.gen(function* () {
       if (/^[RC]|^.[RC]/.test(records[i]!)) i++;
     }
     if (count > 0) return `has uncommitted changes (${count} ${count === 1 ? "file" : "files"})`;
-    if (rules.worktreeKeepWhen !== "any-local-files") return null;
+    // Amu: skip the ignored-file check only for an explicit weaker policy, so a
+    // missing or unknown value still protects `.env` files and local datasets.
+    if (
+      rules.worktreeKeepWhen === "uncommitted-changes" ||
+      rules.worktreeKeepWhen === "tracked-changes"
+    )
+      return null;
     const ignored = yield* git.execute({
       operation: "StorageCleanup.ignoredFiles",
       cwd,

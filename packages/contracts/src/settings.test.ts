@@ -57,7 +57,7 @@ describe("storage cleanup settings", () => {
       worktreeOnMerge: false,
       worktreeOnDelete: false,
       worktreeUnchanged: false,
-      worktreeKeepWhen: "uncommitted-changes",
+      worktreeKeepWhen: "any-local-files",
       browserArtifactsAfterDays: null,
       logsAfterDays: null,
     });
@@ -87,7 +87,7 @@ describe("storage cleanup settings", () => {
     ).toThrow();
   });
 
-  it("decodes older custom rules with the default local-file policy", () => {
+  it("decodes older custom rules with the protective local-file policy", () => {
     const settings = decodeServerSettings({
       worktreeCleanup: {
         mode: "custom",
@@ -100,7 +100,7 @@ describe("storage cleanup settings", () => {
       },
     });
     expect(settings.worktreeCleanup).toMatchObject({
-      rules: { worktreeKeepWhen: "uncommitted-changes" },
+      rules: { worktreeKeepWhen: "any-local-files" },
     });
     expect(
       decodeServerSettingsPatch({ storageCleanup: { worktreeKeepWhen: "tracked-changes" } }),

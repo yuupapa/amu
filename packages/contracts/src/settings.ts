@@ -948,10 +948,17 @@ export const WorktreeKeepWhen = Schema.Literals([
   "tracked-changes",
 ]);
 export type WorktreeKeepWhen = typeof WorktreeKeepWhen.Type;
+/**
+ * Amu: settings without an explicit choice keep worktrees that hold any local
+ * files, including ignored ones such as `.env`. Before this policy existed,
+ * every worktree with ignored files other than `node_modules` was retained;
+ * upstream's "uncommitted-changes" default would delete them on update.
+ */
+export const DEFAULT_WORKTREE_KEEP_WHEN: WorktreeKeepWhen = "any-local-files";
 
 export const WorktreeCleanupRules = Schema.Struct({
   worktreeKeepWhen: WorktreeKeepWhen.pipe(
-    Schema.withDecodingDefault(Effect.succeed("uncommitted-changes")),
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKTREE_KEEP_WHEN)),
   ),
   worktreeAfterDays: StorageRetentionDays,
   worktreeOnMerge: Schema.Boolean,
@@ -1069,7 +1076,7 @@ export type StorageCleanupReport = typeof StorageCleanupReport.Type;
 
 export const StorageCleanupSettings = Schema.Struct({
   worktreeKeepWhen: WorktreeKeepWhen.pipe(
-    Schema.withDecodingDefault(Effect.succeed("uncommitted-changes")),
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKTREE_KEEP_WHEN)),
   ),
   worktreeAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   worktreeOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
