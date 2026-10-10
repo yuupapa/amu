@@ -6,7 +6,7 @@ import * as NodeHttp from "node:http";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 
 import { asarHeaderHash, makeAmuReleaseUpdater } from "./AmuReleaseUpdater.ts";
 
-const isMac = HostProcessPlatform.defaultValue() === "darwin";
+const isMac = HostProcess.Platform.defaultValue() === "darwin";
 
 /** The smallest asar Electron would read: size pickle, header pickle, one byte of data. */
 function writeAsar(path: string) {

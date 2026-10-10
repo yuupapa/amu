@@ -77,8 +77,9 @@ import {
 } from "./luna/LunaPreflight.ts";
 import { applyLunaRoutingPolicy, loadLunaRoutingPolicy } from "./luna/LunaRoutingPolicy.ts";
 import { deriveAuthClientMetadata } from "./auth/utils.ts";
-import { expandHomePath } from "./pathExpansion.ts";
-import { mergeProviderInstanceEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { deriveProviderInstanceConfigMap } from "./provider/ProviderInstanceRegistryHydration.ts";
 import { ProviderRegistry } from "./provider/ProviderRegistry.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
@@ -91,8 +92,10 @@ const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inlin
 // opaque origin: scripts run, but same-origin cookies, storage, and API calls are
 // out of reach. Relative sibling assets still load through their signed URLs.
 // No modals: agent HTML can open without a click (inline renders, and mobile
-// loads it as the top document), and must not raise blocking dialogs.
-const HTML_CONTENT_SECURITY_POLICY = "sandbox allow-scripts allow-forms allow-popups";
+// loads it as the top document), and must not raise blocking dialogs. Downloads
+// stay allowed so download links and buttons in the page work.
+const HTML_CONTENT_SECURITY_POLICY =
+  "sandbox allow-scripts allow-forms allow-popups allow-downloads";
 
 // Types a browser may render as a document if a proxy strips the disposition
 // header. Downloads of these fall back to octet-stream.
@@ -587,6 +590,7 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
           // Every connected AI that can judge, in the policy's order (Haiku, Luna, Composer).
           const codex = resolveLunaPreflight(snapshots, configMap, choices);
           const judges: JudgeTarget[] = [];
+          const home = yield* HostProcess.HomeDirectory;
           for (const kind of policy.judges) {
             const name = LUNA_JUDGE_NAMES[kind];
             if (kind === "codex" && codex.ok) {
@@ -594,12 +598,12 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
                 kind,
                 name,
                 runtime: {
-                  binary: expandHomePath(codex.config.binaryPath),
+                  binary: expandHomePath(codex.config.binaryPath, home),
                   home:
                     codex.judge.runtimePaths?.shadowHomePath ??
                     codex.judge.runtimePaths?.homePath ??
-                    expandHomePath(codex.config.homePath),
-                  environment: mergeProviderInstanceEnvironment(codex.instance.environment),
+                    expandHomePath(codex.config.homePath, home),
+                  environment: yield* mergeProviderInstanceEnvironment(codex.instance.environment),
                 },
               });
             } else if (kind === "claude") {
@@ -609,19 +613,25 @@ export const makeLunaAutoRouteLayer = (options: LunaAutoRouteOptions = {}) =>
                   kind,
                   name,
                   runtime: {
-                    binary: expandHomePath(claude.config.binaryPath),
+                    binary: expandHomePath(claude.config.binaryPath, home),
                     home:
                       claude.provider.runtimePaths?.homePath ??
-                      (claude.config.homePath ? expandHomePath(claude.config.homePath) : ""),
-                    environment: mergeProviderInstanceEnvironment(claude.instance.environment),
+                      (claude.config.homePath ? expandHomePath(claude.config.homePath, home) : ""),
+                    environment: yield* mergeProviderInstanceEnvironment(
+                      claude.instance.environment,
+                    ),
                   },
                 });
             } else if (kind === "cursor") {
               const cursor = resolveCursorJudge(snapshots, configMap);
               if (!cursor.ok) continue;
-              const environment = mergeProviderInstanceEnvironment(cursor.instance.environment);
+              const environment = yield* mergeProviderInstanceEnvironment(
+                cursor.instance.environment,
+              );
               const binary = findCursorAgent(
-                cursor.config.binaryPath ? expandHomePath(cursor.config.binaryPath) : undefined,
+                cursor.config.binaryPath
+                  ? expandHomePath(cursor.config.binaryPath, home)
+                  : undefined,
                 environment,
               );
               if (binary) judges.push({ kind, name, runtime: { binary, home: "", environment } });
@@ -720,13 +730,14 @@ export const makeCliReleaseNotesRouteLayer = (options: LunaAutoRouteOptions = {}
             snapshots,
             deriveProviderInstanceConfigMap(currentSettings),
           );
+          const home = yield* HostProcess.HomeDirectory;
           const haikuRuntime = claude.ok
             ? {
-                binary: expandHomePath(claude.config.binaryPath),
+                binary: expandHomePath(claude.config.binaryPath, home),
                 home:
                   claude.provider.runtimePaths?.homePath ??
-                  (claude.config.homePath ? expandHomePath(claude.config.homePath) : ""),
-                environment: mergeProviderInstanceEnvironment(claude.instance.environment),
+                  (claude.config.homePath ? expandHomePath(claude.config.homePath, home) : ""),
+                environment: yield* mergeProviderInstanceEnvironment(claude.instance.environment),
               }
             : null;
           const input = {

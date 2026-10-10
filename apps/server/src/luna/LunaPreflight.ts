@@ -1,11 +1,11 @@
 import {
   ClaudeSettings,
   CodexSettings,
-  CursorSettings,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { CursorSettings } from "@t3tools/provider-cursor/settings";
 import { LUNA_JUDGE_MODEL, type AutoChoice } from "@t3tools/shared/lunaAuto";
 import * as Schema from "effect/Schema";
 

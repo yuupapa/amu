@@ -22,33 +22,35 @@ const provider = Schema.decodeUnknownSync(ServerProvider)({
   models: [{ slug: "gpt-6-luna", name: "Luna", isCustom: false, capabilities: null }],
 });
 const decodeSettings = Schema.decodeUnknownSync(ServerSettings);
-const legacy = decodeSettings({
-  providers: {
+// The default Codex slot as a legacy `providers.codex` block is migrated into
+// (serverSettings.ts folds it into `providerInstances` when the file loads).
+const migrated = decodeSettings({
+  providerInstances: {
     codex: {
-      setupMode: "existing",
-      binaryPath: "/offline-codex",
-      homePath: "/offline-existing-home",
+      driver: "codex",
+      config: {
+        setupMode: "existing",
+        binaryPath: "/offline-codex",
+        homePath: "/offline-existing-home",
+      },
     },
+    other: { driver: "antigravity", config: {} },
   },
-  providerInstances: { other: { driver: "antigravity", config: {} } },
 });
 const decodeConfigs = Schema.decodeUnknownSync(ProviderInstanceConfigMap);
-const configs = deriveProviderInstanceConfigMap(legacy);
+const configs = deriveProviderInstanceConfigMap(migrated);
 const choices = autoChoices([provider]);
 
-describe("Luna preflight and legacy connection settings", () => {
-  it("resolves the same legacy Codex connection as normal sending without migrating settings", () => {
-    expect(legacy.providerInstances[ProviderInstanceId.make("codex")]).toBeUndefined();
+describe("Luna preflight and migrated connection settings", () => {
+  it("resolves the same default Codex connection as normal sending", () => {
     const result = resolveLunaPreflight([provider], configs, choices);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.error);
     expect(result.config.binaryPath).toBe("/offline-codex");
     expect(result.config.homePath).toBe("/offline-existing-home");
-    expect(legacy.providerInstances[ProviderInstanceId.make("codex")]).toBeUndefined();
   });
-  it("preserves explicit per-instance settings and environment rather than replacing them with legacy defaults", () => {
+  it("preserves explicit per-instance settings and environment", () => {
     const settings = decodeSettings({
-      providers: { codex: { binaryPath: "/offline-legacy" } },
       providerInstances: {
         codex: {
           driver: "codex",
@@ -68,7 +70,7 @@ describe("Luna preflight and legacy connection settings", () => {
     expect(result.config.homePath).toBe("/offline-account");
     expect(result.instance.environment).toMatchObject([{ name: "PATH", value: "/offline-path" }]);
   });
-  it("keeps custom instance routing separate from the default legacy Codex slot", () => {
+  it("keeps custom instance routing separate from the default Codex slot", () => {
     const custom = { ...provider, instanceId: ProviderInstanceId.make("codex-other") };
     expect(resolveLunaPreflight([custom], configs, choices)).toMatchObject({
       ok: false,
@@ -87,7 +89,9 @@ describe("Luna preflight and legacy connection settings", () => {
     expect(resolveLunaPreflight(providers, configs, choices)).toMatchObject({ ok: false, code });
   });
   it("does not silently change auth transport for managed subscription sharing", () => {
-    const settings = decodeSettings({ providers: { codex: { setupMode: "managed" } } });
+    const settings = decodeSettings({
+      providerInstances: { codex: { driver: "codex", config: { setupMode: "managed" } } },
+    });
     expect(
       resolveLunaPreflight([provider], deriveProviderInstanceConfigMap(settings), choices),
     ).toMatchObject({ ok: false, code: "managed_auth_unsupported" });

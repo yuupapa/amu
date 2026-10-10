@@ -7,9 +7,10 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { expandHomePath } from "../pathExpansion.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
-import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import type { ProviderPostUpdateCheck } from "../provider/providerMaintenanceRunner.ts";
 import { checkJudgeCli, type JudgeCliCheck } from "./LunaDecision.ts";
 
@@ -29,12 +30,11 @@ export function makeLunaPostUpdateCheck<E>(
       const config = decodeCodexSettings(instance.config ?? {});
       if (Option.isNone(config))
         return { ok: false, reason: "Codex接続の設定形式を確認できません。" } as JudgeCliCheck;
+      const home = yield* HostProcess.HomeDirectory;
+      const binary = expandHomePath(config.value.binaryPath, home);
+      const environment = yield* mergeProviderInstanceEnvironment(instance.environment);
       return yield* Effect.tryPromise({
-        try: () =>
-          check(
-            expandHomePath(config.value.binaryPath),
-            mergeProviderInstanceEnvironment(instance.environment),
-          ),
+        try: () => check(binary, environment),
         catch: () => "CLIの動作確認を実行できませんでした。",
       });
     }).pipe(

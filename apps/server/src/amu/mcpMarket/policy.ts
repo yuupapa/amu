@@ -1,4 +1,4 @@
-import type { ProviderAdapterV2RuntimePolicy } from "../../orchestration-v2/ProviderAdapter.ts";
+import type { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/ProviderAdapter";
 import {
   permissionModeForClaudeRuntimePolicy,
   sandboxPolicyKindForClaudeRuntimePolicy,

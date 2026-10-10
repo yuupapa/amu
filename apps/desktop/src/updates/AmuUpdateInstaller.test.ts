@@ -5,7 +5,7 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 
@@ -15,7 +15,7 @@ import {
   appBundleFromExecutable,
 } from "./AmuUpdateInstaller.ts";
 
-const isMac = HostProcessPlatform.defaultValue() === "darwin";
+const isMac = HostProcess.Platform.defaultValue() === "darwin";
 const PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>

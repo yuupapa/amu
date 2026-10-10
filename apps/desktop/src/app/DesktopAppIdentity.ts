@@ -91,6 +91,10 @@ export const make = Effect.gen(function* () {
 
   const configure = Effect.gen(function* () {
     const commitHash = yield* resolveAboutCommitHash;
+    // Electron removes spaces from this name to build the native User-Agent
+    // product token, but leaves parentheses intact. Amu's display name is the
+    // plain "Amu" on every stage, already a valid token, so it is used as is
+    // (it is also the name in the macOS app menu).
     yield* electronApp.setName(environment.displayName);
     yield* electronApp.setAboutPanelOptions({
       applicationName: environment.displayName,

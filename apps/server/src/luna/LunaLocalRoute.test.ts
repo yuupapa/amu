@@ -1,6 +1,6 @@
 import { describe, vi } from "vite-plus/test";
 import { expect, it } from "@effect/vitest";
-import { ServerProvider } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
 import { LunaDecisionBroker } from "./LunaDecision.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
@@ -146,15 +146,19 @@ const legacyJudge = decodeProvider({
 const legacyRoutes = makeLunaAutoRouteLayer(localPeer).pipe(
   Layer.provide(Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([legacyJudge]) })),
   Layer.provide(
+    // The default Codex instance, as settings that had the legacy per-driver
+    // `providers.codex` block are migrated (serverSettings.ts).
     Settings.layerTest({
-      providers: {
-        codex: {
-          setupMode: "existing",
-          binaryPath: "/offline-codex",
-          homePath: "/offline-existing-home",
+      providerInstances: {
+        [ProviderInstanceId.make("codex")]: {
+          driver: ProviderDriverKind.make("codex"),
+          config: {
+            setupMode: "existing",
+            binaryPath: "/offline-codex",
+            homePath: "/offline-existing-home",
+          },
         },
       },
-      providerInstances: {},
     }),
   ),
   Layer.provideMerge(auth),
@@ -162,7 +166,7 @@ const legacyRoutes = makeLunaAutoRouteLayer(localPeer).pipe(
   Layer.provide(NodeServices.layer),
 );
 it.effect(
-  "routes a legacy Codex configuration to the decision broker without native CLI execution",
+  "routes a migrated legacy Codex configuration to the decision broker without native CLI execution",
   () =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
