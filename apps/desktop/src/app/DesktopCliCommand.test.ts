@@ -138,6 +138,29 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("leaves the t3 of an upstream T3 Code install alone", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped();
+      const command = yield* commandIn({ home });
+      // Upstream T3 Code's launcher, linked where Amu would look for its own.
+      const upstream = path.join(home, "t3code-home", "bin", "t3");
+      yield* fs.makeDirectory(path.dirname(upstream), { recursive: true });
+      yield* fs.writeFileString(
+        upstream,
+        "#!/bin/sh\n# Written by T3 Code: runs the desktop app's bundled t3 CLI.\n",
+      );
+      const link = path.join(home, ".local", "bin", "t3");
+      yield* fs.makeDirectory(path.dirname(link), { recursive: true });
+      yield* fs.symlink(upstream, link);
+
+      expect((yield* command.state).installedPath).toBeNull();
+      yield* command.uninstall;
+      expect(yield* fs.readLink(link)).toBe(upstream);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("finds and removes a link left by a previous T3 home", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
