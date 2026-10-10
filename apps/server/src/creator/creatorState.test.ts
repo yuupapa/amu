@@ -339,6 +339,31 @@ describe("creatorState", () => {
     ).toMatchObject({ ok: false, reason: "rate_limited" });
   });
 
+  it("allows one proposal per interval across drafts", () => {
+    let s = draft().state;
+    s = ok(createDraft(s, { timeSec: 2, projectRevision: "r1" }, ctx(600))).state;
+    const [a, b] = s.comments;
+    const gate = makeRateGate();
+    const proposeAt = (state: typeof s, id: CreatorComment["id"], ms: number) =>
+      propose(state, { ids: [id], destination: dest, bindingId: binding }, ctx(ms, gate));
+    const first = ok(proposeAt(s, a!.id, 0));
+    expect(proposeAt(first.state, b!.id, 500)).toMatchObject({ ok: false, reason: "rate_limited" });
+    expect(proposeAt(first.state, b!.id, CREATOR_LIMITS.proposeIntervalMs).ok).toBe(true);
+  });
+
+  it("refuses a draft created with an off-frame place", () => {
+    const place: CreatorPlace = {
+      x: 2,
+      y: 0,
+      compositionFile: null,
+      elementSelector: null,
+      elementLabel: null,
+    };
+    expect(
+      createDraft(emptyCreatorState(), { timeSec: 1, projectRevision: "r1", place }, ctx(0)),
+    ).toMatchObject({ ok: false, reason: "invalid" });
+  });
+
   it("refuses the 201st comment", () => {
     let s = emptyCreatorState();
     for (let i = 0; i < CREATOR_LIMITS.maxComments; i += 1) {
@@ -539,6 +564,17 @@ describe("creatorState", () => {
     const p = prop(d.state, [d.value.id], 3_000);
     const sending = ok(send(p.state, p.value, 3_100)).state;
     expect(releaseHalted(sending, { proposalId: p.value.id }, ctx(3_200))).toMatchObject({
+      ok: false,
+      reason: "not_halted",
+    });
+    const conflict = ok(
+      finishSend(
+        sending,
+        { proposalId: p.value.id, outcome: "conflict", reason: "mismatch" },
+        ctx(3_200),
+      ),
+    ).state;
+    expect(releaseHalted(conflict, { proposalId: p.value.id }, ctx(3_300))).toMatchObject({
       ok: false,
       reason: "not_halted",
     });

@@ -660,6 +660,27 @@ it.layer(NodeServices.layer)("CreatorSender", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("halting a conflict is refused and leaves it held for the user", () =>
+    Effect.gen(function* () {
+      const { world, start, storeFile } = yield* harness();
+      world.behavior = mismatched;
+      const instance = yield* start;
+      const binding = yield* instance.open;
+      const created = yield* proposal(instance, binding);
+      expect(yield* confirm(instance, binding, created)).toMatchObject({ state: "conflict" });
+      const reservations = (yield* storeFile).reservations;
+      expect(Object.values(reservations)).toEqual([created.id]);
+
+      expect(
+        yield* Effect.flip(instance.sender.haltSend({ ...binding, proposalId: created.id })),
+      ).toMatchObject({ ...opError("conflict"), detail: "conflict" });
+      const stored = yield* storeFile;
+      expect(stored.proposals[0]!.send).toMatchObject({ state: "conflict" });
+      expect(stored.reservations).toEqual(reservations);
+      expect(world.calls).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("the user's acknowledgement finishes a conflict as sent, and nothing else", () =>
     Effect.gen(function* () {
       const { world, start } = yield* harness();
