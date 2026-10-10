@@ -19,6 +19,8 @@ const legacyReaders = ["orchestration-v2/legacy/", "persistence/Migrations/"] as
 const legacyReaderFiles: Record<string, string> = {
   // Provider history for settings migration reads V1 thread sessions once at load.
   "serverSettings.ts": "one-time provider history for settings migration",
+  // Amu: marks messages Amu never sent in the V2 copy, once, before the importer runs.
+  "persistence/amuForkMigrations.ts": "one-time Amu fork migration of the copied V1 tables",
 };
 const retiredPaths = [
   "orchestration",
