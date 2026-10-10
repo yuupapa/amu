@@ -62,7 +62,6 @@ import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
   isLocalLunaAutoRequest,
-  isLoopbackRemoteAddress,
 } from "./httpCors.ts";
 import { autoChoices, LUNA_JUDGE_NAMES } from "@t3tools/shared/lunaAuto";
 import { cliReleaseNotes, hasCliReleaseNotes } from "./luna/CliReleaseNotes.ts";
@@ -76,6 +75,7 @@ import {
   resolveLunaPreflight,
 } from "./luna/LunaPreflight.ts";
 import { applyLunaRoutingPolicy, loadLunaRoutingPolicy } from "./luna/LunaRoutingPolicy.ts";
+import { isDesktopAppSession } from "./auth/desktopSession.ts";
 import { deriveAuthClientMetadata } from "./auth/utils.ts";
 import { expandHomePath } from "./pathExpansion.ts";
 import { mergeProviderInstanceEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
@@ -822,18 +822,7 @@ const authenticateDesktopRoute = Effect.gen(function* () {
       failEnvironmentInternal("internal_error", error),
     ),
   );
-  const remoteAddress = socketPeerAddress(request);
-  return {
-    session,
-    // The desktop app's own session (only the desktop-bootstrap grant issues
-    // that subject) on a loopback socket. Tailscale serving forwards remote
-    // clients to loopback, so the address alone would not do.
-    desktop:
-      session.subject === "desktop-bootstrap" &&
-      session.scopes.includes(AuthOrchestrationOperateScope) &&
-      remoteAddress !== undefined &&
-      isLoopbackRemoteAddress(remoteAddress),
-  };
+  return { session, desktop: isDesktopAppSession(session, socketPeerAddress(request)) };
 });
 
 const layerMcpMarketRouteUnprovided = Layer.unwrap(

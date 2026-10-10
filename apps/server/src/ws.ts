@@ -177,7 +177,10 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import { isDesktopAppSession } from "./auth/desktopSession.ts";
+import { deriveAuthClientMetadata } from "./auth/utils.ts";
 import * as CreatorOpen from "./creator/CreatorOpen.ts";
+import { makeCreatorWsHandlers } from "./creator/creatorWsHandlers.ts";
 import * as CreatorSender from "./creator/CreatorSender.ts";
 import * as CreatorService from "./creator/CreatorService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
@@ -1191,6 +1194,8 @@ const layerWsRpc = (
   creator: CreatorService.CreatorService["Service"],
   creatorSender: CreatorSender.CreatorSender["Service"],
   creatorOpen: CreatorOpen.CreatorOpen["Service"],
+  /** The desktop app's own session on a loopback socket; the Creator surface needs it. */
+  desktopSession: boolean,
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2895,29 +2900,7 @@ const layerWsRpc = (
         [WS_METHODS.previewClearProfile]: (input) => serverBrowser.clearProfile(input.profileId),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
-        // The user's own pick (desktop folder or file picker), so outside the workspace is fine.
-        [WS_METHODS.creatorOpenByUser]: (input) =>
-          creatorOpen.open({ path: input.path, threadId: input.threadId, openedBy: "user" }),
-        [WS_METHODS.creatorSetEpoch]: (input) => creator.setEpoch(input).pipe(Effect.asVoid),
-        [WS_METHODS.creatorSaveDraft]: (input) => creator.saveDraft(input),
-        [WS_METHODS.creatorUpdateComment]: (input) => creator.updateComment(input),
-        [WS_METHODS.creatorSetPlace]: (input) => creator.setPlace(input),
-        [WS_METHODS.creatorAttachShot]: (input) => creator.attachShot(input),
-        [WS_METHODS.creatorDeleteComment]: (input) => creator.deleteComment(input),
-        [WS_METHODS.creatorPropose]: (input) => creator.propose(input),
-        [WS_METHODS.creatorCancelProposal]: (input) => creator.cancelProposal(input),
-        [WS_METHODS.creatorConfirmSend]: (input) => creatorSender.confirmSend(input),
-        [WS_METHODS.creatorHaltSend]: (input) => creatorSender.haltSend(input),
-        [WS_METHODS.creatorConfirmByUser]: (input) => creator.confirmByUser(input),
-        [WS_METHODS.creatorReadShot]: (input) => creator.readShot(input),
-        [WS_METHODS.creatorList]: (input) => creator.list(input),
-        // Starting a subscription also settles sends left open (in the background).
-        [WS_METHODS.creatorSubscribe]: (input) =>
-          Stream.unwrap(
-            creatorSender
-              .reconcileInBackground(input.bindingId)
-              .pipe(Effect.as(creator.changes(input))),
-          ),
+        ...makeCreatorWsHandlers({ desktopSession, creator, creatorSender, creatorOpen }),
         [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
         [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
         [WS_METHODS.deviceList]: (input) =>
@@ -3208,6 +3191,7 @@ export const layer = Layer.unwrap(
               creator,
               creatorSender,
               creatorOpen,
+              isDesktopAppSession(session, deriveAuthClientMetadata({ request }).ipAddress),
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

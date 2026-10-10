@@ -1,31 +1,34 @@
 // @effect-diagnostics nodeBuiltinImport:off - realpath/stat of the chosen path and randomUUID open ids; the same plain async file work as creatorFiles.ts.
 /**
- * CreatorOpen: the one way an Amu Creator tab is opened. The MCP tool
- * `creator_open` calls it with `openedBy: "agent"`, the WS `creator.openByUser`
- * with `openedBy: "user"`.
+ * CreatorOpen: the one way an Amu Creator tab is opened, and the owner of what
+ * an open holds (binding, tab, preview, review copy) until it is released. The
+ * MCP tool `creator_open` calls it with `openedBy: "agent"`, the WS
+ * `creator.openByUser` with `openedBy: "user"`.
  *
- * - Local only: the setting is on, the server is the desktop app's
- *   (`mode === "desktop"`) and its browser channel is available. Checked before
- *   anything touches the disk or starts a process.
- * - An agent may open only what really lies inside its thread's workspace
- *   (`realPathInside`). The user may open any absolute path: the WS caller is
- *   Amu's own UI, and the path comes from the desktop folder or file picker.
- * - A folder with `hyperframes.json` is served as is; its project id comes from
- *   its real path. A `.mp4`/`.mov`/`.webm` gets a fresh review copy under
- *   `<stateDir>/creator/review/<projectId>/<openId>/` per open, with the project
- *   id of the source video's real path, so reopening the same video shows the
- *   same comments. Anything else is refused. The served folder must not hold a
+ * - Local only (`isLocalCreatorHost`, setting on). Checked before anything
+ *   touches the disk or starts a process.
+ * - The caller's path is resolved to its real path once, and only that real
+ *   path is used afterwards: containment, `hyperframes.json` detection, the link
+ *   scan, the preview root and the review copy's source. An agent may open only
+ *   what really lies inside its thread's workspace (`realPathInside`); the user
+ *   may open any absolute path (the WS surface is the desktop app's own session).
+ *   Races with another process of the same user after these checks are outside
+ *   the threat model (see `creatorFiles.ts`).
+ * - A folder with `hyperframes.json` is served as is. A `.mp4`/`.mov`/`.webm`
+ *   gets a fresh review copy under `<stateDir>/creator/review/<projectId>/<openId>/`
+ *   per open. Anything else is refused, and the served folder must not hold a
  *   link that leaves it (`scanForOutwardLinks`).
- * - Sequence: preview (`CreatorPreviewSupervisor.ensure`) -> binding -> tab
- *   (`PreviewManager.open`, whose synchronous `beforePublish` binds the tab
- *   before its `opened` event publishes). A failure on the way undoes what was
- *   done, newest first: close the tab, revoke the binding, stop a preview this
- *   open started, remove the review copy.
- * - At most one review copy per project and one live binding per project and
- *   thread: reopening an mp4 first revokes, stops and removes the previous
- *   open; reopening a HyperFrames folder in the same thread revokes the
- *   previous binding (the preview is shared by folder and keeps running).
- * - Opens of one project run one at a time.
+ * - Comments are kept per (real source path, thread) (`creatorProjectIdFor`), so
+ *   one thread never sees or replaces another thread's open. Previews are
+ *   shared per serving folder and reference-counted across opens.
+ * - Sequence: preview -> binding -> tab (`PreviewManager.open`, whose synchronous
+ *   `beforePublish` binds the tab before its `opened` event publishes) -> record
+ *   -> release the thread's previous open of the same project. A failure undoes
+ *   what was done, newest first, so a failed reopen leaves the working open alone.
+ * - Release (tab closed, setting turned off, replaced by a reopen): revoke the
+ *   binding, close the tab, stop the preview when no other open uses its folder,
+ *   remove the review copy.
+ * - Opens and releases of one project run one at a time.
  */
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
@@ -50,6 +53,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -58,10 +62,10 @@ import * as DesktopBrowserChannel from "../preview/DesktopBrowserChannel.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { CreatorFileError, openCreatorRoot, type CreatorRoot } from "./creatorFiles.ts";
+import { CreatorFileError, openCreatorRoot } from "./creatorFiles.ts";
 import { realPathInside, scanForOutwardLinks } from "./creatorPaths.ts";
 import * as CreatorPreviewSupervisor from "./CreatorPreviewSupervisor.ts";
-import { CreatorService, creatorProjectIdOf } from "./CreatorService.ts";
+import { CreatorService, creatorProjectIdFor, isLocalCreatorHost } from "./CreatorService.ts";
 import { FfprobeError, makeReviewProject, removeReviewCopy, runFfprobe } from "./reviewProject.ts";
 
 export interface CreatorOpenInput {
@@ -82,6 +86,8 @@ export class CreatorOpen extends Context.Service<
 export interface CreatorOpenOptions {
   /** Duration of a video file in seconds; `runFfprobe` by default. */
   readonly ffprobe?: (file: string) => Promise<number>;
+  /** Test seam: runs after an open was released (tab closed, setting off, reopened). */
+  readonly afterRelease?: (bindingId: CreatorBindingId) => Effect.Effect<void>;
 }
 
 const VIDEO_EXTENSIONS: ReadonlySet<string> = new Set(["mp4", "mov", "webm"]);
@@ -170,6 +176,8 @@ const reviewCopyError = (cause: unknown): CreatorOperationError | null => {
       return operationError("not_found", "video");
     case "invalid_name":
       return operationError("invalid", "video_type");
+    case "unsafe_path":
+      return operationError("invalid", "video_changed");
     default:
       return null;
   }
@@ -196,24 +204,56 @@ export const make = (options: CreatorOpenOptions = {}) =>
     const supervisor = yield* CreatorPreviewSupervisor.CreatorPreviewSupervisor;
     const previews = yield* PreviewManager.PreviewManager;
     const ffprobe = options.ffprobe ?? ((file: string) => runFfprobe(file));
+    const afterRelease = options.afterRelease ?? (() => Effect.void);
 
     const opens = new Map<CreatorBindingId, LiveOpen>();
-    const locks = new Map<CreatorProjectId, Semaphore.Semaphore>();
-    const lockOf = (projectId: CreatorProjectId) => {
-      let lock = locks.get(projectId);
-      if (lock === undefined) {
-        lock = Semaphore.makeUnsafe(1);
-        locks.set(projectId, lock);
-      }
-      return lock;
+    const lockMap = <K>() => {
+      const locks = new Map<K, Semaphore.Semaphore>();
+      return (key: K) => {
+        let lock = locks.get(key);
+        if (lock === undefined) {
+          lock = Semaphore.makeUnsafe(1);
+          locks.set(key, lock);
+        }
+        return lock;
+      };
     };
+    const projectLock = lockMap<CreatorProjectId>();
+    const rootLock = lockMap<string>();
+    /** Opens (live or starting) per serving folder; the preview stops when it reaches 0. */
+    const rootUsers = new Map<string, number>();
+
+    const dropRootUser = (root: string) =>
+      Effect.suspend(() => {
+        const left = (rootUsers.get(root) ?? 1) - 1;
+        if (left > 0) {
+          rootUsers.set(root, left);
+          return Effect.void;
+        }
+        rootUsers.delete(root);
+        return supervisor.stop(root);
+      });
+
+    /** Counts this open as a user of the folder's preview and starts it if needed. */
+    const acquirePreview = (root: string) =>
+      rootLock(root).withPermits(1)(
+        Effect.suspend(() => {
+          rootUsers.set(root, (rootUsers.get(root) ?? 0) + 1);
+          return supervisor.ensure(root).pipe(
+            Effect.mapError(previewError),
+            Effect.onError(() => dropRootUser(root)),
+          );
+        }),
+      );
+
+    const releasePreview = (root: string) => rootLock(root).withPermits(1)(dropRootUser(root));
 
     const requireLocal = Effect.gen(function* () {
       const current = yield* settings.getSettings.pipe(
         Effect.mapError(() => operationError("unavailable", "settings_unreadable")),
       );
       if (!current.amuCreatorEnabled) return yield* Effect.fail(new CreatorDisabledError());
-      if (config.mode !== "desktop" || !channel.available) {
+      if (!isLocalCreatorHost(config, channel)) {
         return yield* Effect.fail(operationError("unavailable", "desktop_only"));
       }
     });
@@ -252,37 +292,59 @@ export const make = (options: CreatorOpenOptions = {}) =>
       return { destination, workspace };
     });
 
-    const removeCopy = (root: CreatorRoot, projectId: CreatorProjectId, openId: string) =>
-      Effect.tryPromise(() => removeReviewCopy(root, projectId, openId)).pipe(
+    const removeCopy = (projectId: CreatorProjectId, openId: string) =>
+      Effect.tryPromise(async () =>
+        removeReviewCopy(await openCreatorRoot(config.stateDir), projectId, openId),
+      ).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Amu Creator could not remove a review copy", { cause }),
         ),
         Effect.asVoid,
       );
 
-    const closeTab = (open: Pick<LiveOpen, "threadId" | "tabId">) =>
-      previews.close({ threadId: open.threadId, tabId: open.tabId }).pipe(Effect.ignore);
+    const closeTab = (threadId: ThreadId, tabId: PreviewTabId) =>
+      previews.close({ threadId, tabId }).pipe(Effect.ignore);
 
     /**
-     * Revokes the matching opens and closes their tabs. A review copy's preview
-     * is its own, so it is stopped and the copy removed; a HyperFrames preview
-     * is shared by folder and keeps running.
+     * Releases a recorded open (call it holding the project's lock). Only the
+     * first call for an open does anything, so a tab-closed event that races an
+     * explicit release is harmless.
      */
-    const closeOpens = (root: CreatorRoot, matches: (open: LiveOpen) => boolean) =>
-      Effect.forEach(
-        [...opens.values()].filter(matches),
-        (open) =>
-          Effect.gen(function* () {
-            opens.delete(open.bindingId);
-            yield* creator.revoke(open.bindingId);
-            yield* closeTab(open);
-            if (open.openId !== null) {
-              yield* supervisor.stop(open.servingRoot);
-              yield* removeCopy(root, open.projectId, open.openId);
-            }
-          }),
-        { discard: true },
-      );
+    const releaseOpen = (open: LiveOpen) =>
+      Effect.suspend(() => {
+        if (!opens.delete(open.bindingId)) return Effect.void;
+        return Effect.gen(function* () {
+          yield* creator.revoke(open.bindingId);
+          yield* closeTab(open.threadId, open.tabId);
+          yield* releasePreview(open.servingRoot);
+          if (open.openId !== null) yield* removeCopy(open.projectId, open.openId);
+          yield* afterRelease(open.bindingId);
+        });
+      }).pipe(Effect.uninterruptible);
+
+    const releaseLocked = (open: LiveOpen) =>
+      projectLock(open.projectId).withPermits(1)(releaseOpen(open));
+
+    // A closed tab ends its open. Subscribed now, so no close is missed.
+    const previewEvents = yield* previews.subscribeEvents;
+    yield* Stream.fromSubscription(previewEvents).pipe(
+      Stream.runForEach((event) => {
+        if (event.type !== "closed") return Effect.void;
+        const open = [...opens.values()].find(
+          (entry) => entry.threadId === event.threadId && entry.tabId === event.tabId,
+        );
+        return open === undefined ? Effect.void : releaseLocked(open);
+      }),
+      Effect.forkScoped,
+    );
+
+    // Turning the setting off ends every open (CreatorService drops the bindings too).
+    const settingsChanges = yield* settings.subscribeChanges;
+    yield* Stream.runForEach(settingsChanges, (current) =>
+      current.amuCreatorEnabled
+        ? Effect.void
+        : Effect.forEach([...opens.values()], releaseLocked, { discard: true }),
+    ).pipe(Effect.forkScoped);
 
     const openLocked = (
       input: CreatorOpenInput,
@@ -293,14 +355,10 @@ export const make = (options: CreatorOpenOptions = {}) =>
       // Undo steps, run newest first when anything below fails or is interrupted.
       const undo: Array<Effect.Effect<void>> = [];
       return Effect.gen(function* () {
-        const root = yield* filePromise("creator_root", () => openCreatorRoot(config.stateDir));
-        if (source.kind === "mp4") {
-          yield* closeOpens(root, (open) => open.projectId === projectId && open.openId !== null);
-        }
-
         let servingRoot: string;
         let openId: string | null = null;
         if (source.kind === "mp4") {
+          const root = yield* filePromise("creator_root", () => openCreatorRoot(config.stateDir));
           const id = NodeCrypto.randomUUID();
           const review = yield* tryFile("review_copy", () =>
             makeReviewProject(source.video, root, { projectId, openId: id, ffprobe }),
@@ -311,7 +369,7 @@ export const make = (options: CreatorOpenOptions = {}) =>
             }),
           );
           openId = id;
-          undo.push(removeCopy(root, projectId, id));
+          undo.push(removeCopy(projectId, id));
           // The state folder may sit under a symlink (macOS /var); serve and key by the real path.
           servingRoot = yield* filePromise("review_copy", () =>
             NodeFSP.realpath(review.servingRoot),
@@ -326,11 +384,8 @@ export const make = (options: CreatorOpenOptions = {}) =>
           return yield* Effect.fail(operationError("invalid", `${scan.reason}${where}`));
         }
 
-        // A HyperFrames preview is shared by folder; stop it on failure only if
-        // no other open of this service serves the same folder.
-        const shared = [...opens.values()].some((open) => open.servingRoot === servingRoot);
-        if (!shared) undo.push(supervisor.stop(servingRoot));
-        const preview = yield* supervisor.ensure(servingRoot).pipe(Effect.mapError(previewError));
+        const preview = yield* acquirePreview(servingRoot);
+        undo.push(releasePreview(servingRoot));
 
         const binding = yield* creator.bind({
           projectId,
@@ -360,22 +415,37 @@ export const make = (options: CreatorOpenOptions = {}) =>
             ),
             Effect.mapError(() => operationError("unavailable", "preview_tab")),
           );
-        undo.push(closeTab({ threadId: input.threadId, tabId: snapshot.tabId }));
+        undo.push(closeTab(input.threadId, snapshot.tabId));
         // The binding was dropped between bind and the tab (a revokeAll).
         if (!attached) return yield* Effect.fail(operationError("unauthorized", "binding_revoked"));
 
-        yield* closeOpens(
-          root,
-          (open) => open.projectId === projectId && open.threadId === input.threadId,
-        );
-        opens.set(binding.bindingId, {
+        const recorded: LiveOpen = {
           bindingId: binding.bindingId,
           projectId,
           threadId: input.threadId,
           tabId: snapshot.tabId,
           servingRoot,
           openId,
-        });
+        };
+        opens.set(recorded.bindingId, recorded);
+        // From here on, releasing the recorded open undoes all of the above.
+        undo.splice(0, undo.length, releaseOpen(recorded));
+        // A close or a setting flip that landed before the open was recorded
+        // found nothing to release; catch it now.
+        yield* creator.requireBinding(binding.bindingId);
+        const tabs = yield* previews.list({ threadId: input.threadId });
+        if (!tabs.sessions.some((tab) => tab.tabId === snapshot.tabId)) {
+          return yield* Effect.fail(operationError("conflict", "tab_closed"));
+        }
+
+        // Only now that the new open works, release this thread's previous one.
+        yield* Effect.forEach(
+          [...opens.values()].filter(
+            (open) => open.projectId === projectId && open.bindingId !== recorded.bindingId,
+          ),
+          releaseOpen,
+          { discard: true },
+        );
         return {
           bindingId: binding.bindingId,
           projectId,
@@ -396,8 +466,11 @@ export const make = (options: CreatorOpenOptions = {}) =>
       const { destination, workspace } = yield* threadContext(input);
       const located = yield* filePromise("locate", () => locate(input, workspace));
       if (isOperationError(located)) return yield* Effect.fail(located);
-      const projectId = creatorProjectIdOf(located.kind === "mp4" ? located.video : located.root);
-      return yield* lockOf(projectId).withPermits(1)(
+      const projectId = creatorProjectIdFor(
+        located.kind === "mp4" ? located.video : located.root,
+        input.threadId,
+      );
+      return yield* projectLock(projectId).withPermits(1)(
         openLocked(input, destination, located, projectId),
       );
     });

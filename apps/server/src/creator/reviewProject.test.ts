@@ -155,6 +155,41 @@ describe("makeReviewProject", () => {
     ).rejects.toMatchObject({ reason: "unsafe_path" });
   });
 
+  it("refuses a source swapped for a symlink right before the copy", async () => {
+    const { base, root, video, ffprobe } = await setup("clip.mp4");
+    const secret = NodePath.join(base, "secret.mp4");
+    await NodeFSP.writeFile(secret, "secret bytes");
+    const openId = NodeCrypto.randomUUID();
+    const refused = await makeReviewProject(video, root, {
+      projectId: PID,
+      openId,
+      ffprobe,
+      beforeCopy: async () => {
+        await NodeFSP.rm(video);
+        await NodeFSP.symlink(secret, video);
+      },
+    }).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(CreatorFileError);
+    expect((refused as CreatorFileError).reason).toBe("unsafe_path");
+    expect(await NodeFSP.readdir(NodePath.join(root.path, "review", PID))).toEqual([]);
+  });
+
+  it("refuses a source replaced by another file right before the copy", async () => {
+    const { root, video, ffprobe } = await setup("clip.mp4");
+    const openId = NodeCrypto.randomUUID();
+    const refused = await makeReviewProject(video, root, {
+      projectId: PID,
+      openId,
+      ffprobe,
+      beforeCopy: async () => {
+        await NodeFSP.rm(video);
+        await NodeFSP.writeFile(video, "a different file");
+      },
+    }).catch((error: unknown) => error);
+    expect((refused as CreatorFileError).reason).toBe("unsafe_path");
+    expect(await NodeFSP.readdir(NodePath.join(root.path, "review", PID))).toEqual([]);
+  });
+
   it("removes the half-made folder when ffprobe fails", async () => {
     const { root, video } = await setup();
     const openId = NodeCrypto.randomUUID();

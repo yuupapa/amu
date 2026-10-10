@@ -148,7 +148,60 @@ export interface ReviewProjectOptions {
   /** Duration in seconds of the given file; `runFfprobe` in production. */
   readonly ffprobe: (file: string) => Promise<number>;
   readonly maxVideoBytes?: number;
+  /** Test seam: runs after the folder is made and right before the video is copied. */
+  readonly beforeCopy?: () => Promise<void>;
 }
+
+/**
+ * Copies the source checked a moment ago. It is opened with `O_NOFOLLOW`, so a
+ * link put in its place is refused, and the open file must be the same regular
+ * file (device and inode) the earlier `lstat` saw, so a swapped file is refused
+ * too. A process of the same user that rewrites the file's bytes in between is
+ * outside the threat model (see `creatorFiles.ts`).
+ */
+const COPY_CHUNK_BYTES = 1024 * 1024;
+
+const copyCheckedVideo = async (
+  sourcePath: string,
+  copyPath: string,
+  checked: NodeFS.BigIntStats,
+): Promise<void> => {
+  let input: NodeFSP.FileHandle;
+  try {
+    input = await NodeFSP.open(sourcePath, NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW);
+  } catch (cause) {
+    if (errno(cause) === "ELOOP") {
+      throw new CreatorFileError("unsafe_path", "The video was replaced by a link", { cause });
+    }
+    throw new CreatorFileError("not_found", `Video not found: ${sourcePath}`, { cause });
+  }
+  try {
+    const opened = await input.stat({ bigint: true });
+    if (!opened.isFile() || opened.dev !== checked.dev || opened.ino !== checked.ino) {
+      throw new CreatorFileError("unsafe_path", "The video changed while it was being opened");
+    }
+    const output = await NodeFSP.open(
+      copyPath,
+      NodeFS.constants.O_WRONLY | NodeFS.constants.O_CREAT | NodeFS.constants.O_EXCL,
+      0o600,
+    );
+    try {
+      const buffer = Buffer.alloc(COPY_CHUNK_BYTES);
+      for (;;) {
+        const { bytesRead } = await input.read(buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        let written = 0;
+        while (written < bytesRead) {
+          written += (await output.write(buffer, written, bytesRead - written)).bytesWritten;
+        }
+      }
+    } finally {
+      await output.close();
+    }
+  } finally {
+    await input.close();
+  }
+};
 
 export interface ReviewProject {
   /** `<creator>/review/<projectId>/<openId>`, the folder to preview. */
@@ -214,16 +267,16 @@ export const makeReviewProject = async (
   if (!VIDEO_EXTENSIONS.has(ext)) {
     throw new CreatorFileError("invalid_name", "Only mp4, mov and webm videos can be reviewed");
   }
-  let source: NodeFS.Stats;
+  let source: NodeFS.BigIntStats;
   try {
-    source = await NodeFSP.lstat(videoRealPath);
+    source = await NodeFSP.lstat(videoRealPath, { bigint: true });
   } catch (cause) {
     throw new CreatorFileError("not_found", `Video not found: ${videoRealPath}`, { cause });
   }
   if (source.isSymbolicLink() || !source.isFile()) {
     throw new CreatorFileError("unsafe_path", "The video must be a regular file (resolved path)");
   }
-  if (source.size > maxVideoBytes) {
+  if (source.size > BigInt(maxVideoBytes)) {
     throw new CreatorFileError("too_large", `Videos over ${maxVideoBytes} bytes are refused`);
   }
 
@@ -252,7 +305,8 @@ export const makeReviewProject = async (
     await verifyAll(dirs);
     const videoFile = `video.${ext}`;
     const copy = NodePath.join(servingRoot, videoFile);
-    await NodeFSP.copyFile(videoRealPath, copy, NodeFS.constants.COPYFILE_EXCL);
+    await options.beforeCopy?.();
+    await copyCheckedVideo(videoRealPath, copy, source);
     const copied = await NodeFSP.lstat(copy);
     if (!copied.isFile()) throw new CreatorFileError("unsafe_path", "The copy is not a file");
     if (copied.size > maxVideoBytes) {

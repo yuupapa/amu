@@ -137,6 +137,23 @@ export interface CreatorProjectStep<A> {
 export const creatorProjectIdOf = (realPath: string): CreatorProjectId =>
   NodeCrypto.createHash("sha256").update(realPath).digest("hex").slice(0, 32) as CreatorProjectId;
 
+/**
+ * The Creator project of a source opened for a thread. Comments are kept per
+ * (real source path, thread), so another thread that opens the same folder or
+ * video starts its own comment store and cannot read or resolve these.
+ */
+export const creatorProjectIdFor = (realSourcePath: string, threadId: ThreadId): CreatorProjectId =>
+  creatorProjectIdOf(`${realSourcePath}\0${threadId}`);
+
+/**
+ * Stage 1 is local only: the server runs inside the desktop app and its
+ * browser channel is up. Every Creator entry point checks this.
+ */
+export const isLocalCreatorHost = (
+  config: { readonly mode: ServerConfig.ServerConfig["Service"]["mode"] },
+  channel: { readonly available: boolean },
+): boolean => config.mode === "desktop" && channel.available;
+
 export class CreatorService extends Context.Service<
   CreatorService,
   {
@@ -467,7 +484,7 @@ const make = Effect.gen(function* () {
     bindingId: CreatorBindingId,
   ) {
     yield* ensureEnabled;
-    if (config.mode !== "desktop" || !channel.available) {
+    if (!isLocalCreatorHost(config, channel)) {
       return yield* Effect.fail(operationError("unavailable", "desktop_only"));
     }
     const binding = bindings.get(bindingId);
@@ -634,7 +651,7 @@ const make = Effect.gen(function* () {
   const bind: CreatorService["Service"]["bind"] = Effect.fn("CreatorService.bind")(
     function* (input) {
       yield* ensureEnabled;
-      if (config.mode !== "desktop" || !channel.available) {
+      if (!isLocalCreatorHost(config, channel)) {
         return yield* Effect.fail(operationError("unavailable", "desktop_only"));
       }
       const binding: CreatorBinding = {
@@ -675,7 +692,7 @@ const make = Effect.gen(function* () {
     "CreatorService.requireBindingForThread",
   )(function* (projectId, threadId) {
     yield* ensureEnabled;
-    if (config.mode !== "desktop" || !channel.available) {
+    if (!isLocalCreatorHost(config, channel)) {
       return yield* Effect.fail(operationError("unavailable", "desktop_only"));
     }
     const matches = [...bindings.values()].filter(

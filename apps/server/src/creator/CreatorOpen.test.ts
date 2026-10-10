@@ -16,6 +16,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
@@ -79,6 +80,11 @@ const harness = (options: HarnessOptions = {}) =>
       subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
     });
 
+    const released = yield* Queue.unbounded<string>();
+    const setEnabled = (enabled: boolean) =>
+      Ref.updateAndGet(settingsRef, (current) => ({ ...current, amuCreatorEnabled: enabled })).pipe(
+        Effect.flatMap((current) => PubSub.publish(changes, current)),
+      );
     const ensured: string[] = [];
     const stopped: string[] = [];
     let behaviour: EnsureBehaviour = "ok";
@@ -120,7 +126,10 @@ const harness = (options: HarnessOptions = {}) =>
       }),
     );
     const context = yield* Layer.build(
-      CreatorOpen.layerWith({ ffprobe: async () => 2 }).pipe(
+      CreatorOpen.layerWith({
+        ffprobe: async () => 2,
+        afterRelease: (bindingId) => Queue.offer(released, bindingId).pipe(Effect.asVoid),
+      }).pipe(
         Layer.provideMerge(CreatorService.layer),
         Layer.provideMerge(PreviewManager.layer),
         Layer.provide(supervisorLayer),
@@ -174,6 +183,10 @@ const harness = (options: HarnessOptions = {}) =>
       previews,
       ensured,
       stopped,
+      setEnabled,
+      /** Waits for the next `count` releases and returns their binding ids. */
+      nextReleased: (count: number) =>
+        Effect.forEach(Array.from({ length: count }), () => Queue.take(released)),
       setBehaviour: (next: EnsureBehaviour) => {
         behaviour = next;
       },
@@ -190,7 +203,7 @@ it.layer(NodeServices.layer)("CreatorOpen", (it) => {
       const h = yield* harness();
       const project = yield* h.hyperframes(NodePath.join(h.work, "promo"));
       const opened = yield* h.opener.open({ path: "promo", threadId, openedBy: "agent" });
-      expect(opened.projectId).toBe(CreatorService.creatorProjectIdOf(project));
+      expect(opened.projectId).toBe(CreatorService.creatorProjectIdFor(project, threadId));
       expect(opened.epoch).toBe(0);
       expect(h.ensured).toEqual([project]);
       const binding = yield* h.creator.requireBinding(opened.bindingId);
@@ -228,7 +241,7 @@ it.layer(NodeServices.layer)("CreatorOpen", (it) => {
       const h = yield* harness();
       const project = yield* h.hyperframes(NodePath.join(h.outside, "promo"));
       const opened = yield* h.opener.open({ path: project, threadId, openedBy: "user" });
-      expect(opened.projectId).toBe(CreatorService.creatorProjectIdOf(project));
+      expect(opened.projectId).toBe(CreatorService.creatorProjectIdFor(project, threadId));
       expect((yield* h.creator.requireBinding(opened.bindingId)).openedBy).toBe("user");
       const relative = yield* Effect.flip(
         h.opener.open({ path: "outside/promo", threadId, openedBy: "user" }),
@@ -287,7 +300,7 @@ it.layer(NodeServices.layer)("CreatorOpen", (it) => {
       const h = yield* harness();
       const clip = yield* h.video(NodePath.join(h.outside, "clip.mp4"));
       const opened = yield* h.opener.open({ path: clip, threadId, openedBy: "user" });
-      expect(opened.projectId).toBe(CreatorService.creatorProjectIdOf(clip));
+      expect(opened.projectId).toBe(CreatorService.creatorProjectIdFor(clip, threadId));
       const review = yield* h.reviewDir(opened.projectId);
       expect(h.ensured).toHaveLength(1);
       const root = h.ensured[0]!;
@@ -303,17 +316,13 @@ it.layer(NodeServices.layer)("CreatorOpen", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("reopening an mp4 revokes the previous open, stops it and removes its copy", () =>
+  it.effect("reopening an mp4 builds the new open, then stops and removes the previous one", () =>
     Effect.gen(function* () {
       const h = yield* harness();
       const clip = yield* h.video(NodePath.join(h.work, "clip.mp4"));
       const first = yield* h.opener.open({ path: "clip.mp4", threadId, openedBy: "agent" });
       const firstRoot = h.ensured[0]!;
-      const second = yield* h.opener.open({
-        path: clip,
-        threadId: otherThreadId,
-        openedBy: "user",
-      });
+      const second = yield* h.opener.open({ path: clip, threadId, openedBy: "user" });
       expect(second.projectId).toBe(first.projectId);
       const secondRoot = h.ensured[1]!;
       expect(secondRoot).not.toBe(firstRoot);
@@ -322,13 +331,111 @@ it.layer(NodeServices.layer)("CreatorOpen", (it) => {
       expect(yield* h.exists(secondRoot)).toBe(true);
       const revoked = yield* Effect.flip(h.creator.requireBinding(first.bindingId));
       expect(revoked).toMatchObject(opError("unauthorized"));
-      // The old tab is closed with it; the new one lives in the other thread.
-      expect((yield* h.previews.list({ threadId })).sessions).toEqual([]);
-      expect((yield* h.previews.list({ threadId: otherThreadId })).sessions).toHaveLength(1);
+      const tabs = yield* h.previews.list({ threadId });
+      expect(tabs.sessions.map((tab) => tab.tabId)).toEqual([second.tabId]);
       // A different video is a different project.
       const other = yield* h.video(NodePath.join(h.work, "other.mov"));
       const third = yield* h.opener.open({ path: other, threadId, openedBy: "user" });
       expect(third.projectId).not.toBe(first.projectId);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a failed mp4 reopen leaves the working open alone", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const clip = yield* h.video(NodePath.join(h.work, "clip.mp4"));
+      const first = yield* h.opener.open({ path: clip, threadId, openedBy: "user" });
+      const firstRoot = h.ensured[0]!;
+      h.setBehaviour("bad_url");
+      yield* Effect.flip(h.opener.open({ path: clip, threadId, openedBy: "user" }));
+      const failedRoot = h.ensured[1]!;
+      expect(h.stopped).toEqual([failedRoot]);
+      expect(yield* h.exists(firstRoot)).toBe(true);
+      expect(yield* h.exists(failedRoot)).toBe(false);
+      expect((yield* h.creator.requireBinding(first.bindingId)).tabId).toBe(first.tabId);
+      const tabs = yield* h.previews.list({ threadId });
+      expect(tabs.sessions.map((tab) => tab.tabId)).toEqual([first.tabId]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("the same folder in two threads is two projects, and neither revokes the other", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const project = yield* h.hyperframes(NodePath.join(h.work, "promo"));
+      const inA = yield* h.opener.open({ path: project, threadId, openedBy: "user" });
+      const inB = yield* h.opener.open({
+        path: "promo",
+        threadId: otherThreadId,
+        openedBy: "agent",
+      });
+      expect(inB.projectId).not.toBe(inA.projectId);
+      // One preview serves both.
+      expect(h.ensured).toEqual([project, project]);
+      yield* h.creator.requireBinding(inA.bindingId);
+      yield* h.creator.requireBinding(inB.bindingId);
+      const foreign = yield* Effect.flip(
+        h.creator.requireBindingForThread(inA.projectId, otherThreadId),
+      );
+      expect(foreign).toMatchObject(opError("unauthorized"));
+      // Reopening in B replaces only B's open.
+      const againInB = yield* h.opener.open({
+        path: project,
+        threadId: otherThreadId,
+        openedBy: "user",
+      });
+      expect(againInB.projectId).toBe(inB.projectId);
+      yield* h.creator.requireBinding(inA.bindingId);
+      expect((yield* h.previews.list({ threadId })).sessions).toHaveLength(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("closing a tab revokes its binding, stops an unused preview and removes the copy", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const clip = yield* h.video(NodePath.join(h.work, "clip.mp4"));
+      const project = yield* h.hyperframes(NodePath.join(h.work, "promo"));
+      const mp4 = yield* h.opener.open({ path: clip, threadId, openedBy: "user" });
+      const mp4Root = h.ensured[0]!;
+      const inA = yield* h.opener.open({ path: project, threadId, openedBy: "user" });
+      const inB = yield* h.opener.open({
+        path: project,
+        threadId: otherThreadId,
+        openedBy: "user",
+      });
+
+      yield* h.previews.close({ threadId, tabId: mp4.tabId });
+      expect(yield* h.nextReleased(1)).toEqual([mp4.bindingId]);
+      expect(h.stopped).toEqual([mp4Root]);
+      expect(yield* h.exists(mp4Root)).toBe(false);
+      const revoked = yield* Effect.flip(h.creator.requireBinding(mp4.bindingId));
+      expect(revoked).toMatchObject(opError("unauthorized"));
+
+      // The folder's preview keeps running while thread B still shows it.
+      yield* h.previews.close({ threadId, tabId: inA.tabId });
+      expect(yield* h.nextReleased(1)).toEqual([inA.bindingId]);
+      expect(h.stopped).toEqual([mp4Root]);
+      yield* h.creator.requireBinding(inB.bindingId);
+      yield* h.previews.close({ threadId: otherThreadId, tabId: inB.tabId });
+      expect(yield* h.nextReleased(1)).toEqual([inB.bindingId]);
+      expect(h.stopped).toEqual([mp4Root, project]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("turning the setting off releases every open and closes its tab", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const clip = yield* h.video(NodePath.join(h.work, "clip.mp4"));
+      const project = yield* h.hyperframes(NodePath.join(h.work, "promo"));
+      const mp4 = yield* h.opener.open({ path: clip, threadId, openedBy: "user" });
+      const mp4Root = h.ensured[0]!;
+      const hf = yield* h.opener.open({ path: project, threadId, openedBy: "user" });
+      yield* h.setEnabled(false);
+      expect((yield* h.nextReleased(2)).toSorted()).toEqual(
+        [mp4.bindingId, hf.bindingId].toSorted(),
+      );
+      expect(h.stopped.toSorted()).toEqual([mp4Root, project].toSorted());
+      expect(yield* h.exists(mp4Root)).toBe(false);
+      expect((yield* h.previews.list({ threadId })).sessions).toEqual([]);
     }).pipe(Effect.scoped),
   );
 
@@ -369,7 +476,7 @@ it.layer(NodeServices.layer)("CreatorOpen", (it) => {
         const mp4Root = h.ensured[0]!;
         expect(h.stopped).toEqual([mp4Root]);
         expect(yield* h.exists(mp4Root)).toBe(false);
-        const projectId = CreatorService.creatorProjectIdOf(clip);
+        const projectId = CreatorService.creatorProjectIdFor(clip, threadId);
         const unbound = yield* Effect.flip(h.creator.requireBindingForThread(projectId, threadId));
         expect(unbound).toMatchObject(opError("unauthorized"));
 
@@ -377,7 +484,10 @@ it.layer(NodeServices.layer)("CreatorOpen", (it) => {
         expect(hf._tag).toBe("CreatorOperationError");
         expect(h.stopped).toEqual([mp4Root, project]);
         const hfUnbound = yield* Effect.flip(
-          h.creator.requireBindingForThread(CreatorService.creatorProjectIdOf(project), threadId),
+          h.creator.requireBindingForThread(
+            CreatorService.creatorProjectIdFor(project, threadId),
+            threadId,
+          ),
         );
         expect(hfUnbound).toMatchObject(opError("unauthorized"));
         expect((yield* h.previews.list({ threadId })).sessions).toEqual([]);
