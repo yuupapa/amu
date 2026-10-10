@@ -1124,14 +1124,17 @@ export const DesktopPreviewCreatorApproveResultSchema = Schema.Union([
 export type DesktopPreviewCreatorApproveResult =
   typeof DesktopPreviewCreatorApproveResultSchema.Type;
 
-export type DesktopPreviewCreatorGuestKind =
-  | "draft"
-  | "update"
-  | "place"
-  | "delete"
-  | "propose"
-  | "cancel"
-  | "confirm-by-user";
+/** Messages the Creator guest overlay may send; each has its own guest IPC channel. */
+export const DESKTOP_PREVIEW_CREATOR_GUEST_KINDS = [
+  "draft",
+  "update",
+  "place",
+  "delete",
+  "propose",
+  "cancel",
+  "confirm-by-user",
+] as const;
+export type DesktopPreviewCreatorGuestKind = (typeof DESKTOP_PREVIEW_CREATOR_GUEST_KINDS)[number];
 
 export type DesktopPreviewCreatorRevokeReason =
   | "navigation"

@@ -154,4 +154,11 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   }
   yield* ipc.handle(PreviewIpc.listBrowserImportSources);
   yield* ipc.handle(PreviewIpc.importBrowserCookies);
+  // Amu Creator: renderer-only (the methods refuse any other sender).
+  yield* ipc.handle(PreviewIpc.registerCreatorSession);
+  yield* ipc.handle(PreviewIpc.revokeCreatorSession);
+  yield* ipc.handle(PreviewIpc.revokeAllCreatorSessions);
+  yield* ipc.handle(PreviewIpc.isCreatorSessionCurrent);
+  yield* ipc.handle(PreviewIpc.creatorApprove);
+  yield* ipc.handle(PreviewIpc.pushCreatorState);
 });

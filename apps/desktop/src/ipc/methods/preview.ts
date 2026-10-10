@@ -440,14 +440,38 @@ export const saveRecording = DesktopIpc.makeIpcMethod({
   }),
 });
 
+class CreatorIpcUnauthorizedSenderError extends Schema.TaggedError<CreatorIpcUnauthorizedSenderError>()(
+  "CreatorIpcUnauthorizedSenderError",
+  {},
+) {
+  override get message(): string {
+    return "Creator request was rejected.";
+  }
+}
+
+/**
+ * Creator channels are for the app window's renderer only. Preview guests
+ * (webviews) can invoke any ipcMain channel, so every other sender is refused
+ * before the request reaches the session ledger.
+ */
+const ensureCreatorRenderer = Effect.fn("desktop.ipc.preview.ensureCreatorRenderer")(function* (
+  event: DesktopIpc.DesktopIpcInvokeEvent | undefined,
+) {
+  const main = yield* (yield* ElectronWindow.ElectronWindow).main;
+  if (event === undefined || Option.isNone(main) || main.value.webContents.id !== event.sender.id) {
+    return yield* new CreatorIpcUnauthorizedSenderError();
+  }
+});
+
 export const registerCreatorSession = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CREATOR_REGISTER_CHANNEL,
   payload: DesktopPreviewCreatorRegisterInputSchema,
   result: DesktopPreviewCreatorRegisterResultSchema,
-  handler: Effect.fn("desktop.ipc.preview.registerCreatorSession")(function* ({
-    tabId,
-    bindingId,
-  }) {
+  handler: Effect.fn("desktop.ipc.preview.registerCreatorSession")(function* (
+    { tabId, bindingId },
+    event,
+  ) {
+    yield* ensureCreatorRenderer(event);
     const manager = yield* PreviewManager.PreviewManager;
     return yield* manager.registerCreatorSession(tabId, bindingId);
   }),
@@ -457,7 +481,8 @@ export const revokeCreatorSession = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CREATOR_REVOKE_CHANNEL,
   payload: DesktopPreviewTabInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.revokeCreatorSession")(function* ({ tabId }) {
+  handler: Effect.fn("desktop.ipc.preview.revokeCreatorSession")(function* ({ tabId }, event) {
+    yield* ensureCreatorRenderer(event);
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.revokeCreatorSession(tabId);
   }),
@@ -467,7 +492,8 @@ export const revokeAllCreatorSessions = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CREATOR_REVOKE_ALL_CHANNEL,
   payload: Schema.Void,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.revokeAllCreatorSessions")(function* () {
+  handler: Effect.fn("desktop.ipc.preview.revokeAllCreatorSessions")(function* (_input, event) {
+    yield* ensureCreatorRenderer(event);
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.revokeAllCreatorSessions();
   }),
@@ -477,10 +503,11 @@ export const isCreatorSessionCurrent = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CREATOR_IS_CURRENT_CHANNEL,
   payload: DesktopPreviewCreatorGenerationInputSchema,
   result: Schema.Boolean,
-  handler: Effect.fn("desktop.ipc.preview.isCreatorSessionCurrent")(function* ({
-    tabId,
-    generation,
-  }) {
+  handler: Effect.fn("desktop.ipc.preview.isCreatorSessionCurrent")(function* (
+    { tabId, generation },
+    event,
+  ) {
+    yield* ensureCreatorRenderer(event);
     const manager = yield* PreviewManager.PreviewManager;
     return yield* manager.isCreatorSessionCurrent(tabId, generation);
   }),
@@ -490,11 +517,11 @@ export const creatorApprove = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CREATOR_APPROVE_CHANNEL,
   payload: DesktopPreviewCreatorApproveInputSchema,
   result: DesktopPreviewCreatorApproveResultSchema,
-  handler: Effect.fn("desktop.ipc.preview.creatorApprove")(function* ({
-    tabId,
-    generation,
-    proposalId,
-  }) {
+  handler: Effect.fn("desktop.ipc.preview.creatorApprove")(function* (
+    { tabId, generation, proposalId },
+    event,
+  ) {
+    yield* ensureCreatorRenderer(event);
     const manager = yield* PreviewManager.PreviewManager;
     return yield* manager.creatorApprove(tabId, generation, proposalId);
   }),
@@ -504,7 +531,8 @@ export const pushCreatorState = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CREATOR_PUSH_STATE_CHANNEL,
   payload: DesktopPreviewCreatorPushStateInputSchema,
   result: Schema.Boolean,
-  handler: Effect.fn("desktop.ipc.preview.pushCreatorState")(function* ({ tabId, state }) {
+  handler: Effect.fn("desktop.ipc.preview.pushCreatorState")(function* ({ tabId, state }, event) {
+    yield* ensureCreatorRenderer(event);
     const manager = yield* PreviewManager.PreviewManager;
     return yield* manager.pushCreatorState(tabId, state);
   }),
@@ -542,10 +570,4 @@ export const methods = [
   startRecording,
   stopRecording,
   saveRecording,
-  registerCreatorSession,
-  revokeCreatorSession,
-  revokeAllCreatorSessions,
-  isCreatorSessionCurrent,
-  creatorApprove,
-  pushCreatorState,
 ] as const;

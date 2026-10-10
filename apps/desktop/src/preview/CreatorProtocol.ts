@@ -9,13 +9,13 @@
  * the per-guest rate limits. The guest page can forge any of these, so main
  * treats every field as untrusted.
  */
-import type { CreatorGuestMessageKind } from "./creatorSessions.ts";
+import type { DesktopPreviewCreatorGuestKind } from "@t3tools/contracts";
 
 /** main -> guest `{ generation: number | null }`. `null` switches the overlay off. */
 export const CREATOR_ACTIVATE_CHANNEL = "creator:activate";
 
 /** guest -> main `{ generation, payload }`; main forwards `payload` to the renderer untouched. */
-export const CREATOR_GUEST_CHANNELS: Readonly<Record<CreatorGuestMessageKind, string>> = {
+export const CREATOR_GUEST_CHANNELS: Readonly<Record<DesktopPreviewCreatorGuestKind, string>> = {
   draft: "creator:draft",
   update: "creator:update",
   place: "creator:place",

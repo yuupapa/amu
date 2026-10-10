@@ -225,6 +225,7 @@ describe("creator ledger: guest messages", () => {
     ledger.admitGuestMessage({ ...guest(1, {}, 0), kind: "draft" });
     ledger.admitGuestMessage({ ...guest(1, {}, 0), kind: "draft" });
     ledger.navigationStarted(WC);
+    ledger.navigationCommitted(WC);
     ledger.register({
       tabId: "tab",
       bindingId: BINDING,
@@ -283,8 +284,9 @@ describe("creator ledger: capture requests", () => {
       ok: true,
       capture: { requestId: "a" },
     });
-    // The slot is free again.
-    expect(ledger.beginCapture(request(1, "b")).ok).toBe(true);
+    // The slot is free again once capturePage settled and a second has passed.
+    ledger.captureSettled(WC, "a");
+    expect(ledger.beginCapture(request(1, "b", 1_000)).ok).toBe(true);
   });
 
   it("discards a ready that arrives after the timeout", () => {
@@ -401,6 +403,7 @@ describe("creator ledger: current document", () => {
     expect(ledger.currentDocumentSession(WC)?.generation).toBe(1);
     ledger.navigationStarted(WC);
     expect(ledger.currentDocumentSession(WC)).toBeUndefined();
+    ledger.navigationCommitted(WC);
     ledger.register({
       tabId: "tab",
       bindingId: BINDING,
@@ -409,5 +412,113 @@ describe("creator ledger: current document", () => {
     });
     expect(ledger.currentDocumentSession(WC)?.generation).toBe(2);
     expect(ledger.currentDocumentSession(99)).toBeUndefined();
+  });
+});
+
+describe("creator ledger: capture rate and in-flight captures (fix round 1)", () => {
+  const request = (requestId: string, now: number, generation = 1) => ({
+    tabId: "tab",
+    webContentsId: WC,
+    attachmentId: ATTACHMENT,
+    message: { generation, requestId, purpose: "draft", timeSec: 1 },
+    now,
+  });
+  const ready = (requestId: string, now: number, generation = 1) => ({
+    tabId: "tab",
+    webContentsId: WC,
+    attachmentId: ATTACHMENT,
+    message: { generation, requestId, rect: { x: 0, y: 0, width: 10, height: 10 } },
+    now,
+  });
+
+  it("starts at most one capture per second per guest, across re-registration", () => {
+    const { ledger } = setup();
+    expect(ledger.beginCapture(request("a", 0)).ok).toBe(true);
+    ledger.captureReady(ready("a", 10));
+    ledger.finishCapture("tab", "a");
+    ledger.captureSettled(WC, "a");
+    expect(ledger.beginCapture(request("b", 500))).toEqual({
+      ok: false,
+      reason: "rate_limited",
+      requestId: "b",
+    });
+    ledger.navigationStarted(WC);
+    ledger.navigationCommitted(WC);
+    ledger.register({
+      tabId: "tab",
+      bindingId: BINDING,
+      webContentsId: WC,
+      attachmentId: ATTACHMENT,
+    });
+    expect(ledger.beginCapture(request("c", 900, 2))).toEqual({
+      ok: false,
+      reason: "rate_limited",
+      requestId: "c",
+    });
+    expect(ledger.beginCapture(request("d", 1_000, 2)).ok).toBe(true);
+  });
+
+  it("does not start a capture while an expired one's capturePage is still running", () => {
+    const { ledger } = setup();
+    ledger.beginCapture(request("a", 0));
+    expect(ledger.captureReady(ready("a", 10)).ok).toBe(true);
+    expect(ledger.expireCapture("tab", "a")).toBe(true);
+    expect(ledger.beginCapture(request("b", 6_000))).toEqual({
+      ok: false,
+      reason: "capture_busy",
+      requestId: "b",
+    });
+    ledger.captureSettled(WC, "a");
+    expect(ledger.beginCapture(request("c", 6_100)).ok).toBe(true);
+  });
+
+  it("names an expired request it replaces so the guest can be released", () => {
+    const { ledger } = setup();
+    ledger.beginCapture(request("a", 0));
+    expect(ledger.beginCapture(request("b", CREATOR_LIMITS.captureTimeoutMs + 1))).toMatchObject({
+      ok: true,
+      replacedRequestId: "a",
+    });
+  });
+});
+
+describe("creator ledger: pending navigation (fix round 1)", () => {
+  it("records a registration made mid-navigation but keeps the outgoing document out", () => {
+    const { ledger, guest } = setup();
+    ledger.navigationStarted(WC);
+    const registered = ledger.register({
+      tabId: "tab",
+      bindingId: BINDING,
+      webContentsId: WC,
+      attachmentId: ATTACHMENT,
+    });
+    expect(registered.activated.generation).toBe(2);
+    expect(registered.navigating).toBe(true);
+    expect(ledger.admitGuestMessage({ ...guest(2), kind: "draft" })).toEqual({
+      ok: false,
+      reason: "navigating",
+    });
+    expect(
+      ledger.beginCapture({
+        tabId: "tab",
+        webContentsId: WC,
+        attachmentId: ATTACHMENT,
+        message: { generation: 2, requestId: "a", purpose: "draft", timeSec: 1 },
+        now: 0,
+      }),
+    ).toEqual({ ok: false, reason: "navigating", requestId: "a" });
+    expect(ledger.currentDocumentSession(WC)).toBeUndefined();
+
+    ledger.navigationCommitted(WC);
+    expect(ledger.currentDocumentSession(WC)?.generation).toBe(2);
+    expect(ledger.admitGuestMessage({ ...guest(2), kind: "draft" }).ok).toBe(true);
+  });
+
+  it("reports whether a navigation that ended without a commit was pending", () => {
+    const { ledger } = setup();
+    expect(ledger.navigationSettled(WC)).toBe(false);
+    ledger.navigationStarted(WC);
+    expect(ledger.navigationSettled(WC)).toBe(true);
+    expect(ledger.navigationSettled(WC)).toBe(false);
   });
 });

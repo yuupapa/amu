@@ -4354,7 +4354,7 @@ describe("PreviewManager Amu Creator", () => {
     toPNG: () => Buffer.from(`png-${width}x${height}`),
   });
 
-  const makeCreatorGuest = (id = 42) => {
+  const makeCreatorGuest = (id = 42, url = "http://localhost:3002/") => {
     const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
     const ipcHandlers = new Map<string, (event: unknown, ...args: unknown[]) => void>();
     const mainFrame = { routingId: id };
@@ -4369,7 +4369,7 @@ describe("PreviewManager Amu Creator", () => {
       mainFrame,
       isDestroyed: () => false,
       getType: () => "webview",
-      getURL: () => "http://localhost:3002/",
+      getURL: () => url,
       getTitle: () => "Studio",
       isLoading: () => false,
       getZoomFactor: () => 1,
@@ -4709,6 +4709,121 @@ describe("PreviewManager Amu Creator", () => {
         yield* manager.closeTab("tab_creator");
         yield* settle(() => events.length === 4);
         expect(events[3]).toMatchObject({ kind: "revoked", reason: "tab-closed", epoch: 4 });
+      }),
+    ),
+  );
+
+  effectIt.effect("keeps the outgoing document out when registering mid-navigation", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        yield* openCreatorTab(manager, [guest]);
+        const events = yield* collectCreatorEvents(manager);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+
+        // The renderer re-registers on `revoked`, before the new document commits.
+        expect(yield* manager.registerCreatorSession("tab_creator", BINDING)).toEqual({
+          ok: true,
+          epoch: 3,
+          generation: 2,
+        });
+        expect(guest.sent("creator:activate")).toEqual([{ generation: 1 }, { generation: null }]);
+        const draft = guest.ipcHandlers.get("creator:draft")!;
+        draft(guest.fromMainFrame, { generation: 2, payload: { comment: "old page" } });
+        expect(yield* manager.pushCreatorState("tab_creator", { comments: [] })).toBe(false);
+
+        guest.emit("did-navigate");
+        expect(guest.sent("creator:activate")).toHaveLength(2);
+        guest.emit("dom-ready");
+        yield* settle(() => guest.sent("creator:activate").length === 3);
+        expect(guest.sent("creator:activate").at(-1)).toEqual({ generation: 2 });
+        draft(guest.fromMainFrame, { generation: 2, payload: { comment: "new page" } });
+        yield* settle(() => events.some((event) => event["kind"] === "draft"));
+        expect(
+          events
+            .filter((event) => event["kind"] === "draft")
+            .map((event) => (event["payload"] as { comment: string }).comment),
+        ).toEqual(["new page"]);
+        expect(yield* manager.pushCreatorState("tab_creator", { comments: [] })).toBe(true);
+      }),
+    ),
+  );
+
+  effectIt.effect("activates the old document again when the navigation fails", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        yield* openCreatorTab(manager, [guest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        guest.emit("did-fail-load", {}, -3, "aborted", "http://localhost:3002/x", true);
+        yield* settle(() => guest.sent("creator:activate").length === 3);
+        expect(guest.sent("creator:activate").at(-1)).toEqual({ generation: 2 });
+      }),
+    ),
+  );
+
+  effectIt.effect("refuses to register on a page that is not a loopback Studio page", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest(42, "https://example.com/");
+        yield* openCreatorTab(manager, [guest]);
+        expect(yield* manager.registerCreatorSession("tab_creator", BINDING)).toEqual({
+          ok: false,
+          reason: "not_local_page",
+        });
+        expect(guest.sent("creator:activate")).toEqual([]);
+      }),
+    ),
+  );
+
+  effectIt.effect("waits for an expired capture's capturePage before the next capture", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        yield* openCreatorTab(manager, [guest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        let release!: (image: CreatorTestImage) => void;
+        guest.capturePage.mockImplementationOnce(
+          () =>
+            new Promise<CreatorTestImage>((resolve) => {
+              release = resolve;
+            }),
+        );
+        const request = guest.ipcHandlers.get("creator:capture-request")!;
+        const ask = (requestId: string) =>
+          request(guest.fromMainFrame, { generation: 1, requestId, purpose: "draft", timeSec: 1 });
+        ask("r1");
+        guest.ipcHandlers.get("creator:capture-ready")!(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          rect: { x: 0, y: 0, width: 200, height: 100 },
+        });
+        yield* settle(() => guest.capturePage.mock.calls.length === 1);
+        yield* TestClock.adjust(5_000);
+        yield* settle(() => guest.sent("creator:capture-done").length === 1);
+
+        ask("r2");
+        yield* settle(() => guest.sent("creator:capture-done").length === 2);
+        expect(guest.sent("creator:capture-done")).toEqual([
+          { requestId: "r1", ok: false },
+          { requestId: "r2", ok: false },
+        ]);
+        expect(guest.sent("creator:capture-begin")).toEqual([{ requestId: "r1" }]);
+
+        release(makeCreatorImage(200, 100));
+        yield* settle(() => false);
+        ask("r3");
+        expect(guest.sent("creator:capture-begin")).toEqual([
+          { requestId: "r1" },
+          { requestId: "r3" },
+        ]);
+        // At most one capture per second.
+        ask("r4");
+        yield* settle(() => guest.sent("creator:capture-done").length === 3);
+        expect(guest.sent("creator:capture-done").at(-1)).toEqual({ requestId: "r4", ok: false });
       }),
     ),
   );

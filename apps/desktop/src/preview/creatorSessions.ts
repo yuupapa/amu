@@ -13,33 +13,15 @@
  *
  * Main never stores comments or proposals; it only stamps and forwards.
  */
-import { CREATOR_LIMITS } from "@t3tools/contracts";
+import { CREATOR_LIMITS, type DesktopPreviewCreatorGuestKind } from "@t3tools/contracts";
 
-export const CREATOR_GUEST_MESSAGE_KINDS = [
-  "draft",
-  "update",
-  "place",
-  "delete",
-  "propose",
-  "cancel",
-  "confirm-by-user",
-] as const;
-export type CreatorGuestMessageKind = (typeof CREATOR_GUEST_MESSAGE_KINDS)[number];
 export type CreatorCapturePurpose = "draft" | "place";
-
-export type CreatorRevokeReason =
-  | "navigation"
-  | "guest-swapped"
-  | "tab-closed"
-  | "destroyed"
-  | "renderer"
-  | "revoke-all"
-  | "replaced";
 
 export type CreatorRefusal =
   | "no_session"
   | "inactive"
   | "wrong_guest"
+  | "navigating"
   | "stale_generation"
   | "bad_request"
   | "too_large"
@@ -90,7 +72,7 @@ interface GuestInput {
 
 type Refused = { readonly ok: false; readonly reason: CreatorRefusal };
 
-const COMMENT_KINDS: ReadonlySet<CreatorGuestMessageKind> = new Set([
+const COMMENT_KINDS: ReadonlySet<DesktopPreviewCreatorGuestKind> = new Set([
   "draft",
   "update",
   "place",
@@ -98,6 +80,8 @@ const COMMENT_KINDS: ReadonlySet<CreatorGuestMessageKind> = new Set([
   "confirm-by-user",
 ]);
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/** Captures a guest may start, at most one per this many ms. */
+const CAPTURE_INTERVAL_MS = 1_000;
 const MAX_TIME_SEC = 24 * 60 * 60;
 
 const utf8 = new TextEncoder();
@@ -146,8 +130,16 @@ export const makeCreatorLedger = () => {
   const sessions = new Map<string, CreatorSession>();
   const epochs = new Map<string, number>();
   const documents = new Map<number, number>();
-  const rates = new Map<number, { comment: number[]; lastProposeAt: number }>();
+  const rates = new Map<
+    number,
+    { comment: number[]; lastProposeAt: number; lastCaptureAt: number }
+  >();
   const captures = new Map<string, CreatorPendingCapture>();
+  // Guests with a cross-document navigation started but not yet committed or failed.
+  const navigating = new Set<number>();
+  // Guests whose capturePage for this request has not settled yet, even if the
+  // request itself expired or was revoked.
+  const inFlight = new Map<number, string>();
 
   const bumpEpoch = (tabId: string): number => {
     const next = (epochs.get(tabId) ?? 0) + 1;
@@ -195,6 +187,8 @@ export const makeCreatorLedger = () => {
     ) {
       return { ok: false, reason: "wrong_guest" };
     }
+    // The outgoing document must not speak for the session registered for the next one.
+    if (navigating.has(input.webContentsId)) return { ok: false, reason: "navigating" };
     if (!isRecord(input.message)) return { ok: false, reason: "bad_request" };
     if (input.message["generation"] !== session.generation) {
       return { ok: false, reason: "stale_generation" };
@@ -202,12 +196,22 @@ export const makeCreatorLedger = () => {
     return { ok: true, session };
   };
 
-  const takeRate = (webContentsId: number, kind: CreatorGuestMessageKind, now: number): boolean => {
+  const rateOf = (webContentsId: number) => {
     const rate = rates.get(webContentsId) ?? {
       comment: [],
       lastProposeAt: Number.NEGATIVE_INFINITY,
+      lastCaptureAt: Number.NEGATIVE_INFINITY,
     };
     rates.set(webContentsId, rate);
+    return rate;
+  };
+
+  const takeRate = (
+    webContentsId: number,
+    kind: DesktopPreviewCreatorGuestKind,
+    now: number,
+  ): boolean => {
+    const rate = rateOf(webContentsId);
     if (COMMENT_KINDS.has(kind)) {
       rate.comment = rate.comment.filter((at) => now - at < CREATOR_LIMITS.commentRateWindowMs);
       if (rate.comment.length >= CREATOR_LIMITS.commentRateMax) return false;
@@ -254,7 +258,13 @@ export const makeCreatorLedger = () => {
         active: true,
       };
       sessions.set(input.tabId, activated);
-      return { activated, revoked, discardedCaptureId };
+      // While navigating, the activation waits for the new document (dom-ready).
+      return {
+        activated,
+        revoked,
+        discardedCaptureId,
+        navigating: navigating.has(input.webContentsId),
+      };
     },
 
     revoke,
@@ -265,15 +275,28 @@ export const makeCreatorLedger = () => {
     /** A cross-document main-frame navigation started on this guest. */
     navigationStarted: (webContentsId: number): CreatorRevocation | null => {
       documents.set(webContentsId, documentGeneration(webContentsId) + 1);
+      navigating.add(webContentsId);
       const session = sessionForGuest(webContentsId);
       return session ? revokeActive(session) : null;
     },
+
+    /** The main-frame navigation committed: the new document is current. */
+    navigationCommitted: (webContentsId: number): void => {
+      navigating.delete(webContentsId);
+    },
+
+    /**
+     * The navigation ended without (or before) a commit, e.g. it failed or was
+     * cancelled. True when one was pending: the old document is still shown.
+     */
+    navigationSettled: (webContentsId: number): boolean => navigating.delete(webContentsId),
 
     /** The guest is gone (destroyed or detached); its counters go with it. */
     forgetWebContents: (webContentsId: number): CreatorRevocation | null => {
       const session = sessionForGuest(webContentsId);
       documents.delete(webContentsId);
       rates.delete(webContentsId);
+      navigating.delete(webContentsId);
       return session ? revokeActive(session) : null;
     },
 
@@ -286,6 +309,7 @@ export const makeCreatorLedger = () => {
 
     /** The live session on this guest, while the guest still shows the document it was activated on. */
     currentDocumentSession: (webContentsId: number): CreatorSession | undefined => {
+      if (navigating.has(webContentsId)) return undefined;
       const session = sessionForGuest(webContentsId);
       return session?.generation === documentGeneration(webContentsId) ? session : undefined;
     },
@@ -311,7 +335,7 @@ export const makeCreatorLedger = () => {
     },
 
     admitGuestMessage: (
-      input: GuestInput & { readonly kind: CreatorGuestMessageKind },
+      input: GuestInput & { readonly kind: DesktopPreviewCreatorGuestKind },
     ):
       | { readonly ok: true; readonly session: CreatorSession; readonly payload: unknown }
       | Refused => {
@@ -335,6 +359,8 @@ export const makeCreatorLedger = () => {
           readonly ok: true;
           readonly session: CreatorSession;
           readonly capture: CreatorPendingCapture;
+          /** An expired request this one replaced; its guest still waits for `done`. */
+          readonly replacedRequestId: string | null;
         }
       | (Refused & { readonly requestId: string | null }) => {
       const message = isRecord(input.message) ? input.message : {};
@@ -366,6 +392,10 @@ export const makeCreatorLedger = () => {
       if (pending && input.now <= pending.deadline) {
         return refuse(pending.requestId === requestId ? "duplicate_request" : "capture_busy");
       }
+      if (inFlight.has(input.webContentsId)) return refuse("capture_busy");
+      const rate = rateOf(input.webContentsId);
+      if (input.now - rate.lastCaptureAt < CAPTURE_INTERVAL_MS) return refuse("rate_limited");
+      rate.lastCaptureAt = input.now;
       const capture: CreatorPendingCapture = {
         requestId,
         generation: admitted.session.generation,
@@ -377,7 +407,12 @@ export const makeCreatorLedger = () => {
         deadline: input.now + CREATOR_LIMITS.captureTimeoutMs,
       };
       captures.set(input.tabId, capture);
-      return { ok: true, session: admitted.session, capture };
+      return {
+        ok: true,
+        session: admitted.session,
+        capture,
+        replacedRequestId: pending?.requestId ?? null,
+      };
     },
 
     /** The guest froze the frame and hid its UI; returns the crop it reports. */
@@ -408,6 +443,8 @@ export const makeCreatorLedger = () => {
       if (measured.bytes > CREATOR_LIMITS.maxMessageBytes)
         return { ok: false, reason: "too_large" };
       if (!isRecord(measured.json)) return { ok: false, reason: "bad_request" };
+      // Held until `captureSettled`, past any expiry or revoke of the request.
+      inFlight.set(input.webContentsId, pending.requestId);
       return { ok: true, capture: pending, rect: measured.json["rect"], pin: measured.json["pin"] };
     },
 
@@ -435,6 +472,14 @@ export const makeCreatorLedger = () => {
         return { ok: false, reason: "stale_generation" };
       }
       return { ok: true, session, capture: pending };
+    },
+
+    isCapturePending: (tabId: string, requestId: string): boolean =>
+      captures.get(tabId)?.requestId === requestId,
+
+    /** The capture work for this ready (including capturePage) has settled. */
+    captureSettled: (webContentsId: number, requestId: string): void => {
+      if (inFlight.get(webContentsId) === requestId) inFlight.delete(webContentsId);
     },
 
     /** The 5 s timer fired; true when it removed this request. */

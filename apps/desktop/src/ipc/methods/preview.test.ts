@@ -7,10 +7,12 @@ import {
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
 import * as PreviewIpc from "./preview.ts";
@@ -127,6 +129,70 @@ describe("preview IPC methods", () => {
       },
     ),
   );
+
+  effectIt.effect("accepts Creator calls only from the app window's renderer", () => {
+    const calls: string[] = [];
+    const record = (name: string, value: unknown) =>
+      Effect.sync(() => {
+        calls.push(name);
+        return value;
+      });
+    const manager = {
+      registerCreatorSession: () => record("register", { ok: true, epoch: 1, generation: 1 }),
+      revokeCreatorSession: () => record("revoke", undefined),
+      revokeAllCreatorSessions: () => record("revokeAll", undefined),
+      isCreatorSessionCurrent: () => record("isCurrent", true),
+      creatorApprove: () => record("approve", { ok: true, epoch: 1 }),
+      pushCreatorState: () => record("pushState", true),
+    } as unknown as PreviewManager.PreviewManager["Service"];
+    const bindingId = "11111111-1111-4111-8111-111111111111";
+    const proposalId = "33333333-3333-4333-8333-333333333333";
+    const invocations = [
+      [PreviewIpc.registerCreatorSession, { tabId: "tab", bindingId }],
+      [PreviewIpc.revokeCreatorSession, { tabId: "tab" }],
+      [PreviewIpc.revokeAllCreatorSessions, undefined],
+      [PreviewIpc.isCreatorSessionCurrent, { tabId: "tab", generation: 1 }],
+      [PreviewIpc.creatorApprove, { tabId: "tab", generation: 1, proposalId }],
+      [PreviewIpc.pushCreatorState, { tabId: "tab", state: {} }],
+    ] as const;
+
+    return Effect.gen(function* () {
+      for (const [method, payload] of invocations) {
+        // A preview guest (its own webContents id) and a missing sender are refused.
+        for (const event of [{ sender: { id: 42 } }, undefined]) {
+          const exit = yield* Effect.exit(method.handler(payload, event));
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            const error = Cause.findErrorOption(exit.cause);
+            expect(Option.isSome(error) && error.value._tag).toBe(
+              "CreatorIpcUnauthorizedSenderError",
+            );
+          }
+        }
+      }
+      expect(calls).toEqual([]);
+      for (const [method, payload] of invocations) {
+        yield* method.handler(payload, { sender: { id: 7 } });
+      }
+      expect(calls).toEqual([
+        "register",
+        "revoke",
+        "revokeAll",
+        "isCurrent",
+        "approve",
+        "pushState",
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeedSome({ webContents: { id: 7 } }),
+          } as unknown as ElectronWindow.ElectronWindow["Service"]),
+          Layer.succeed(PreviewManager.PreviewManager, manager),
+        ),
+      ),
+    );
+  });
 
   it("keeps the public automation status tab id limit", () => {
     const encode = Schema.encodeUnknownSync(PreviewAutomationStatus);

@@ -7,6 +7,7 @@
  */
 import {
   CREATOR_LIMITS,
+  DESKTOP_PREVIEW_CREATOR_GUEST_KINDS,
   DesktopPreviewRecordingInputSchema,
   DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
 } from "@t3tools/contracts";
@@ -15,6 +16,7 @@ import type {
   DesktopPreviewColorScheme,
   DesktopPreviewCreatorApproveResult,
   DesktopPreviewCreatorEvent,
+  DesktopPreviewCreatorGuestKind,
   DesktopPreviewCreatorRegisterResult,
   DesktopPreviewCreatorRevokeReason,
   DesktopPreviewFavicon,
@@ -95,8 +97,6 @@ import {
   CREATOR_STATE_CHANNEL,
 } from "./CreatorProtocol.ts";
 import {
-  CREATOR_GUEST_MESSAGE_KINDS,
-  type CreatorGuestMessageKind,
   type CreatorRevocation,
   isCreatorGuestUrl,
   makeCreatorLedger,
@@ -321,13 +321,15 @@ const captureGuestImage = (
   tabId: string,
   wc: Electron.WebContents,
   cropRect: PreviewAnnotationRect | null,
+  /** Sees the `capturePage` promise itself, which may outlive the timeout. */
+  onStarted?: (capture: Promise<Electron.NativeImage>) => void,
 ): Effect.Effect<Electron.NativeImage | null, PreviewManagerError> =>
   Effect.tryPromise({
     // The unused abort signal is what makes this interruptible, and therefore
     // what lets the timeout below fire. Drop the parameter and a stalled
     // capture strands the pick session again.
-    try: (_signal) =>
-      wc.capturePage(
+    try: (_signal) => {
+      const capture = wc.capturePage(
         cropRect
           ? {
               x: cropRect.x,
@@ -336,7 +338,10 @@ const captureGuestImage = (
               height: cropRect.height,
             }
           : undefined,
-      ),
+      );
+      onStarted?.(capture);
+      return capture;
+    },
     catch: (cause) =>
       new PreviewOperationError({
         operation,
@@ -1373,9 +1378,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         ok: false,
       });
     }
-    yield* sendToCreatorGuest(activated.webContentsId, CREATOR_ACTIVATE_CHANNEL, {
-      generation: activated.generation,
-    });
+    // Mid-navigation the old document is still loaded; `dom-ready` (or a failed
+    // navigation) delivers the activation to the document it belongs to.
+    if (!outcome.navigating) {
+      yield* sendToCreatorGuest(activated.webContentsId, CREATOR_ACTIVATE_CHANNEL, {
+        generation: activated.generation,
+      });
+    }
     yield* publishCreatorEvent({
       kind: "activated",
       tabId,
@@ -1429,11 +1438,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const target = yield* Effect.sync(() => {
       const session = creatorLedger.session(tabId);
       if (!session?.active) return null;
+      // Only the document the session was activated on, never an outgoing page mid-navigation.
+      if (creatorLedger.currentDocumentSession(session.webContentsId) !== session) return null;
       if (
         Ref.getUnsafe(attachedRef).get(session.webContentsId)?.attachmentId !== session.attachmentId
       ) {
         return null;
       }
+      const guest = webContents.fromId(session.webContentsId);
+      if (!guest || guest.isDestroyed() || !isCreatorGuestUrl(guest.getURL())) return null;
       // The whole comment store is at most this big, so its panel state is too.
       const measured = measureGuestPayload(state, CREATOR_LIMITS.maxStoreBytes);
       if (!measured || measured.bytes > CREATOR_LIMITS.maxStoreBytes) return null;
@@ -1574,12 +1587,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       webContents.fromId(wc.id) === wc &&
       Ref.getUnsafe(attachedRef).get(wc.id)?.attachmentId === attachmentId &&
       isCreatorGuestUrl(wc.getURL());
-    const creatorRefused = (kind: CreatorGuestMessageKind, reason: string) => {
+    const creatorRefused = (kind: DesktopPreviewCreatorGuestKind, reason: string) => {
       if (reason === "too_large" || reason === "rate_limited" || reason === "bad_request") {
         runFork(sendToCreatorGuest(wc.id, CREATOR_REFUSED_CHANNEL, { kind, reason }));
       }
     };
-    const creatorGuestHandlers = CREATOR_GUEST_MESSAGE_KINDS.map((kind) => {
+    const creatorGuestHandlers = DESKTOP_PREVIEW_CREATOR_GUEST_KINDS.map((kind) => {
       const handler = (event: Electron.IpcMainEvent, message?: unknown): void => {
         if (!fromCreatorGuest(event)) return;
         const admitted = creatorLedger.admitGuestMessage({
@@ -1625,6 +1638,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         }
         return;
       }
+      if (begun.replacedRequestId !== null) {
+        runFork(releaseCreatorCapture(begun.replacedRequestId, false));
+      }
       const { requestId } = begun.capture;
       runFork(sendToCreatorGuest(wc.id, CREATOR_CAPTURE_BEGIN_CHANNEL, { requestId }));
       runFork(
@@ -1661,16 +1677,27 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       rect: unknown,
       pin: unknown,
     ) {
+      // The guest stays "capturing" until capturePage itself settles, even if
+      // the request expires first, so captures never overlap on one guest.
+      let started: Promise<unknown> | null = null;
+      const settled = () => creatorLedger.captureSettled(wc.id, requestId);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (started === null) settled();
+          else void started.then(settled, settled);
+        }),
+      );
       const viewport = yield* readCreatorViewport;
       const zoomFactor =
         (yield* SynchronizedRef.get(tabsRef)).get(tabId)?.zoomFactor ?? DEFAULT_ZOOM_FACTOR;
       const plan =
         viewport === null ? null : planCreatorCapture({ rect, pin, viewport, zoomFactor });
-      const image = plan?.ok
-        ? yield* captureGuestImage("captureCreatorShot", tabId, wc, plan.rect).pipe(
-            Effect.orElseSucceed(() => null),
-          )
-        : null;
+      const image =
+        plan?.ok && creatorLedger.isCapturePending(tabId, requestId)
+          ? yield* captureGuestImage("captureCreatorShot", tabId, wc, plan.rect, (capture) => {
+              started = capture;
+            }).pipe(Effect.orElseSucceed(() => null))
+          : null;
       // Checked again after capturePage: a revoke, timeout or re-registration in
       // the meantime already released the guest, and this result is dropped.
       const finished = creatorLedger.finishCapture(tabId, requestId);
@@ -1710,7 +1737,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       });
       // A late or foreign ready has no pending request and is dropped.
       if (!ready.ok) return;
-      runFork(captureCreatorShot(ready.capture.requestId, ready.rect, ready.pin));
+      runFork(Effect.scoped(captureCreatorShot(ready.capture.requestId, ready.rect, ready.pin)));
     };
     // An activation sent while a navigation was in flight reached the old
     // document; deliver it to the document it was meant for.
@@ -1724,6 +1751,19 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const documentReady = (): void => {
       restoreRecordingCursor();
       creatorDocumentReady();
+    };
+    const navigated = (): void => {
+      // The new document committed; its dom-ready delivers any pending activation.
+      creatorLedger.navigationCommitted(wc.id);
+      syncNavigation();
+    };
+    // A navigation that ends without committing leaves the old document in place.
+    const settleCreatorNavigation = (): void => {
+      if (creatorLedger.navigationSettled(wc.id)) creatorDocumentReady();
+    };
+    const stoppedLoading = (): void => {
+      settleCreatorNavigation();
+      sync();
     };
     const creatorGuestDestroyed = (): void => {
       runFork(announceCreatorRevocation(creatorLedger.forgetWebContents(wc.id), "destroyed"));
@@ -1831,6 +1871,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       validatedUrl: string,
       isMainFrame: boolean,
     ): void => {
+      if (isMainFrame) settleCreatorNavigation();
       if (code === -3 || !isMainFrame) return;
       runFork(
         update(tabId, {
@@ -1965,12 +2006,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       attempt({ operation: "detachListeners", tabId, webContentsId: wc.id }, () => {
         cancelFaviconCapture();
         wc.off("did-start-navigation", navigationStarted);
-        wc.off("did-navigate", syncNavigation);
+        wc.off("did-navigate", navigated);
         wc.off("did-navigate-in-page", syncInPageNavigation);
         wc.off("page-title-updated", sync);
         wc.off("page-favicon-updated", faviconUpdated as never);
         wc.off("did-start-loading", sync);
-        wc.off("did-stop-loading", sync);
+        wc.off("did-stop-loading", stoppedLoading);
         wc.off("dom-ready", documentReady);
         wc.off("did-fail-load", failed as never);
         wc.off("audio-state-changed", audioStateChanged);
@@ -1993,12 +2034,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         // Other preview input, including CDP keys, belongs to the page.
         wc.setIgnoreMenuShortcuts(true);
         wc.on("did-start-navigation", navigationStarted);
-        wc.on("did-navigate", syncNavigation);
+        wc.on("did-navigate", navigated);
         wc.on("did-navigate-in-page", syncInPageNavigation);
         wc.on("page-title-updated", sync);
         wc.on("page-favicon-updated", faviconUpdated as never);
         wc.on("did-start-loading", sync);
-        wc.on("did-stop-loading", sync);
+        wc.on("did-stop-loading", stoppedLoading);
         wc.on("dom-ready", documentReady);
         wc.on("did-fail-load", failed as never);
         wc.on("audio-state-changed", audioStateChanged);
