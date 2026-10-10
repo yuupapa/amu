@@ -363,6 +363,11 @@ it.layer(NodeServices.layer)("CreatorOpen", (it) => {
       const opened = yield* h.opener.open({ path: project, threadId, openedBy: "user" });
       expect(opened.projectId).toBe(CreatorService.creatorProjectIdFor(project, threadId));
       expect((yield* h.creator.requireBinding(opened.bindingId)).openedBy).toBe("user");
+      // The user opened it from the right panel, where it already shows: nothing to reveal.
+      const tabs = yield* h.previews.list({ threadId });
+      expect(tabs.sessions.map((tab) => [tab.tabId, tab.reveal])).toEqual([
+        [opened.tabId, undefined],
+      ]);
       const relative = yield* Effect.flip(
         h.opener.open({ path: "outside/promo", threadId, openedBy: "user" }),
       );

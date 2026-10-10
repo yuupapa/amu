@@ -437,7 +437,8 @@ export const make = (options: CreatorOpenOptions = {}) =>
           .open({
             threadId: input.threadId,
             url: preview.url,
-            reveal: true,
+            // An agent's open asks viewers to show the tab; the user opened it where they look.
+            ...(input.openedBy === "agent" ? { reveal: true } : {}),
             creator: { bindingId: binding.bindingId, label: source.label },
             beforePublish: (opened) => {
               attached = creator.attachTabNow(binding.bindingId, opened.tabId);
