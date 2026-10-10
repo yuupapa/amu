@@ -6,6 +6,7 @@ import {
   commentActions,
   commentStatusLabel,
   formatTime,
+  placeMessages,
   readPanelState,
   reconcileEdit,
   sendableIds,
@@ -309,5 +310,37 @@ describe("readPanelState nested fields", () => {
       ],
     });
     expect(state?.proposals.map((entry) => entry.id)).toEqual(["p1"]);
+  });
+});
+
+describe("placeMessages", () => {
+  it("carries one request id in the place and its capture, so the renderer pairs them", () => {
+    const place = {
+      x: 0.7,
+      y: 0.6,
+      compositionFile: null,
+      elementSelector: null,
+      elementLabel: null,
+    };
+    const messages = placeMessages({
+      requestId: "req-1",
+      comment: { id: "c1", revision: 3, timeSec: 76 },
+      place,
+      pin: { x: 0.7, y: 0.6 },
+    });
+    expect(messages.place).toEqual({
+      requestId: "req-1",
+      commentId: "c1",
+      expectedRevision: 3,
+      place,
+    });
+    expect(messages.capture).toEqual({
+      requestId: "req-1",
+      purpose: "place",
+      timeSec: 76,
+      commentId: "c1",
+      place,
+      pin: { x: 0.7, y: 0.6 },
+    });
   });
 });

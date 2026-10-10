@@ -554,7 +554,7 @@ export const pickCreatorVideo = DesktopIpc.makeIpcMethod({
       owner: yield* electronWindow.focusedMainOrFirst,
       defaultPath: Option.none(),
       multiple: false,
-      filters: [{ name: "Video", extensions: CREATOR_VIDEO_EXTENSIONS }],
+      filters: [{ name: "動画", extensions: CREATOR_VIDEO_EXTENSIONS }],
     });
     return paths[0] ?? null;
   }),

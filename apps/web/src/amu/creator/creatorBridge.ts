@@ -11,7 +11,8 @@
  * - guest messages are handled one at a time, in arrival order;
  * - a repeated draft `requestId` never creates a second comment;
  * - a draft shot waits (at most 10, for 60 s) for its draft; a place shot is
- *   attached only after its `setPlace` was acknowledged, at the revision it returned;
+ *   paired with its own place by `requestId` and attached only after that
+ *   `setPlace` succeeded, at the revision it returned (dropped if it was refused);
  * - comment text is passed through exactly as the guest sent it.
  */
 import {
@@ -50,6 +51,10 @@ export const CREATOR_PROJECT_REVISION = "current";
 
 const SHOT_BUFFER_MAX = 10;
 const SHOT_BUFFER_TTL_MS = 60_000;
+/** Draft request ids remembered per binding (newest kept). */
+const DRAFT_KEYS_MAX = 200;
+/** Place request ids remembered while their shot is awaited, or after a refusal. */
+const PLACE_REQUESTS_MAX = 20;
 
 export type CreatorCallResult<A> =
   | { readonly ok: true; readonly value: A }
@@ -90,8 +95,10 @@ export interface CreatorBridgeView {
   readonly generation: number | null;
   /** The proposal whose confirm sheet is open. */
   readonly sheetProposalId: CreatorProposalId | null;
-  /** That proposal as `propose` returned it (shown until a snapshot lists it). */
+  /** That proposal as `propose` returned it, or as the snapshot listed it on reopening. */
   readonly sheetProposal: CreatorProposal | null;
+  /** The newest server snapshot (kept while a subscription restarts). */
+  readonly snapshot: CreatorSnapshot | null;
 }
 
 export interface CreatorBridgeOptions {
@@ -101,6 +108,13 @@ export interface CreatorBridgeOptions {
   readonly main: CreatorBridgeMain;
   readonly now: () => number;
   readonly onChange: (view: CreatorBridgeView) => void;
+  /**
+   * `requestId -> commentId` of this binding's drafts. Pass the same map to a
+   * bridge recreated for the binding, so a repeated draft still finds its comment.
+   */
+  readonly draftKeys?: Map<string, CreatorCommentId>;
+  /** Whether the preview tab still exists (a destroyed guest is then recreated). */
+  readonly tabExists: () => boolean;
 }
 
 const RequestId = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,64}$/));
@@ -124,6 +138,7 @@ const decoders = {
   ),
   place: Schema.decodeUnknownOption(
     Schema.Struct({
+      requestId: RequestId,
       commentId: CreatorCommentId,
       expectedRevision: PositiveInt,
       place: Schema.NullOr(CreatorPlace),
@@ -140,6 +155,7 @@ const decoders = {
 
 interface BufferedShot {
   readonly key: string;
+  readonly commentId: CreatorCommentId | null;
   readonly png: Uint8Array;
   readonly at: number;
 }
@@ -160,11 +176,13 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
   let stopped = false;
   let registering = false;
 
-  const draftKeys = new Map<string, CreatorCommentId>();
+  const draftKeys = options.draftKeys ?? new Map<string, CreatorCommentId>();
   /** Newest revision seen per comment, from RPC results and snapshots. */
   const revisions = new Map<CreatorCommentId, number>();
-  /** Comments whose `setPlace` succeeded and whose place shot has not been attached yet. */
-  const placeAcked = new Set<CreatorCommentId>();
+  /** Place requests whose `setPlace` succeeded and whose shot has not arrived yet. */
+  const placeReady = new Map<string, CreatorCommentId>();
+  /** Place requests the server refused; their shot is dropped. */
+  const placeRefused = new Set<string>();
   let shots: BufferedShot[] = [];
 
   let lastSnapshot: CreatorSnapshot | null = null;
@@ -180,6 +198,7 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
     generation: serverEpoch === null ? null : generation,
     sheetProposalId: sheetProposal?.id ?? null,
     sheetProposal,
+    snapshot: lastSnapshot,
   });
   const changed = () => {
     if (!disposed) options.onChange(view());
@@ -215,18 +234,26 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
     const cutoff = now() - SHOT_BUFFER_TTL_MS;
     shots = shots.filter((entry) => entry.at > cutoff);
   };
-  const bufferShot = (key: string, png: Uint8Array) => {
+  const bufferShot = (key: string, png: Uint8Array, commentId: CreatorCommentId | null = null) => {
     pruneShots();
-    shots = [...shots.filter((entry) => entry.key !== key), { key, png, at: now() }].slice(
-      -SHOT_BUFFER_MAX,
-    );
+    shots = [
+      ...shots.filter((entry) => entry.key !== key),
+      { key, commentId, png, at: now() },
+    ].slice(-SHOT_BUFFER_MAX);
   };
-  const takeShot = (key: string): Uint8Array | null => {
+  const takeShot = (key: string): BufferedShot | null => {
     pruneShots();
     const found = shots.find((entry) => entry.key === key);
     if (!found) return null;
     shots = shots.filter((entry) => entry !== found);
-    return found.png;
+    return found;
+  };
+  /** Insertion-ordered maps and sets keep their newest `max` entries. */
+  const trim = (collection: Map<string, unknown> | Set<string>, max: number) => {
+    for (const key of collection.keys()) {
+      if (collection.size <= max) return;
+      collection.delete(key);
+    }
   };
 
   const attachShot = async (commentId: CreatorCommentId, png: Uint8Array) => {
@@ -254,10 +281,12 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
     sheetProposal = null;
     changed();
     await rpc.setEpoch({ bindingId, epoch, generation: null });
-    if (RECOVERABLE_REVOCATIONS.has(reason)) {
+    // A destroyed guest of a tab that still exists comes back with the webview.
+    if (RECOVERABLE_REVOCATIONS.has(reason) || (reason === "destroyed" && options.tabExists())) {
       await register();
     } else {
       stopped = true;
+      draftKeys.clear();
     }
   };
 
@@ -293,9 +322,10 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
     );
     if (!created) return;
     draftKeys.set(draft.requestId, created.id);
+    trim(draftKeys, DRAFT_KEYS_MAX);
     noteRevision(created);
-    const png = takeShot(`draft:${draft.requestId}`);
-    if (png) await attachShot(created.id, png);
+    const buffered = takeShot(`draft:${draft.requestId}`);
+    if (buffered) await attachShot(created.id, buffered.png);
     await push();
   };
 
@@ -310,19 +340,38 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
     if (event.purpose !== "place") return;
     const commentId = Option.getOrNull(decoders.commentId(event.commentId));
     if (commentId === null) return;
-    if (placeAcked.delete(commentId)) await attachShot(commentId, event.png);
-    else bufferShot(`place:${commentId}`, event.png);
+    const requestId = event.requestId;
+    if (placeRefused.delete(requestId)) return;
+    const placed = placeReady.get(requestId);
+    if (placed === undefined) {
+      // The capture overtook its place: wait for that place's answer.
+      bufferShot(`place:${requestId}`, event.png, commentId);
+      return;
+    }
+    placeReady.delete(requestId);
+    if (placed === commentId) await attachShot(commentId, event.png);
   };
 
   const onPlace = async (payload: unknown) => {
     const input = Option.getOrNull(decoders.place(payload));
     if (input === null) return;
-    const updated = await call(rpc.setPlace({ ...binding(), ...input }));
-    if (!updated) return;
+    const { requestId, ...place } = input;
+    const updated = await call(rpc.setPlace({ ...binding(), ...place }));
+    const buffered = takeShot(`place:${requestId}`);
+    if (!updated) {
+      if (buffered === null) {
+        placeRefused.add(requestId);
+        trim(placeRefused, PLACE_REQUESTS_MAX);
+      }
+      return;
+    }
     noteRevision(updated);
-    const png = takeShot(`place:${input.commentId}`);
-    if (png) await attachShot(input.commentId, png);
-    else placeAcked.add(input.commentId);
+    if (buffered === null) {
+      placeReady.set(requestId, place.commentId);
+      trim(placeReady, PLACE_REQUESTS_MAX);
+    } else if (buffered.commentId === place.commentId) {
+      await attachShot(place.commentId, buffered.png);
+    }
   };
 
   const onGuest = async (kind: string, payload: unknown) => {
@@ -428,8 +477,10 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
 
   const handleSnapshot = (snapshot: CreatorSnapshot): Promise<void> => {
     if (disposed) return Promise.resolve();
+    const fresh = snapshot !== lastSnapshot;
     lastSnapshot = snapshot;
     for (const comment of snapshot.comments) noteRevision(comment);
+    if (fresh) changed();
     return push();
   };
 
@@ -443,6 +494,11 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
       enqueue(() => (generation === null ? register() : Promise.resolve())),
     handleMainEvent,
     handleSnapshot,
+    /** Opens the confirm sheet for a live proposal (e.g. one that needs the user again). */
+    openSheet: (proposal: CreatorProposal) => {
+      sheetProposal = proposal;
+      changed();
+    },
     closeSheet: () => {
       if (sheetProposal === null) return;
       sheetProposal = null;

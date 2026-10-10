@@ -31,7 +31,12 @@ import { creatorEnvironment } from "~/state/creator";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import type { CreatorBridgeView } from "./creatorBridge";
-import { creatorSendReasonText, creatorSheetPhase, formatCreatorTime } from "./creatorSheet";
+import {
+  approveAndSend,
+  creatorSendReasonText,
+  creatorSheetPhase,
+  formatCreatorTime,
+} from "./creatorSheet";
 import { CREATOR_PAGE_CHANGED, creatorErrorMessage } from "./creatorText";
 import { toCreatorCallResult } from "./useCreatorSession";
 
@@ -106,7 +111,7 @@ export function CreatorConfirmSheet(props: {
   readonly bindingId: CreatorBindingId;
   readonly view: CreatorBridgeView;
   readonly snapshot: CreatorSnapshot | null;
-  /** The proposal as `propose` returned it. */
+  /** The proposal as `propose` returned it, or as the snapshot lists it when reopened. */
   readonly proposal: CreatorProposal;
   readonly threadTitle: string | null;
   readonly onClose: () => void;
@@ -126,6 +131,8 @@ export function CreatorConfirmSheet(props: {
   const [result, setResult] = useState<CreatorSendResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 取り消し failed once; dismissing then just closes (the error stays visible until then). */
+  const [cancelFailed, setCancelFailed] = useState(false);
 
   const phase = creatorSheetPhase({ snapshot, pinned, submitted, result, seenLive });
   const gone = phase.kind === "gone";
@@ -136,43 +143,30 @@ export function CreatorConfirmSheet(props: {
   const binding = view.epoch === null ? null : { bindingId, epoch: view.epoch };
 
   const send = async () => {
-    if (view.generation === null || binding === null || !previewBridge) {
+    const approve = previewBridge?.creatorApprove;
+    if (view.generation === null || binding === null || !approve) {
       setError(CREATOR_PAGE_CHANGED);
       return;
     }
     setBusy(true);
     setError(null);
-    const approval = await previewBridge
-      .creatorApprove({
-        tabId: props.runtimeTabId,
-        generation: view.generation,
-        proposalId: pinned.id,
-      })
-      .catch((): { ok: false; reason: string } => ({ ok: false, reason: "ipc" }));
-    if (!approval.ok) {
-      setBusy(false);
-      setError(CREATOR_PAGE_CHANGED);
-      return;
-    }
     setSubmitted(true);
-    const answer = toCreatorCallResult(
-      await confirmSend({
-        environmentId,
-        input: {
-          bindingId,
-          epoch: approval.epoch,
-          proposalId: pinned.id,
-          revisionKey: pinned.revisionKey,
-        },
-      }),
-    );
+    const outcome = await approveAndSend({
+      tabId: props.runtimeTabId,
+      generation: view.generation,
+      bindingId,
+      proposal: pinned,
+      approve,
+      confirmSend: async (input) =>
+        toCreatorCallResult(await confirmSend({ environmentId, input })),
+    });
     setBusy(false);
-    if (answer.ok) {
-      setResult(answer.value);
+    if (outcome.ok) {
+      setResult(outcome.result);
       return;
     }
     setSubmitted(false);
-    setError(creatorErrorMessage(answer.error));
+    setError(outcome.message);
   };
 
   const runOnProposal = async (
@@ -200,15 +194,17 @@ export function CreatorConfirmSheet(props: {
       await cancelProposal({ environmentId, input: { ...binding, proposalId: pinned.id } }),
     );
     setBusy(false);
-    if (answer.ok) onClose();
-    else setError(creatorErrorMessage(answer.error));
+    if (answer.ok) {
+      onClose();
+      return;
+    }
+    setCancelFailed(true);
+    setError(creatorErrorMessage(answer.error));
   };
 
   const items = pinned.items;
   const status = (() => {
     switch (phase.kind) {
-      case "loading":
-        return "読み込み中…";
       case "sending":
         return phase.checking ? "送信を確認中…" : "送信中…";
       case "stuck":
@@ -237,7 +233,7 @@ export function CreatorConfirmSheet(props: {
         if (open || busy) return;
         // Dismissing before sending withdraws the proposal, so it never waits
         // for a sheet that is gone; after that, closing only hides the sheet.
-        if (phase.kind === "review") void cancel();
+        if (phase.kind === "review" && !cancelFailed) void cancel();
         else onClose();
       }}
     >
@@ -281,8 +277,12 @@ export function CreatorConfirmSheet(props: {
         <DialogFooter>
           {phase.kind === "review" ? (
             <>
-              <Button variant="outline" disabled={busy} onClick={() => void cancel()}>
-                取り消し
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={cancelFailed ? onClose : () => void cancel()}
+              >
+                {cancelFailed ? "閉じる" : "取り消し"}
               </Button>
               <Button disabled={busy} onClick={() => void send()}>
                 送信

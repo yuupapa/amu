@@ -3,10 +3,20 @@
  * The sheet never trusts its own request for the outcome: "送信中…" stays until
  * the snapshot shows the send settled (sent, back to draft, conflict, stuck or halted).
  */
-import type { CreatorProposal, CreatorSendResult, CreatorSnapshot } from "@t3tools/contracts";
+import type {
+  CreatorBindingId,
+  CreatorProposal,
+  CreatorProposalId,
+  CreatorSendResult,
+  CreatorSnapshot,
+  DesktopPreviewCreatorApproveInput,
+  DesktopPreviewCreatorApproveResult,
+} from "@t3tools/contracts";
+
+import type { CreatorCallResult } from "./creatorBridge";
+import { CREATOR_PAGE_CHANGED, creatorErrorMessage } from "./creatorText";
 
 export type CreatorSheetPhase =
-  | { readonly kind: "loading" }
   | { readonly kind: "review" }
   | { readonly kind: "sending"; readonly checking: boolean }
   | { readonly kind: "stuck" }
@@ -20,7 +30,7 @@ export type CreatorSheetPhase =
 export function creatorSheetPhase(input: {
   readonly snapshot: CreatorSnapshot | null;
   /** The proposal as the sheet first saw it (kept after it finishes). */
-  readonly pinned: CreatorProposal | null;
+  readonly pinned: CreatorProposal;
   /** The user pressed 「送信」 and the request has not been refused. */
   readonly submitted: boolean;
   /** What `confirmSend` (or `haltSend`) answered, if it answered. */
@@ -32,7 +42,6 @@ export function creatorSheetPhase(input: {
   readonly seenLive: boolean;
 }): CreatorSheetPhase {
   const { snapshot, pinned, submitted, result, seenLive } = input;
-  if (pinned === null) return { kind: "loading" };
   const live = snapshot?.proposals.find((proposal) => proposal.id === pinned.id);
   if (live) {
     const send = live.send;
@@ -58,9 +67,12 @@ export function creatorSheetPhase(input: {
     snapshot !== null &&
     pinned.items.every((item) => comments.get(item.commentId)?.sentMessageId === messageId);
   if (landed) return { kind: "sent" };
-  // Not listed yet: the sheet shows what `propose` returned until a snapshot catches up.
-  if (!seenLive) return submitted ? { kind: "sending", checking: false } : { kind: "review" };
   if (result?.state === "rejected") return { kind: "failed", reason: result.reason };
+  // No snapshot yet, or one that does not list the proposal yet: show what
+  // `propose` returned until the server state catches up.
+  if (snapshot === null || !seenLive) {
+    return submitted ? { kind: "sending", checking: false } : { kind: "review" };
+  }
   return submitted ? { kind: "failed", reason: result?.reason ?? null } : { kind: "gone" };
 }
 
@@ -82,4 +94,63 @@ export function formatCreatorTime(timeSec: number): string {
   const minutes = Math.floor(tenths / 600);
   const seconds = (tenths % 600) / 10;
   return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
+}
+
+/** Send states the user may have to act on (stop, or acknowledge a conflict). */
+const NEEDS_USER = new Set(["sending", "stuck", "halted", "conflict"]);
+
+/**
+ * A started send the user should be able to get back to after its sheet closed
+ * (revocation, 閉じる, a restart): the first one, unless its sheet is open.
+ */
+export function creatorAttentionProposal(
+  snapshot: CreatorSnapshot | null,
+  openProposalId: CreatorProposalId | null,
+): CreatorProposal | null {
+  return (
+    snapshot?.proposals.find(
+      (proposal) =>
+        proposal.send !== null &&
+        NEEDS_USER.has(proposal.send.state) &&
+        proposal.id !== openProposalId,
+    ) ?? null
+  );
+}
+
+export type ApproveAndSendOutcome =
+  | { readonly ok: true; readonly result: CreatorSendResult }
+  | { readonly ok: false; readonly approved: boolean; readonly message: string };
+
+/**
+ * 「送信」: main approves first (decided there against navigation), and the
+ * server send carries the epoch main returned with that approval.
+ */
+export async function approveAndSend(input: {
+  readonly tabId: string;
+  readonly generation: number;
+  readonly bindingId: CreatorBindingId;
+  readonly proposal: CreatorProposal;
+  readonly approve: (
+    input: DesktopPreviewCreatorApproveInput,
+  ) => Promise<DesktopPreviewCreatorApproveResult>;
+  readonly confirmSend: (input: {
+    readonly bindingId: CreatorBindingId;
+    readonly epoch: number;
+    readonly proposalId: CreatorProposalId;
+    readonly revisionKey: string;
+  }) => Promise<CreatorCallResult<CreatorSendResult>>;
+}): Promise<ApproveAndSendOutcome> {
+  const approval = await input
+    .approve({ tabId: input.tabId, generation: input.generation, proposalId: input.proposal.id })
+    .catch((): DesktopPreviewCreatorApproveResult => ({ ok: false, reason: "ipc" }));
+  if (!approval.ok) return { ok: false, approved: false, message: CREATOR_PAGE_CHANGED };
+  const answer = await input.confirmSend({
+    bindingId: input.bindingId,
+    epoch: approval.epoch,
+    proposalId: input.proposal.id,
+    revisionKey: input.proposal.revisionKey,
+  });
+  return answer.ok
+    ? { ok: true, result: answer.value }
+    : { ok: false, approved: true, message: creatorErrorMessage(answer.error) };
 }

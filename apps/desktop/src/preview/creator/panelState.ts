@@ -9,7 +9,9 @@
  *   so the panel can bind its placeholder card to the saved comment
  * - `notice`: a short message to show (e.g. why a save was refused)
  */
-import type { CreatorComment, CreatorProposal } from "@t3tools/contracts";
+import type { CreatorComment, CreatorPlace, CreatorProposal } from "@t3tools/contracts";
+
+import type { CaptureSpec, Point } from "./captureClient.ts";
 
 export type PanelState = {
   readonly comments: ReadonlyArray<CreatorComment>;
@@ -250,3 +252,30 @@ export const reconcileEdit = (input: {
   if (input.sentAgainst === null || input.serverRevision > input.sentAgainst) return "resend";
   return "wait";
 };
+
+/**
+ * The `creator:place` payload and its capture request. Both carry the same
+ * `requestId`: the renderer attaches the shot only to the place it belongs to,
+ * and drops it when that place was refused.
+ */
+export const placeMessages = (input: {
+  readonly requestId: string;
+  readonly comment: { readonly id: string; readonly revision: number; readonly timeSec: number };
+  readonly place: CreatorPlace;
+  readonly pin: Point;
+}): { readonly place: Record<string, unknown>; readonly capture: CaptureSpec } => ({
+  place: {
+    requestId: input.requestId,
+    commentId: input.comment.id,
+    expectedRevision: input.comment.revision,
+    place: input.place,
+  },
+  capture: {
+    requestId: input.requestId,
+    purpose: "place",
+    timeSec: input.comment.timeSec,
+    commentId: input.comment.id,
+    place: input.place,
+    pin: input.pin,
+  },
+});

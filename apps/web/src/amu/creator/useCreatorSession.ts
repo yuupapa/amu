@@ -12,14 +12,17 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type {
   CreatorBindingId,
+  CreatorCommentId,
   CreatorSnapshot,
   EnvironmentId,
+  ScopedThreadRef,
   ServerSettings,
 } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
+import { readThreadPreviewState } from "~/previewStateStore";
 import { creatorEnvironment } from "~/state/creator";
 import { useServerConfigs } from "~/state/entities";
 import { usePrimaryEnvironmentId } from "~/state/environments";
@@ -112,20 +115,43 @@ interface SharedBridge {
   readonly bridge: CreatorBridge;
   readonly holders: Set<string>;
   readonly listeners: Set<(view: CreatorBridgeView) => void>;
+  /** Told when a holder joins or leaves, so the sheet owner moves with it. */
+  readonly holderListeners: Set<() => void>;
   readonly release: () => void;
 }
 
 const sharedBridges = new Map<string, SharedBridge>();
+/**
+ * Draft keys per binding, kept across bridge recreation (thread switch,
+ * remount). The bridge empties a binding's map when main ends its session.
+ */
+const draftKeysByBinding = new Map<CreatorBindingId, Map<string, CreatorCommentId>>();
+
+const firstHolder = (shared: SharedBridge) => shared.holders.values().next().value;
+const notifyHolders = (shared: SharedBridge) => {
+  for (const listener of shared.holderListeners) listener();
+};
 
 function acquireBridge(
   key: string,
   holder: string,
-  input: { tabId: string; bindingId: CreatorBindingId; rpc: CreatorBridgeRpc },
+  input: {
+    tabId: string;
+    bindingId: CreatorBindingId;
+    rpc: CreatorBridgeRpc;
+    tabExists: () => boolean;
+  },
 ): SharedBridge {
   const existing = sharedBridges.get(key);
   if (existing) {
     existing.holders.add(holder);
+    notifyHolders(existing);
     return existing;
+  }
+  let draftKeys = draftKeysByBinding.get(input.bindingId);
+  if (draftKeys === undefined) {
+    draftKeys = new Map();
+    draftKeysByBinding.set(input.bindingId, draftKeys);
   }
   const bridge = previewBridge;
   if (!bridge) throw new Error("Amu Creator needs the desktop app");
@@ -147,6 +173,8 @@ function acquireBridge(
     onChange: (view) => {
       for (const listener of listeners) listener(view);
     },
+    draftKeys,
+    tabExists: input.tabExists,
   });
   const unsubscribeEvents = bridge.onCreatorEvent((event) => {
     void creator.handleMainEvent(event);
@@ -160,6 +188,7 @@ function acquireBridge(
     bridge: creator,
     holders: new Set([holder]),
     listeners,
+    holderListeners: new Set(),
     release: () => {
       unsubscribeEvents();
       unsubscribeState();
@@ -174,7 +203,10 @@ function releaseBridge(key: string, holder: string): void {
   const shared = sharedBridges.get(key);
   if (!shared) return;
   shared.holders.delete(holder);
-  if (shared.holders.size > 0) return;
+  if (shared.holders.size > 0) {
+    notifyHolders(shared);
+    return;
+  }
   sharedBridges.delete(key);
   // The main session is left as it is: a later mount registers again.
   shared.release();
@@ -189,24 +221,29 @@ const INACTIVE_VIEW: CreatorBridgeView = {
   generation: null,
   sheetProposalId: null,
   sheetProposal: null,
+  snapshot: null,
 };
 
 export interface CreatorSessionState {
   readonly bridge: CreatorBridge | null;
+  /** `view.snapshot` is the newest server snapshot, kept while a subscription restarts. */
   readonly view: CreatorBridgeView;
-  readonly snapshot: CreatorSnapshot | null;
   /** The first holder of a shared bridge draws its confirm sheet. */
   readonly isOwner: boolean;
 }
 
 /** One Creator tab's session. Does nothing (and holds no bridge) unless `enabled`. */
 export function useCreatorSession(input: {
-  readonly environmentId: EnvironmentId;
+  readonly threadRef: ScopedThreadRef;
+  /** The server's tab id (the preview session), used to tell a closed tab from a reloaded guest. */
+  readonly serverTabId: string;
   readonly runtimeTabId: string;
   readonly bindingId: CreatorBindingId;
   readonly enabled: boolean;
 }): CreatorSessionState {
-  const { environmentId, runtimeTabId, bindingId, enabled } = input;
+  const { threadRef, serverTabId, runtimeTabId, bindingId, enabled } = input;
+  const environmentId = threadRef.environmentId;
+  const threadId = threadRef.threadId;
   const holder = useId();
   const rpc = useCreatorRpc(environmentId);
   const [shared, setShared] = useState<SharedBridge | null>(null);
@@ -219,6 +256,8 @@ export function useCreatorSession(input: {
       tabId: runtimeTabId,
       bindingId,
       rpc,
+      tabExists: () =>
+        readThreadPreviewState({ environmentId, threadId }).sessions[serverTabId] !== undefined,
     });
     acquired.listeners.add(setView);
     // oxlint-disable-next-line react/set-state-in-effect -- Publishes the shared bridge this effect just acquired from the registry.
@@ -230,7 +269,23 @@ export function useCreatorSession(input: {
       setShared(null);
       setView(INACTIVE_VIEW);
     };
-  }, [bindingId, enabled, environmentId, holder, rpc, runtimeTabId]);
+  }, [bindingId, enabled, environmentId, holder, rpc, runtimeTabId, serverTabId, threadId]);
+
+  const subscribeHolders = useCallback(
+    (notify: () => void) => {
+      if (shared === null) return () => undefined;
+      shared.holderListeners.add(notify);
+      return () => {
+        shared.holderListeners.delete(notify);
+      };
+    },
+    [shared],
+  );
+  const isOwner = useSyncExternalStore(
+    subscribeHolders,
+    () => shared !== null && firstHolder(shared) === holder,
+    () => false,
+  );
 
   const subscribed = shared !== null && view.epoch !== null && view.generation !== null;
   const result = useAtomValue(
@@ -246,10 +301,5 @@ export function useCreatorSession(input: {
     if (shared && snapshot) void shared.bridge.handleSnapshot(snapshot);
   }, [shared, snapshot]);
 
-  return {
-    bridge: shared?.bridge ?? null,
-    view,
-    snapshot,
-    isOwner: shared !== null && [...shared.holders][0] === holder,
-  };
+  return { bridge: shared?.bridge ?? null, view, isOwner };
 }

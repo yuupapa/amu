@@ -214,6 +214,7 @@ describe("preview IPC methods", () => {
       expect(picked).toBe("/Users/me/Movies/review.mov");
       expect(picks).toHaveLength(1);
       expect(picks[0]?.multiple).toBe(false);
+      expect(picks[0]?.filters.map((filter) => filter.name)).toEqual(["動画"]);
       expect(picks[0]?.filters.flatMap((filter) => filter.extensions)).toEqual([
         "mp4",
         "mov",

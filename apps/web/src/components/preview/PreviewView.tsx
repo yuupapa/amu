@@ -82,6 +82,8 @@ import {
   useActiveBrowserRecordingTabIds,
 } from "~/browser/browserRecording";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
+import { Button } from "~/components/ui/button";
+import { useCreatorAttention } from "~/amu/creator/creatorAttention";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 
 interface Props {
@@ -165,6 +167,7 @@ export function PreviewView({
         : findActiveBrowserRecordingRuntimeTabId(threadRef, tabId)
       : null;
   const snapshot = tabId ? (previewState.sessions[tabId] ?? null) : null;
+  const creatorAttention = useCreatorAttention(snapshot?.creator ? runtimeTabId : null);
   // Server tabs run in the environment's browser and stream to any client, except the
   // desktop app's own server's tabs, which render here natively while the server drives them.
   const nativeServerTab = useRendersServerTabNatively(threadRef.environmentId, snapshot);
@@ -969,6 +972,17 @@ export function PreviewView({
         }
       />
 
+      {creatorAttention ? (
+        <div
+          role="status"
+          className="flex shrink-0 items-center gap-2 border-b bg-muted/60 px-3 py-1.5 text-xs"
+        >
+          <span className="min-w-0 flex-1">送信の確認が必要な依頼があります</span>
+          <Button size="xs" variant="outline" onClick={creatorAttention.open}>
+            確認する
+          </Button>
+        </div>
+      ) : null}
       <div ref={serverBodyRef} className="relative min-h-0 flex-1 overflow-hidden">
         {runtimeTabId && snapshot && isServerTab ? (
           <>

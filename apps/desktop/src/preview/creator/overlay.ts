@@ -17,8 +17,10 @@
  *   renderer attaches that request's shot to the comment the draft creates,
  *   dedupes drafts by it and reports `draftKeys` back
  * - update `{ commentId, expectedRevision, comment }`
- * - place `{ commentId, expectedRevision, place }`, then a capture-request
- *   `{ purpose: "place", commentId, place }` centered on the point
+ * - place `{ requestId, commentId, expectedRevision, place }`, then a
+ *   capture-request `{ requestId, purpose: "place", commentId, place }` with the
+ *   same `requestId` (the renderer pairs the shot with its place by it),
+ *   centered on the point
  * - delete `{ commentId }`, confirm-by-user `{ commentId }`
  * - propose `{ commentIds }`, cancel `{ proposalId }`
  */
@@ -54,6 +56,7 @@ import {
   commentActions,
   commentStatusLabel,
   formatTime,
+  placeMessages,
   readPanelState,
   reconcileEdit,
   sendableIds,
@@ -527,24 +530,17 @@ function createSession(initialGeneration: number) {
       return true;
     }
     const place: CreatorPlace = { x: point.x, y: point.y, ...studio.elementAt(point.x, point.y) };
-    if (
-      send("place", comment.id, {
-        commentId: comment.id,
-        expectedRevision: comment.revision,
-        place,
-      })
-    ) {
+    const messages = placeMessages({
+      requestId: newRequestId(),
+      comment: { id: comment.id, revision: comment.revision, timeSec: target.timeSec },
+      place,
+      pin: point,
+    });
+    if (send("place", comment.id, messages.place)) {
       placeAwaiting.set(comment.id, { revision: comment.revision, at: Date.now() });
       const view = views.get(comment.id);
       if (view !== undefined) view.capture = "pending";
-      capture.request({
-        requestId: newRequestId(),
-        purpose: "place",
-        timeSec: target.timeSec,
-        commentId: comment.id,
-        place,
-        pin: point,
-      });
+      capture.request(messages.capture);
     }
     render();
     return true;

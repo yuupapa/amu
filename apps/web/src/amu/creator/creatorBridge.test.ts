@@ -63,6 +63,8 @@ function harness(
     readonly register?: CreatorBridgeMain["registerCreatorSession"];
     readonly push?: (state: unknown) => boolean;
     readonly now?: () => number;
+    readonly draftKeys?: Map<string, CreatorCommentId>;
+    readonly tabExists?: () => boolean;
   } = {},
 ) {
   const calls: Call[] = [];
@@ -118,6 +120,8 @@ function harness(
     rpc,
     main,
     now: options.now ?? (() => 0),
+    ...(options.draftKeys ? { draftKeys: options.draftKeys } : {}),
+    tabExists: options.tabExists ?? (() => true),
     onChange: (view) => views.push(view),
   });
   return { bridge, calls, pushes, registers, views };
@@ -335,7 +339,7 @@ describe("creatorBridge", () => {
       elementLabel: null,
     };
     const placed = h.bridge.handleMainEvent(
-      guest("place", 1, { commentId: COMMENT_B, expectedRevision: 3, place }),
+      guest("place", 1, { requestId: "p1", commentId: COMMENT_B, expectedRevision: 3, place }),
     );
     const shotted = h.bridge.handleMainEvent(
       shot(1, { requestId: "p1", purpose: "place", commentId: COMMENT_B, png: png(9) }),
@@ -357,10 +361,154 @@ describe("creatorBridge", () => {
     );
     expect(methods(h.calls)).toEqual(["setEpoch"]);
     await h.bridge.handleMainEvent(
-      guest("place", 1, { commentId: COMMENT_B, expectedRevision: 3, place: null }),
+      guest("place", 1, {
+        requestId: "p1",
+        commentId: COMMENT_B,
+        expectedRevision: 3,
+        place: null,
+      }),
     );
     expect(methods(h.calls)).toEqual(["setEpoch", "setPlace", "attachShot"]);
     expect(h.calls[2]!.input).toMatchObject({ expectedRevision: 20 });
+  });
+
+  it("pairs a place shot with its own place: a refused place drops its shot", async () => {
+    const stale = Object.assign(new Error("stale"), {
+      _tag: "CreatorOperationError",
+      code: "stale_revision",
+      detail: "stale_revision",
+    });
+    let placeCalls = 0;
+    const h = harness({
+      answers: {
+        setPlace: (input) => {
+          placeCalls += 1;
+          return placeCalls === 1 ? stale : comment(input["commentId"] as CreatorCommentId, 30);
+        },
+      },
+    });
+    await activate(h);
+    await h.bridge.handleMainEvent(
+      guest("place", 1, {
+        requestId: "p1",
+        commentId: COMMENT_B,
+        expectedRevision: 3,
+        place: null,
+      }),
+    );
+    await h.bridge.handleMainEvent(
+      shot(1, { requestId: "p1", purpose: "place", commentId: COMMENT_B, png: png(1) }),
+    );
+    await h.bridge.handleMainEvent(
+      guest("place", 1, {
+        requestId: "p2",
+        commentId: COMMENT_B,
+        expectedRevision: 4,
+        place: null,
+      }),
+    );
+    await h.bridge.handleMainEvent(
+      shot(1, { requestId: "p2", purpose: "place", commentId: COMMENT_B, png: png(2) }),
+    );
+    const attached = h.calls.filter((call) => call.method === "attachShot");
+    expect(attached).toHaveLength(1);
+    expect(attached[0]!.input).toMatchObject({ expectedRevision: 30, png: png(2) });
+  });
+
+  it("does not hand a later place's shot to an earlier place whose capture was lost", async () => {
+    let revision = 40;
+    const h = harness({
+      answers: {
+        setPlace: (input) => comment(input["commentId"] as CreatorCommentId, ++revision),
+      },
+    });
+    await activate(h);
+    await h.bridge.handleMainEvent(
+      guest("place", 1, {
+        requestId: "p1",
+        commentId: COMMENT_B,
+        expectedRevision: 3,
+        place: null,
+      }),
+    );
+    // p1's capture never arrives. A shot from another request is not p1's.
+    await h.bridge.handleMainEvent(
+      shot(1, { requestId: "p9", purpose: "place", commentId: COMMENT_B, png: png(9) }),
+    );
+    expect(methods(h.calls)).toEqual(["setEpoch", "setPlace"]);
+    await h.bridge.handleMainEvent(
+      guest("place", 1, {
+        requestId: "p2",
+        commentId: COMMENT_B,
+        expectedRevision: 41,
+        place: null,
+      }),
+    );
+    await h.bridge.handleMainEvent(
+      shot(1, { requestId: "p2", purpose: "place", commentId: COMMENT_B, png: png(2) }),
+    );
+    const attached = h.calls.filter((call) => call.method === "attachShot");
+    expect(attached).toHaveLength(1);
+    expect(attached[0]!.input).toMatchObject({ expectedRevision: 42, png: png(2) });
+  });
+
+  it("keeps at most 200 draft keys, shared with a later bridge for the same binding", async () => {
+    const store = new Map<string, CreatorCommentId>();
+    const h = harness({ draftKeys: store });
+    await activate(h);
+    for (let index = 0; index < 201; index += 1) {
+      await h.bridge.handleMainEvent(
+        guest("draft", 1, { requestId: `r${index}`, timeSec: 1, comment: "x", place: null }),
+      );
+    }
+    expect(store.size).toBe(200);
+    expect(store.has("r0")).toBe(false);
+    expect(store.has("r200")).toBe(true);
+    h.bridge.dispose();
+
+    const again = harness({ draftKeys: store });
+    await activate(again);
+    await again.bridge.handleMainEvent(
+      guest("draft", 1, { requestId: "r200", timeSec: 1, comment: "x", place: null }),
+    );
+    expect(methods(again.calls)).toEqual(["setEpoch"]);
+  });
+
+  it("clears the draft keys when main ends the session for good", async () => {
+    const store = new Map<string, CreatorCommentId>();
+    const h = harness({ draftKeys: store });
+    await activate(h);
+    await h.bridge.handleMainEvent(
+      guest("draft", 1, { requestId: "r1", timeSec: 1, comment: "x", place: null }),
+    );
+    expect(store.size).toBe(1);
+    await h.bridge.handleMainEvent(event("revoked", 2, { reason: "tab-closed" }));
+    expect(store.size).toBe(0);
+  });
+
+  it("registers again after a destroyed guest only while the tab still exists", async () => {
+    const kept = harness({ tabExists: () => true });
+    await activate(kept);
+    await kept.bridge.handleMainEvent(event("revoked", 2, { reason: "destroyed" }));
+    expect(kept.registers).toEqual([TAB]);
+
+    const gone = harness({ tabExists: () => false });
+    await activate(gone);
+    await gone.bridge.handleMainEvent(event("revoked", 2, { reason: "destroyed" }));
+    await gone.bridge.register();
+    expect(gone.registers).toEqual([]);
+  });
+
+  it("reopens the sheet for a proposal from the snapshot and keeps the last snapshot", async () => {
+    const h = harness();
+    await activate(h);
+    const live = snapshot(3);
+    await h.bridge.handleSnapshot(live);
+    expect(h.bridge.view().snapshot).toBe(live);
+    const proposal = { id: PROPOSAL } as unknown as CreatorProposal;
+    h.bridge.openSheet(proposal);
+    expect(h.bridge.view().sheetProposal).toBe(proposal);
+    expect(h.views.at(-1)?.sheetProposalId).toBe(PROPOSAL);
   });
 
   it("maps the remaining guest messages to their RPCs", async () => {

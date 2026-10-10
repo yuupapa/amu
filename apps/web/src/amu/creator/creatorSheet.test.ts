@@ -1,7 +1,13 @@
 import type { CreatorProposal, CreatorSnapshot } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { creatorSheetPhase, formatCreatorTime } from "./creatorSheet";
+import {
+  approveAndSend,
+  creatorAttentionProposal,
+  creatorSheetPhase,
+  formatCreatorTime,
+} from "./creatorSheet";
+import { CREATOR_PAGE_CHANGED } from "./creatorText";
 
 const PROPOSAL_ID = "33333333-3333-4333-8333-333333333333";
 const COMMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -84,6 +90,95 @@ describe("creatorSheetPhase", () => {
     ).toEqual({ kind: "failed", reason: "halted" });
     expect(phase(snapshot([]))).toEqual({ kind: "gone" });
     expect(phase(sent, { seenLive: false })).toEqual({ kind: "sent" });
+  });
+});
+
+describe("creatorSheetPhase without a snapshot", () => {
+  it("never waits forever: it shows the proposal, or the refusal the server answered", () => {
+    expect(phase(null)).toEqual({ kind: "review" });
+    expect(phase(null, { submitted: true })).toEqual({ kind: "sending", checking: false });
+    expect(
+      phase(null, { submitted: true, result: { state: "rejected", reason: "thread_archived" } }),
+    ).toEqual({ kind: "failed", reason: "thread_archived" });
+  });
+});
+
+describe("creatorAttentionProposal", () => {
+  it("finds a send that needs the user, unless its sheet is already open", () => {
+    const pending = proposal();
+    const stuck = { ...proposal({ state: "stuck" }), id: "44444444-4444-4444-8444-444444444444" };
+    expect(creatorAttentionProposal(snapshot([pending]), null)).toBeNull();
+    expect(creatorAttentionProposal(snapshot([pending, stuck as never]), null)).toBe(stuck);
+    expect(creatorAttentionProposal(snapshot([stuck as never]), stuck.id as never)).toBeNull();
+    for (const state of ["sending", "halted", "conflict"]) {
+      const live = proposal({ state });
+      expect(creatorAttentionProposal(snapshot([live]), null)).toBe(live);
+    }
+    expect(creatorAttentionProposal(null, null)).toBeNull();
+  });
+});
+
+describe("approveAndSend", () => {
+  const pinned = { ...proposal(), revisionKey: "key-1" } as unknown as CreatorProposal;
+  const BINDING = "11111111-1111-4111-8111-111111111111" as never;
+
+  it("sends with the epoch main returned at approval", async () => {
+    const approvals: unknown[] = [];
+    const sends: unknown[] = [];
+    const outcome = await approveAndSend({
+      tabId: "tab",
+      generation: 4,
+      bindingId: BINDING,
+      proposal: pinned,
+      approve: async (input) => {
+        approvals.push(input);
+        return { ok: true, epoch: 7 };
+      },
+      confirmSend: async (input) => {
+        sends.push(input);
+        return { ok: true, value: { proposalId: pinned.id, state: "accepted", reason: null } };
+      },
+    });
+    expect(approvals).toEqual([{ tabId: "tab", generation: 4, proposalId: PROPOSAL_ID }]);
+    expect(sends).toEqual([
+      { bindingId: BINDING, epoch: 7, proposalId: PROPOSAL_ID, revisionKey: "key-1" },
+    ]);
+    expect(outcome).toEqual({
+      ok: true,
+      result: { proposalId: PROPOSAL_ID, state: "accepted", reason: null },
+    });
+  });
+
+  it("does not send when main refuses the approval", async () => {
+    let sent = false;
+    const outcome = await approveAndSend({
+      tabId: "tab",
+      generation: 4,
+      bindingId: BINDING,
+      proposal: pinned,
+      approve: async () => ({ ok: false, reason: "stale_generation" }),
+      confirmSend: async () => {
+        sent = true;
+        return { ok: true, value: null as never };
+      },
+    });
+    expect(sent).toBe(false);
+    expect(outcome).toEqual({ ok: false, approved: false, message: CREATOR_PAGE_CHANGED });
+  });
+
+  it("reports a server refusal in Japanese", async () => {
+    const outcome = await approveAndSend({
+      tabId: "tab",
+      generation: 4,
+      bindingId: BINDING,
+      proposal: pinned,
+      approve: async () => ({ ok: true, epoch: 2 }),
+      confirmSend: async () => ({
+        ok: false,
+        error: { _tag: "CreatorOperationError", code: "stale_epoch", detail: "stale_epoch" },
+      }),
+    });
+    expect(outcome).toEqual({ ok: false, approved: true, message: CREATOR_PAGE_CHANGED });
   });
 });
 

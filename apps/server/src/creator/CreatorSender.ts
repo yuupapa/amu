@@ -788,7 +788,10 @@ const make = ({ commandGate, pollInterval }: SenderOptions) =>
     const acknowledgeConflict: CreatorSender["Service"]["acknowledgeConflict"] = Effect.fn(
       "CreatorSender.acknowledgeConflict",
     )(function* (input) {
-      // Like haltSend, any live binding of the project may settle it; nothing is sent.
+      // No owner check, like haltSend: the message already went out (or not) under
+      // the proposal's own binding, and acknowledging sends nothing. It only
+      // releases the user's comments, so any live binding of the same project
+      // (the same source and thread, after a reopen) may settle it.
       const binding = yield* authorize(input);
       const projectId = binding.projectId;
       return yield* lockOf(input.proposalId).withPermits(1)(
