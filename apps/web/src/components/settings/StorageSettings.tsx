@@ -11,6 +11,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { translateCleanupReason } from "../../amu/storageCleanupReason";
 import { formatBytes } from "../../lib/formatBytes";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -193,8 +194,10 @@ function CleanupResults({
               <span
                 className={`wrap-anywhere ${entry.outcome === "failed" ? "text-destructive" : ""}`}
               >
-                {entry.threadTitle && entry.threadTitle !== name ? `${entry.threadTitle}. ` : ""}
-                {entry.reason}
+                {entry.threadTitle && entry.threadTitle !== name ? (
+                  <span translate="no">{`${entry.threadTitle}. `}</span>
+                ) : null}
+                <span>{translateCleanupReason(entry.reason)}</span>
               </span>
             }
             control={
