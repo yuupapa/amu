@@ -4,7 +4,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   previewRevealActions,
   previewRevealBaseline,
+  previewRevealPass,
   revealableSessions,
+  type PreviewRevealBaseline,
   type RevealSurface,
 } from "./previewAutoReveal";
 
@@ -44,13 +46,18 @@ const surfaceFor = (tabId: string): RevealSurface => ({
 const pass = (
   before: PreviewSessionSnapshot[],
   now: PreviewSessionSnapshot[],
-  options: { autoShow: boolean; surfaces?: RevealSurface[] },
+  options: {
+    autoShow: boolean;
+    surfaces?: RevealSurface[];
+    hosts?: { server: boolean; desktop: boolean };
+  },
 ) =>
   previewRevealActions({
     sessions: now,
     previous: previewRevealBaseline(before),
     autoShowFloating: options.autoShow,
     surfaces: options.surfaces ?? [],
+    hosts: options.hosts ?? { server: true, desktop: true },
   });
 
 describe("revealableSessions", () => {
@@ -108,5 +115,57 @@ describe("previewRevealActions", () => {
     // Not forced and already a panel tab: left where it is.
     const quiet = agentServerTab("agent", "r3");
     expect(pass([after], [quiet], { autoShow: true, surfaces: [surfaceFor("agent")] })).toEqual([]);
+  });
+});
+
+describe("tabs this client cannot host", () => {
+  it("are never revealed", () => {
+    const hosts = { server: false, desktop: true };
+    expect(pass([], [agentServerTab("agent", "r1")], { autoShow: true, hosts })).toEqual([]);
+    expect(
+      pass([], [creatorTab("creator")], {
+        autoShow: true,
+        hosts: { server: true, desktop: false },
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("previewRevealPass (one ChatView effect run)", () => {
+  const options = (server: boolean) => ({
+    autoShowFloating: true,
+    surfaces: [],
+    hosts: { server, desktop: true },
+  });
+
+  it("only records a baseline on the first run after a load", () => {
+    const first = previewRevealPass(undefined, [creatorTab("creator")], options(true));
+    expect(first.actions).toEqual([]);
+    expect([...first.baseline.keys()]).toEqual(["creator"]);
+  });
+
+  it("does not reveal old tabs when the server browser becomes available after the list loaded", () => {
+    // Review finding: the capability and the preview list come from separate
+    // RPCs. A baseline taken from the host-filtered list missed the server tabs,
+    // so they all looked new once the capability arrived, and floated again.
+    const tabs = [agentServerTab("agent", "r1"), creatorTab("creator")];
+    const first = previewRevealPass(undefined, tabs, options(false));
+    const second = previewRevealPass(first.baseline, tabs, options(true));
+    expect(second.actions).toEqual([]);
+    // A genuinely new request after that is still shown.
+    const later = [agentServerTab("agent", "r2"), creatorTab("creator")];
+    expect(previewRevealPass(second.baseline, later, options(true)).actions).toEqual([
+      { kind: "float", tabId: "agent" },
+    ]);
+  });
+
+  it("keeps baselines for tabs it cannot host yet", () => {
+    const tabs = [agentServerTab("agent", "r1")];
+    const baseline: PreviewRevealBaseline = previewRevealPass(
+      undefined,
+      tabs,
+      options(false),
+    ).baseline;
+    expect(baseline.get("agent")).toBe("r1");
   });
 });

@@ -105,7 +105,8 @@ export const setPlaybackRate = (rate: number): void => {
   if (player) player.playbackRate = rate;
 };
 
-export const waitFrames = (count: number): Promise<void> =>
+/** `true` when the frames were rendered, `false` when the fallback ended the wait. */
+export const waitFrames = (count: number): Promise<boolean> =>
   waitForFrames(count, {
     requestFrame: (callback) => requestAnimationFrame(callback),
     cancelFrame: (handle) => cancelAnimationFrame(handle),

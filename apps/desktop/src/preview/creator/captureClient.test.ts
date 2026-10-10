@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   CAPTURE_SELF_TIMEOUT_MS,
   createCaptureClient,
+  measurePlaceCapture,
   type CaptureDeps,
   type CaptureSpec,
 } from "./captureClient.ts";
@@ -12,6 +13,16 @@ const deferred = (): Deferred => {
   let resolve = () => {};
   const promise = new Promise<void>((done) => {
     resolve = done;
+  });
+  return { promise, resolve };
+};
+
+/** A frame wait: resolves `true` for rendered frames, `false` when only the fallback timer fired. */
+type FrameStep = { promise: Promise<boolean>; resolve: (rendered?: boolean) => void };
+const frameStep = (): FrameStep => {
+  let resolve: (rendered?: boolean) => void = () => {};
+  const promise = new Promise<boolean>((done) => {
+    resolve = (rendered = true) => done(rendered);
   });
   return { promise, resolve };
 };
@@ -27,7 +38,7 @@ const makeHarness = (options: { measure?: CaptureDeps["measure"] } = {}) => {
   let nextTimer = 1;
   const timers = new Map<number, { at: number; fn: () => void }>();
   const seeks: Deferred[] = [];
-  const frames: Deferred[] = [];
+  const frames: FrameStep[] = [];
   const ready: unknown[] = [];
   const settled: Array<{ requestId: string; ok: boolean }> = [];
   const began: boolean[] = [];
@@ -55,7 +66,7 @@ const makeHarness = (options: { measure?: CaptureDeps["measure"] } = {}) => {
     },
     waitFrames: (count) => {
       log.push(`frames ${count}`);
-      const step = deferred();
+      const step = frameStep();
       frames.push(step);
       return step.promise;
     },
@@ -268,5 +279,74 @@ describe("createCaptureClient", () => {
     await runBegin(harness, client, "r2");
     client.done("r2", true);
     expect(harness.began).toEqual([false, true]);
+  });
+});
+
+describe("a capture whose hidden overlay never reached the screen", () => {
+  it("is refused rather than sending a frame that still shows the panel", async () => {
+    // Live: a retake stored the Creator panel instead of the video. With
+    // rendering suspended (occluded window), the frame waits end on their
+    // fallback timer and capturePage returns the last frame shown, taken
+    // before the overlay was hidden.
+    const harness = makeHarness();
+    const client = createCaptureClient(harness.deps);
+    client.request(spec({ purpose: "place", commentId: "c1", pin: { x: 0.064, y: 0.221 } }));
+    const begun = client.begin("r1");
+    await flush();
+    harness.seeks.at(-1)?.resolve();
+    await flush();
+    harness.frames.at(-1)?.resolve(true);
+    await flush();
+    // After hide: no rendered frame, only the fallback.
+    harness.frames.at(-1)?.resolve(false);
+    await flush();
+    await begun;
+    expect(harness.ready).toEqual([]);
+    expect(harness.log.slice(-2)).toEqual(["frames 1", "show"]);
+    expect(harness.settled).toEqual([{ requestId: "r1", ok: false }]);
+  });
+
+  it("still captures when frames before hiding came only from the fallback", async () => {
+    const harness = makeHarness();
+    const client = createCaptureClient(harness.deps);
+    client.request(spec());
+    const begun = client.begin("r1");
+    await flush();
+    harness.seeks.at(-1)?.resolve();
+    await flush();
+    harness.frames.at(-1)?.resolve(false);
+    await flush();
+    harness.frames.at(-1)?.resolve(true);
+    await flush();
+    await begun;
+    expect(harness.ready).toHaveLength(1);
+  });
+});
+
+describe("measurePlaceCapture", () => {
+  const comp = { x: 204, y: 117, width: 312, height: 176 };
+
+  it("pins a stored normalized place against the composition as it is now", () => {
+    const measured = measurePlaceCapture(comp, comp, { x: 0.064, y: 0.221 });
+    expect(measured.pin.x).toBeCloseTo(204 + 0.064 * 312);
+    expect(measured.pin.y).toBeCloseTo(117 + 0.221 * 176);
+    // Half the composition, clamped inside it at the left and top edges.
+    expect(measured.rect).toEqual({ x: 204, y: 117, width: 156, height: 88 });
+  });
+
+  it("follows the composition when the layout moved since the place was stored", () => {
+    const moved = { x: 40, y: 300, width: 624, height: 351 };
+    const measured = measurePlaceCapture(moved, moved, { x: 0.5, y: 0.5 });
+    expect(measured.pin).toEqual({ x: 352, y: 475.5 });
+    expect(measured.rect).toEqual({ x: 196, y: 387.75, width: 312, height: 175.5 });
+  });
+
+  it("cuts the crop to the part of the composition the preview shows", () => {
+    const visible = { x: 204, y: 117, width: 200, height: 176 };
+    const measured = measurePlaceCapture(comp, visible, { x: 0.9, y: 0.5 });
+    expect(measured.rect.x + measured.rect.width).toBeLessThanOrEqual(404);
+    expect(measured.rect.x).toBeGreaterThanOrEqual(204);
+    // The pin itself stays where the place is, even outside the visible part.
+    expect(measured.pin.x).toBeCloseTo(204 + 0.9 * 312);
   });
 });

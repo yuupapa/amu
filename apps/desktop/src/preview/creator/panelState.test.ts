@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   bindPlaceholders,
+  canKeepPlacing,
   commentActions,
   commentStatusLabel,
   formatTime,
@@ -412,5 +413,14 @@ describe("retakeMessages", () => {
 
   it("has nothing to retake without a place", () => {
     expect(retakeMessages("req-9", comment({ place: null }))).toBeNull();
+  });
+});
+
+describe("canKeepPlacing", () => {
+  it("keeps place mode only while its comment exists and is not being sent", () => {
+    expect(canKeepPlacing(comment())).toBe(true);
+    expect(canKeepPlacing(comment({ status: "sent" }))).toBe(true);
+    expect(canKeepPlacing(undefined)).toBe(false);
+    expect(canKeepPlacing(comment({ status: "sending" }))).toBe(false);
   });
 });

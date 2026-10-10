@@ -516,6 +516,7 @@ it.layer(NodeServices.layer)("CreatorService", (it) => {
                 status: "confirmed",
                 revision: 2,
                 shot: oldShot,
+                shotStale: true,
                 sentVersion: { comment: "seed", place: null, shot: oldShot, revision: 2 },
               }),
             ],
@@ -540,6 +541,8 @@ it.layer(NodeServices.layer)("CreatorService", (it) => {
       const snapshot = yield* service.list(binding);
       const confirmed = snapshot.comments.find((entry) => entry.id === confirmedId);
       expect(confirmed?.shot).toBeNull();
+      // No image left, so nothing can be stale.
+      expect(confirmed?.shotStale).toBe(false);
       expect(confirmed?.sentVersion?.shot).toBeNull();
       expect(
         yield* Effect.promise(() =>

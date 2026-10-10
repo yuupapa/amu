@@ -95,4 +95,20 @@ describe("waitForFrames", () => {
     await waitForFrames(0, h.scheduler);
     expect(h.frames.size + h.timers.size).toBe(0);
   });
+
+  it("tells rendered frames from the fallback, so a capture can refuse an unrendered frame", async () => {
+    const rendered = harness();
+    const viaFrames = waitForFrames(2, rendered.scheduler);
+    rendered.frame();
+    rendered.frame();
+    expect(await viaFrames).toBe(true);
+
+    const stalled = harness();
+    const viaTimer = waitForFrames(2, stalled.scheduler);
+    stalled.frame();
+    stalled.timers.values().next().value!.callback();
+    expect(await viaTimer).toBe(false);
+
+    expect(await waitForFrames(0, harness().scheduler)).toBe(true);
+  });
 });

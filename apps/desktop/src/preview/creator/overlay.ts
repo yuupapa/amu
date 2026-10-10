@@ -43,8 +43,13 @@ import {
   CREATOR_REFUSED_CHANNEL,
   CREATOR_STATE_CHANNEL,
 } from "../CreatorProtocol.ts";
-import { normalizePoint, pinCropRect } from "../creatorGeometry.ts";
-import { createCaptureClient, type CaptureClient, type CaptureSpec } from "./captureClient.ts";
+import { normalizePoint } from "../creatorGeometry.ts";
+import {
+  createCaptureClient,
+  measurePlaceCapture,
+  type CaptureClient,
+  type CaptureSpec,
+} from "./captureClient.ts";
 import {
   attachClosedShadow,
   composedPath,
@@ -59,6 +64,7 @@ import { layoutPanel, type PanelLayout, type PlaceStrip } from "./panelLayout.ts
 import { installPanelShield } from "./panelShield.ts";
 import {
   bindPlaceholders,
+  canKeepPlacing,
   commentActions,
   commentStatusLabel,
   formatTime,
@@ -71,7 +77,6 @@ import {
   type CardCapture,
   type PanelState,
 } from "./panelState.ts";
-import { intersectRect } from "./playerChrome.ts";
 import { sceneButtons } from "./sceneNames.ts";
 import { createRateBudget, createUpdateScheduler, type UpdateScheduler } from "./sendPacer.ts";
 import * as studio from "./studioDom.ts";
@@ -452,15 +457,7 @@ function createSession(initialGeneration: number) {
     const comp = studio.compositionRect();
     const visible = comp === null ? null : studio.clipToPreview(comp);
     if (comp === null || visible === null) return null;
-    if (spec.pin === null) return { rect: visible };
-    const crop = pinCropRect(comp, spec.pin.x, spec.pin.y, {
-      width: comp.width / 2,
-      height: comp.height / 2,
-    });
-    return {
-      rect: intersectRect(crop, visible) ?? crop,
-      pin: { x: comp.x + spec.pin.x * comp.width, y: comp.y + spec.pin.y * comp.height },
-    };
+    return spec.pin === null ? { rect: visible } : measurePlaceCapture(comp, visible, spec.pin);
   };
   /** Placeholder key, or the comment the placeholder became. */
   const boundRequests = new Map<string, string>();
@@ -981,9 +978,13 @@ function createSession(initialGeneration: number) {
   };
 
   const render = () => {
+    // The comment being placed was deleted or started sending: leave place mode.
+    const leftPlacing = placing !== null && !canKeepPlacing(commentById(placing.commentId));
+    if (leftPlacing) placing = null;
     renderCards();
     renderFooter();
     refreshMarkers();
+    if (leftPlacing) applyLayout();
   };
 
   // ---- state from the renderer ----

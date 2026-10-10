@@ -433,7 +433,8 @@ interface ManagedListeners {
   readonly webContents: Electron.WebContents;
 }
 
-type FrameCaptureConsumer = "picture-in-picture" | "recording";
+/** `creator-shot` keeps a guest rendering while it prepares an Amu Creator shot. */
+type FrameCaptureConsumer = "picture-in-picture" | "recording" | "creator-shot";
 
 interface FrameCaptureSession {
   readonly recordingInputOptions?: RecordingInputOptions;
@@ -1623,6 +1624,23 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
     const releaseCreatorCapture = (requestId: string, ok: boolean) =>
       sendToCreatorGuest(wc.id, CREATOR_CAPTURE_DONE_CHANNEL, { requestId, ok });
+    // An occluded window suspends the guest's rendering: its seek and hidden
+    // overlay never reach the screen, and capturePage copies the last frame
+    // shown (the panel over the video). Keep the guest rendering from begin
+    // until the capture settles, the same way recording does.
+    let creatorShotLease: string | null = null;
+    const creatorShotsRunning = new Set<string>();
+    const holdCreatorShotRendering = (requestId: string) =>
+      Effect.suspend(() => {
+        creatorShotLease = requestId;
+        return startFrameCapture(tabId, "creator-shot").pipe(Effect.ignore);
+      });
+    const releaseCreatorShotRendering = (requestId: string) =>
+      Effect.suspend(() => {
+        if (creatorShotLease !== requestId) return Effect.void;
+        creatorShotLease = null;
+        return stopFrameCapture(tabId, "creator-shot").pipe(Effect.ignore);
+      });
     const creatorCaptureRequest = (event: Electron.IpcMainEvent, message?: unknown): void => {
       if (!fromCreatorGuest(event)) return;
       const begun = creatorLedger.beginCapture({
@@ -1642,7 +1660,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         runFork(releaseCreatorCapture(begun.replacedRequestId, false));
       }
       const { requestId } = begun.capture;
-      runFork(sendToCreatorGuest(wc.id, CREATOR_CAPTURE_BEGIN_CHANNEL, { requestId }));
+      runFork(
+        holdCreatorShotRendering(requestId).pipe(
+          Effect.andThen(sendToCreatorGuest(wc.id, CREATOR_CAPTURE_BEGIN_CHANNEL, { requestId })),
+        ),
+      );
       runFork(
         Effect.sleep(CREATOR_LIMITS.captureTimeoutMs).pipe(
           Effect.andThen(
@@ -1650,6 +1672,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               creatorLedger.expireCapture(tabId, requestId)
                 ? releaseCreatorCapture(requestId, false)
                 : Effect.void,
+            ),
+          ),
+          // A shot still being taken releases rendering when it settles.
+          Effect.andThen(
+            Effect.suspend(() =>
+              creatorShotsRunning.has(requestId)
+                ? Effect.void
+                : releaseCreatorShotRendering(requestId),
             ),
           ),
         ),
@@ -1681,11 +1711,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       // the request expires first, so captures never overlap on one guest.
       let started: Promise<unknown> | null = null;
       const settled = () => creatorLedger.captureSettled(wc.id, requestId);
+      creatorShotsRunning.add(requestId);
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
+          creatorShotsRunning.delete(requestId);
           if (started === null) settled();
           else void started.then(settled, settled);
-        }),
+        }).pipe(Effect.andThen(releaseCreatorShotRendering(requestId))),
       );
       const viewport = yield* readCreatorViewport;
       const zoomFactor =
@@ -2180,9 +2212,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         cancelPickElement(tabId),
         closePictureInPicture(tabId),
         stopFrameCapture(tabId, "recording"),
+        stopFrameCapture(tabId, "creator-shot"),
       ],
       {
-        concurrency: 3,
+        concurrency: 4,
         discard: true,
       },
     );

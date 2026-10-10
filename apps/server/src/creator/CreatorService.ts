@@ -387,14 +387,19 @@ const clearShotRefs = (
   return {
     ...state,
     revision: state.revision + 1,
-    comments: state.comments.map((comment) => ({
-      ...comment,
-      shot: keep(comment.shot),
-      sentVersion:
-        comment.sentVersion === null
-          ? null
-          : { ...comment.sentVersion, shot: keep(comment.sentVersion.shot) },
-    })),
+    comments: state.comments.map((comment) => {
+      const shot = keep(comment.shot);
+      return {
+        ...comment,
+        shot,
+        // An evicted image is no image: nothing left to be stale.
+        shotStale: shot === null ? false : comment.shotStale,
+        sentVersion:
+          comment.sentVersion === null
+            ? null
+            : { ...comment.sentVersion, shot: keep(comment.sentVersion.shot) },
+      };
+    }),
   };
 };
 

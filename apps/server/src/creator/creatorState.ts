@@ -305,6 +305,30 @@ export const createDraft = (
   );
 };
 
+const samePlace = (a: CreatorPlace | null, b: CreatorPlace | null): boolean =>
+  a === b ||
+  (a !== null &&
+    b !== null &&
+    a.x === b.x &&
+    a.y === b.y &&
+    a.compositionFile === b.compositionFile &&
+    a.elementSelector === b.elementSelector &&
+    a.elementLabel === b.elementLabel);
+
+/**
+ * `shotStale` after a comment's place or time is replaced: the existing shot
+ * shows the old place or frame, unless nothing it depicts changed.
+ */
+const staleAfterMove = (
+  comment: CreatorComment,
+  place: CreatorPlace | null,
+  timeSec: number,
+): boolean => {
+  if (comment.shot === null || place === null) return false;
+  if (samePlace(comment.place, place) && comment.timeSec === timeSec) return comment.shotStale;
+  return true;
+};
+
 /** `saveDraft` with an id: replace text, place and position in one gated edit. */
 export const replaceDraft = (
   state: CreatorStoreFile,
@@ -337,6 +361,7 @@ export const replaceDraft = (
       projectRevision,
       comment: input.comment,
       place: input.place,
+      shotStale: staleAfterMove(comment, input.place, input.timeSec),
     }),
     { gated: true },
   );
@@ -359,12 +384,16 @@ export const setPlace = (
   ctx: CreatorStateContext,
 ): StateResult<CreatorComment> => {
   if (input.place !== null && !isPlace(input.place)) return fail("invalid");
-  // An existing shot shows the old place until the new place's shot is attached.
   return editComment(
     state,
     input.id,
     ctx,
-    (comment) => ({ ...comment, place: input.place, shotStale: comment.shot !== null }),
+    (comment) => ({
+      ...comment,
+      place: input.place,
+      // Any new place makes an existing shot "the previous place's"; no place, nothing to be stale.
+      shotStale: comment.shot !== null && input.place !== null,
+    }),
     { gated: true },
   );
 };

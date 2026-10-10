@@ -257,7 +257,7 @@ export function CreatorConfirmSheet(props: {
                 <p className="whitespace-pre-wrap break-words text-sm">{item.comment}</p>
                 {creatorShotIsStale(snapshot, item) ? (
                   <p className="text-xs text-warning">
-                    画像は前の場所のままです。撮り直すときは、プレビューのコメント欄で「撮り直す」を押してください。
+                    画像は前の場所のままです。プレビューのコメント欄で「撮り直す」を押すと、この送信はやり直しになります。
                   </p>
                 ) : null}
                 <ShotImage

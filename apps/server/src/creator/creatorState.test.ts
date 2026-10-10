@@ -154,6 +154,48 @@ describe("creatorState", () => {
     valid(s);
   });
 
+  it("clearing the place, or replacing a draft's place or time, keeps shotStale truthful", () => {
+    const place = (x: number): CreatorPlace => ({
+      x,
+      y: 0.5,
+      compositionFile: null,
+      elementSelector: null,
+      elementLabel: null,
+    });
+    const d = draft();
+    let s = ok(setPlace(d.state, { id: d.value.id, place: place(0.2) }, ctx(1_000))).state;
+    s = ok(attachShot(s, { id: d.value.id, shot: shotFor(d.value.id, 2) }, ctx(1_100))).state;
+    s = ok(setPlace(s, { id: d.value.id, place: place(0.8) }, ctx(2_000))).state;
+    expect(s.comments[0]!.shotStale).toBe(true);
+    // No place any more: the image is no longer "of the previous place".
+    s = ok(setPlace(s, { id: d.value.id, place: null }, ctx(3_000))).state;
+    expect(s.comments[0]!.shotStale).toBe(false);
+
+    const fresh = draft(emptyCreatorState(), 10_000);
+    let r = ok(setPlace(fresh.state, { id: fresh.value.id, place: place(0.2) }, ctx(11_000))).state;
+    r = ok(
+      attachShot(r, { id: fresh.value.id, shot: shotFor(fresh.value.id, 2) }, ctx(11_100)),
+    ).state;
+    const replace = (
+      state: typeof r,
+      input: { timeSec: number; place: CreatorPlace | null },
+      ms: number,
+    ) =>
+      ok(
+        replaceDraft(
+          state,
+          { id: fresh.value.id, projectRevision: "r1", comment: "x", ...input },
+          ctx(ms),
+        ),
+      ).state;
+    // Same place and time: the shot still matches.
+    expect(replace(r, { timeSec: 1, place: place(0.2) }, 12_000).comments[0]!.shotStale).toBe(
+      false,
+    );
+    expect(replace(r, { timeSec: 1, place: place(0.6) }, 12_000).comments[0]!.shotStale).toBe(true);
+    expect(replace(r, { timeSec: 4, place: place(0.2) }, 12_000).comments[0]!.shotStale).toBe(true);
+  });
+
   it("drops a shot taken for an older revision", () => {
     const d = draft();
     const s = ok(updateComment(d.state, { id: d.value.id, comment: "a" }, ctx(600))).state;

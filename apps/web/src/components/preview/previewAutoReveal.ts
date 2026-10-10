@@ -12,7 +12,9 @@
  *   opened it for the user to review; other tabs stay where they are.
  *
  * Server tabs need the environment's browser; desktop tabs (Creator tabs are
- * always desktop tabs) need the Electron client.
+ * always desktop tabs) need the Electron client. The baseline still covers
+ * every tab: the server-browser capability can arrive after the preview list,
+ * and tabs that were already there must not look new then.
  */
 import type { PreviewSessionSnapshot } from "@t3tools/contracts";
 
@@ -35,9 +37,11 @@ export type PreviewRevealAction =
 /** Tab id -> the reveal request id last seen for it. */
 export type PreviewRevealBaseline = ReadonlyMap<string, string | undefined>;
 
+export type PreviewRevealHosts = { readonly server: boolean; readonly desktop: boolean };
+
 export function revealableSessions<S extends RevealSession>(
   sessions: ReadonlyArray<S>,
-  hosts: { readonly server: boolean; readonly desktop: boolean },
+  hosts: PreviewRevealHosts,
 ): S[] {
   return sessions.filter((session) =>
     session.runtime === "server" ? hosts.server : hosts.desktop,
@@ -56,9 +60,10 @@ export function previewRevealActions(input: {
   readonly autoShowFloating: boolean;
   /** The right panel's surfaces as rendered before this update. */
   readonly surfaces: ReadonlyArray<RevealSurface>;
+  readonly hosts: PreviewRevealHosts;
 }): PreviewRevealAction[] {
   const actions: PreviewRevealAction[] = [];
-  for (const session of input.sessions) {
+  for (const session of revealableSessions(input.sessions, input.hosts)) {
     const requested = session.revealRequest;
     const fresh = requested
       ? input.previous.get(session.tabId) !== requested.id
@@ -76,4 +81,23 @@ export function previewRevealActions(input: {
     else if (!surface) actions.push({ kind: "float", tabId: session.tabId });
   }
   return actions;
+}
+
+/**
+ * One run of ChatView's reveal effect: the new baseline (every tab, hostable or
+ * not) and what to show. The first run after a load (`previous` undefined)
+ * only records the baseline.
+ */
+export function previewRevealPass(
+  previous: PreviewRevealBaseline | undefined,
+  sessions: ReadonlyArray<RevealSession>,
+  options: {
+    readonly autoShowFloating: boolean;
+    readonly surfaces: ReadonlyArray<RevealSurface>;
+    readonly hosts: PreviewRevealHosts;
+  },
+): { readonly baseline: PreviewRevealBaseline; readonly actions: PreviewRevealAction[] } {
+  const baseline = previewRevealBaseline(sessions);
+  if (previous === undefined) return { baseline, actions: [] };
+  return { baseline, actions: previewRevealActions({ sessions, previous, ...options }) };
 }

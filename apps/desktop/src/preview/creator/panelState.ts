@@ -325,3 +325,7 @@ export const retakeMessages = (requestId: string, comment: CreatorComment) =>
         place: comment.place,
         pin: { x: comment.place.x, y: comment.place.y },
       });
+
+/** Place mode for a comment ends by itself once the comment is gone or being sent. */
+export const canKeepPlacing = (comment: CreatorComment | undefined): boolean =>
+  comment !== undefined && comment.status !== "sending";

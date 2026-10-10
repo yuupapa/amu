@@ -273,12 +273,7 @@ import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
 import { usePreviewSession } from "./preview/usePreviewSession";
 import { subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
-import {
-  previewRevealActions,
-  previewRevealBaseline,
-  revealableSessions,
-  type PreviewRevealBaseline,
-} from "./preview/previewAutoReveal";
+import { previewRevealPass, type PreviewRevealBaseline } from "./preview/previewAutoReveal";
 
 import {
   browserMiniPlayerSource,
@@ -5550,19 +5545,16 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(() => {
     if (!activeThreadRef || !activePreviewState.listLoaded) return;
     const threadKey = scopedThreadKey(activeThreadRef);
-    const sessions = revealableSessions(Object.values(activePreviewState.sessions), {
-      server: activeEnvironmentServerBrowser,
-      desktop: isPreviewSupportedInRuntime(),
-    });
-    const previous = previousRevealedPreviewTabs.current.get(threadKey);
-    previousRevealedPreviewTabs.current.set(threadKey, previewRevealBaseline(sessions));
-    if (!previous) return;
-    const actions = previewRevealActions({
-      sessions,
-      previous,
-      autoShowFloating: autoShowFloatingPreview,
-      surfaces: rightPanelState.surfaces,
-    });
+    const { baseline, actions } = previewRevealPass(
+      previousRevealedPreviewTabs.current.get(threadKey),
+      Object.values(activePreviewState.sessions),
+      {
+        autoShowFloating: autoShowFloatingPreview,
+        surfaces: rightPanelState.surfaces,
+        hosts: { server: activeEnvironmentServerBrowser, desktop: isPreviewSupportedInRuntime() },
+      },
+    );
+    previousRevealedPreviewTabs.current.set(threadKey, baseline);
     for (const action of actions) {
       switch (action.kind) {
         case "activate":
