@@ -4828,6 +4828,64 @@ describe("PreviewManager Amu Creator", () => {
     ),
   );
 
+  effectIt.effect("releases a guest whose capturePage never settles after 15 seconds", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        yield* openCreatorTab(manager, [guest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        guest.capturePage.mockImplementationOnce(() => new Promise<CreatorTestImage>(() => {}));
+        const ask = (requestId: string) =>
+          guest.ipcHandlers.get("creator:capture-request")!(guest.fromMainFrame, {
+            generation: 1,
+            requestId,
+            purpose: "draft",
+            timeSec: 1,
+          });
+        ask("r1");
+        guest.ipcHandlers.get("creator:capture-ready")!(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          rect: { x: 0, y: 0, width: 200, height: 100 },
+        });
+        yield* settle(() => guest.capturePage.mock.calls.length === 1);
+        yield* TestClock.adjust(14_000);
+        ask("r2");
+        yield* settle(() => guest.sent("creator:capture-done").length === 2);
+        expect(guest.sent("creator:capture-done").at(-1)).toEqual({ requestId: "r2", ok: false });
+
+        yield* TestClock.adjust(1_000);
+        ask("r3");
+        expect(guest.sent("creator:capture-begin")).toEqual([
+          { requestId: "r1" },
+          { requestId: "r3" },
+        ]);
+      }),
+    ),
+  );
+
+  for (const [event, args] of [
+    ["did-stop-loading", []],
+    ["did-fail-provisional-load", [{}, -105, "name not resolved", "http://localhost:3002/x", true]],
+  ] as const) {
+    effectIt.effect(`ends a pending navigation on ${event} and re-activates the shown page`, () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const guest = makeCreatorGuest();
+          yield* openCreatorTab(manager, [guest]);
+          yield* manager.registerCreatorSession("tab_creator", BINDING);
+          guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+          yield* manager.registerCreatorSession("tab_creator", BINDING);
+          expect(guest.sent("creator:activate")).toHaveLength(2);
+          guest.emit(event, ...args);
+          yield* settle(() => guest.sent("creator:activate").length === 3);
+          expect(guest.sent("creator:activate").at(-1)).toEqual({ generation: 2 });
+          expect(yield* manager.pushCreatorState("tab_creator", { comments: [] })).toBe(true);
+        }),
+      ),
+    );
+  }
+
   effectIt.effect("pushes panel state only to a live session", () =>
     withManager((manager) =>
       Effect.gen(function* () {

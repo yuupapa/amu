@@ -522,3 +522,67 @@ describe("creator ledger: pending navigation (fix round 1)", () => {
     expect(ledger.navigationSettled(WC)).toBe(false);
   });
 });
+
+describe("creator ledger: stalled capturePage hold (fix round 2)", () => {
+  const request = (requestId: string, now: number, generation = 1) => ({
+    tabId: "tab",
+    webContentsId: WC,
+    attachmentId: ATTACHMENT,
+    message: { generation, requestId, purpose: "draft", timeSec: 1 },
+    now,
+  });
+  const ready = (requestId: string, now: number) => ({
+    tabId: "tab",
+    webContentsId: WC,
+    attachmentId: ATTACHMENT,
+    message: { generation: 1, requestId, rect: { x: 0, y: 0, width: 10, height: 10 } },
+    now,
+  });
+  const stall = (ledger: ReturnType<typeof makeCreatorLedger>) => {
+    ledger.beginCapture(request("a", 0));
+    ledger.captureReady(ready("a", 10));
+    ledger.expireCapture("tab", "a");
+  };
+
+  it("releases a capturePage that never settles after 3 capture timeouts", () => {
+    const { ledger } = setup();
+    stall(ledger);
+    const hold = 3 * CREATOR_LIMITS.captureTimeoutMs;
+    expect(ledger.beginCapture(request("b", 10 + hold - 1))).toMatchObject({
+      ok: false,
+      reason: "capture_busy",
+    });
+    expect(ledger.beginCapture(request("c", 10 + hold)).ok).toBe(true);
+    // The stalled capture's late settle does not touch the new one.
+    ledger.captureSettled(WC, "a");
+    ledger.captureReady(ready("c", 10 + hold + 1));
+    expect(ledger.finishCapture("tab", "a")).toEqual({ ok: false, reason: "no_capture" });
+  });
+
+  it("forgetting the guest clears the hold", () => {
+    const { ledger } = setup();
+    stall(ledger);
+    ledger.forgetWebContents(WC);
+    ledger.register({
+      tabId: "tab",
+      bindingId: BINDING,
+      webContentsId: WC,
+      attachmentId: ATTACHMENT,
+    });
+    expect(ledger.beginCapture(request("b", 2_000)).ok).toBe(true);
+  });
+
+  it("a committed main-frame navigation clears the hold", () => {
+    const { ledger } = setup();
+    stall(ledger);
+    ledger.navigationStarted(WC);
+    ledger.navigationCommitted(WC);
+    ledger.register({
+      tabId: "tab",
+      bindingId: BINDING,
+      webContentsId: WC,
+      attachmentId: ATTACHMENT,
+    });
+    expect(ledger.beginCapture(request("b", 2_000, 2)).ok).toBe(true);
+  });
+});

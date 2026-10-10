@@ -82,6 +82,12 @@ const COMMENT_KINDS: ReadonlySet<DesktopPreviewCreatorGuestKind> = new Set([
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 /** Captures a guest may start, at most one per this many ms. */
 const CAPTURE_INTERVAL_MS = 1_000;
+/**
+ * How long a capturePage that never settles holds its guest. Stalled captures
+ * are real (a wedged compositor); after this the guest may capture again and
+ * the stalled result, if it ever arrives, is dropped.
+ */
+const CAPTURE_HOLD_MS = 3 * CREATOR_LIMITS.captureTimeoutMs;
 const MAX_TIME_SEC = 24 * 60 * 60;
 
 const utf8 = new TextEncoder();
@@ -139,7 +145,7 @@ export const makeCreatorLedger = () => {
   const navigating = new Set<number>();
   // Guests whose capturePage for this request has not settled yet, even if the
   // request itself expired or was revoked.
-  const inFlight = new Map<number, string>();
+  const inFlight = new Map<number, { readonly requestId: string; readonly since: number }>();
 
   const bumpEpoch = (tabId: string): number => {
     const next = (epochs.get(tabId) ?? 0) + 1;
@@ -283,6 +289,8 @@ export const makeCreatorLedger = () => {
     /** The main-frame navigation committed: the new document is current. */
     navigationCommitted: (webContentsId: number): void => {
       navigating.delete(webContentsId);
+      // The captured document is gone; a capture still running on it cannot matter.
+      inFlight.delete(webContentsId);
     },
 
     /**
@@ -297,6 +305,7 @@ export const makeCreatorLedger = () => {
       documents.delete(webContentsId);
       rates.delete(webContentsId);
       navigating.delete(webContentsId);
+      inFlight.delete(webContentsId);
       return session ? revokeActive(session) : null;
     },
 
@@ -392,7 +401,9 @@ export const makeCreatorLedger = () => {
       if (pending && input.now <= pending.deadline) {
         return refuse(pending.requestId === requestId ? "duplicate_request" : "capture_busy");
       }
-      if (inFlight.has(input.webContentsId)) return refuse("capture_busy");
+      const held = inFlight.get(input.webContentsId);
+      if (held && input.now - held.since < CAPTURE_HOLD_MS) return refuse("capture_busy");
+      inFlight.delete(input.webContentsId);
       const rate = rateOf(input.webContentsId);
       if (input.now - rate.lastCaptureAt < CAPTURE_INTERVAL_MS) return refuse("rate_limited");
       rate.lastCaptureAt = input.now;
@@ -444,7 +455,7 @@ export const makeCreatorLedger = () => {
         return { ok: false, reason: "too_large" };
       if (!isRecord(measured.json)) return { ok: false, reason: "bad_request" };
       // Held until `captureSettled`, past any expiry or revoke of the request.
-      inFlight.set(input.webContentsId, pending.requestId);
+      inFlight.set(input.webContentsId, { requestId: pending.requestId, since: input.now });
       return { ok: true, capture: pending, rect: measured.json["rect"], pin: measured.json["pin"] };
     },
 
@@ -479,7 +490,7 @@ export const makeCreatorLedger = () => {
 
     /** The capture work for this ready (including capturePage) has settled. */
     captureSettled: (webContentsId: number, requestId: string): void => {
-      if (inFlight.get(webContentsId) === requestId) inFlight.delete(webContentsId);
+      if (inFlight.get(webContentsId)?.requestId === requestId) inFlight.delete(webContentsId);
     },
 
     /** The 5 s timer fired; true when it removed this request. */

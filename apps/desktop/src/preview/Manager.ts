@@ -1757,9 +1757,21 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       creatorLedger.navigationCommitted(wc.id);
       syncNavigation();
     };
-    // A navigation that ends without committing leaves the old document in place.
+    // The pending navigation ended without did-navigate (cancelled, failed,
+    // 204, download). Usually the old document is still shown and gets its
+    // activation back; if an error page replaced it, the activation goes to that
+    // page under the same current-document and loopback checks.
     const settleCreatorNavigation = (): void => {
       if (creatorLedger.navigationSettled(wc.id)) creatorDocumentReady();
+    };
+    const failedProvisionalLoad = (
+      _event: Event,
+      _code: number,
+      _description: string,
+      _validatedUrl: string,
+      isMainFrame: boolean,
+    ): void => {
+      if (isMainFrame) settleCreatorNavigation();
     };
     const stoppedLoading = (): void => {
       settleCreatorNavigation();
@@ -2012,6 +2024,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("page-favicon-updated", faviconUpdated as never);
         wc.off("did-start-loading", sync);
         wc.off("did-stop-loading", stoppedLoading);
+        wc.off("did-fail-provisional-load", failedProvisionalLoad as never);
         wc.off("dom-ready", documentReady);
         wc.off("did-fail-load", failed as never);
         wc.off("audio-state-changed", audioStateChanged);
@@ -2040,6 +2053,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("page-favicon-updated", faviconUpdated as never);
         wc.on("did-start-loading", sync);
         wc.on("did-stop-loading", stoppedLoading);
+        wc.on("did-fail-provisional-load", failedProvisionalLoad as never);
         wc.on("dom-ready", documentReady);
         wc.on("did-fail-load", failed as never);
         wc.on("audio-state-changed", audioStateChanged);
