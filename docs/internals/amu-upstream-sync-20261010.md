@@ -50,3 +50,10 @@
 ## 戻し方
 
 作業はすべて新しいブランチの上。`amu-v2` も結パパの Amu も変えないので、問題があればブランチを捨てればよい。
+
+## この Mac だけの 0.0.60（2026-10-11）
+
+- 結パパの判断で、上流取り込みと Creator を重ねた `sync/creator-20261011` を 0.0.60 として、この Mac の Amu だけに入れる（GitHub には出さない。`amu-v2` には入れない）
+- ビルドには Rust 1.95 以上が要る（本家の resource monitor が sysinfo 0.39.3 を使う）。`RUSTUP_TOOLCHAIN=1.95.0 node scripts/amu-release.mjs --notes-file …`
+- 作ったアプリの Info.plist は本家のまま（識別子 com.t3tools.t3code、t3code と http(s) のリンク、Web ページの受け先）。今の Amu は識別子 local.amu.desktop と amu のリンクだけなので、入れる前にそこを今の Amu に合わせた
+- Amu.app の Resources には、更新で消してはいけないもの（amu-local.json、tooling/、jev-workflow/）がある。入れ替えではこれらを今の Amu.app から引き継ぐ。手順は `task/amu-local-install/swap-amu.sh`
