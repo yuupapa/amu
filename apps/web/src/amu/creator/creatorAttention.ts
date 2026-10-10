@@ -12,15 +12,32 @@ export interface CreatorAttention {
   readonly open: () => void;
 }
 
-const byTab = new Map<string, CreatorAttention>();
+const byTab = new Map<string, { readonly holder: symbol; readonly attention: CreatorAttention }>();
 const listeners = new Set<() => void>();
 
-export function setCreatorAttention(runtimeTabId: string, attention: CreatorAttention | null) {
-  if (attention === null ? !byTab.delete(runtimeTabId) : byTab.get(runtimeTabId) === attention) {
-    return;
+/**
+ * Publishes or clears the tab's attention for `holder`, one per session runner.
+ * The same thread open in two panes runs two runners for one tab; clearing only
+ * removes the holder's own entry, so the non-owner cannot drop the owner's banner.
+ */
+export function setCreatorAttention(
+  runtimeTabId: string,
+  holder: symbol,
+  attention: CreatorAttention | null,
+) {
+  const current = byTab.get(runtimeTabId);
+  if (attention === null) {
+    if (current?.holder !== holder) return;
+    byTab.delete(runtimeTabId);
+  } else {
+    if (current?.holder === holder && current.attention === attention) return;
+    byTab.set(runtimeTabId, { holder, attention });
   }
-  if (attention !== null) byTab.set(runtimeTabId, attention);
   for (const listener of listeners) listener();
+}
+
+export function readCreatorAttention(runtimeTabId: string): CreatorAttention | null {
+  return byTab.get(runtimeTabId)?.attention ?? null;
 }
 
 const subscribe = (listener: () => void) => {
@@ -31,7 +48,7 @@ const subscribe = (listener: () => void) => {
 };
 
 export function useCreatorAttention(runtimeTabId: string | null): CreatorAttention | null {
-  const read = () => (runtimeTabId === null ? null : (byTab.get(runtimeTabId) ?? null));
+  const read = () => (runtimeTabId === null ? null : readCreatorAttention(runtimeTabId));
   // Static rendering has no live sends to report.
   return useSyncExternalStore(subscribe, read, () => null);
 }

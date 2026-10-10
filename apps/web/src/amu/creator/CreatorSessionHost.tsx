@@ -5,7 +5,7 @@
  * guest's drafts or captures on the floor.
  */
 import type { CreatorBindingId, ScopedThreadRef } from "@t3tools/contracts";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { previewBridge } from "~/components/preview/previewBridge";
@@ -35,20 +35,21 @@ function CreatorSessionRunner(props: {
   const bridge = session.bridge;
 
   // A started send whose sheet is closed gets a banner in the tab's panel that reopens it.
+  const [attentionHolder] = useState(() => Symbol("creator-attention"));
   const attention = session.isOwner
     ? creatorAttentionProposal(session.view.snapshot, session.view.sheetProposalId)
     : null;
   useEffect(() => {
     if (attention === null || bridge === null) {
-      setCreatorAttention(runtimeTabId, null);
+      setCreatorAttention(runtimeTabId, attentionHolder, null);
       return;
     }
-    setCreatorAttention(runtimeTabId, {
+    setCreatorAttention(runtimeTabId, attentionHolder, {
       proposal: attention,
       open: () => bridge.openSheet(attention),
     });
-    return () => setCreatorAttention(runtimeTabId, null);
-  }, [attention, bridge, runtimeTabId]);
+    return () => setCreatorAttention(runtimeTabId, attentionHolder, null);
+  }, [attention, attentionHolder, bridge, runtimeTabId]);
 
   const destination = useThreadShell(
     proposal
