@@ -61,6 +61,18 @@ describe("translateUiCopy", () => {
     expect(translateUiCopy("Expires in 4m 12s")).toBe("あと4分12秒で期限切れ");
     expect(translateUiCopy("Expires in 1d 3h")).toBe("あと1日3時間で期限切れ");
     expect(translateUiCopy("Expires in soon")).toBeNull();
+    expect(translateUiCopy("Resets tomorrow at 9:00")).toBe("リセット：明日 9:00");
+    expect(translateUiCopy("Next run in 5m")).toBe("次回：5分後");
+  });
+
+  it("translates copy found by the 2026-10-11 static check", () => {
+    expect(translateUiCopy("Click to steer, Ctrl/⌘-click to queue")).toBe(
+      "クリックで割り込み、Ctrl/⌘+クリックでキューに追加",
+    );
+    expect(translateUiCopy("Delete 3 threads?")).toBe("3 件のスレッドを削除しますか？");
+    expect(translateUiCopy("Sent by T3 Code")).toBe("Amu から送信");
+    expect(translateUiCopy("Worktree ready")).toBe("作業ツリーを準備しました");
+    expect(translateUiCopy("Every 15 min")).toBe("15 分ごと");
   });
 
   it("translates copy added by the 2026-10-10 upstream sync", () => {
