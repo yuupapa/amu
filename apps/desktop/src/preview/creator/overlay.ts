@@ -6,7 +6,8 @@
  * `creator:activate { generation: null }`.
  *
  * While active it translates Studio into Japanese, shows "Amu Creator" instead
- * of the HyperFrames logo, and adds the 修正コメント panel. The panel only
+ * of the HyperFrames logo, and adds the 修正コメント panel, docked to the right
+ * edge below Studio's header (see `panelLayout.ts`). The panel only
  * drafts, proposes and prepares captures; the server owns comment state and
  * the Amu window confirms every send. Buttons act only on trusted events, as a
  * guard against page scripts clicking them (not a security boundary).
@@ -48,9 +49,13 @@ import {
   composedPath,
   isTrustedEvent,
   listen,
+  NativeResizeObserver,
+  stopImmediatePropagation,
   stopPropagation,
   swallow,
 } from "./nativeDom.ts";
+import { layoutPanel, type PanelLayout } from "./panelLayout.ts";
+import { installPanelShield } from "./panelShield.ts";
 import {
   bindPlaceholders,
   commentActions,
@@ -62,6 +67,7 @@ import {
   sendableIds,
   type PanelState,
 } from "./panelState.ts";
+import { intersectRect } from "./playerChrome.ts";
 import { sceneButtons } from "./sceneNames.ts";
 import { createRateBudget, createUpdateScheduler, type UpdateScheduler } from "./sendPacer.ts";
 import * as studio from "./studioDom.ts";
@@ -81,19 +87,32 @@ const AWAIT_REVISION_MS = 3_000;
 const REFUSAL_MATCH_MS = 2_000;
 const DELETE_CONFIRM_MS = 3_000;
 const SPEEDS = [1, 1.5, 2, 3] as const;
+const COMMENT_HERE = "▶ いま止めた位置にコメント";
 
 const PANEL_CSS = `
 :host { all: initial; }
 * { box-sizing: border-box; }
-.panel { width: 340px; max-height: calc(100vh - 70px); display: flex; flex-direction: column;
+.panel { width: 100%; max-height: calc(100vh - 60px); display: flex; flex-direction: column;
   background: #121a26; color: #e7edf4; border: 2px solid #39d0b8; border-radius: 12px;
   font: 13px/1.5 system-ui, -apple-system, "Hiragino Sans", sans-serif;
   box-shadow: 0 0 22px rgba(57, 208, 184, .35); overflow: hidden; }
-.tab { all: unset; cursor: pointer; padding: 8px 12px; font-weight: 800; display: flex;
-  justify-content: space-between; border-bottom: 1px solid #2a3850; }
+.bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 6px 4px 0;
+  border-bottom: 1px solid #2a3850; }
+.tab { all: unset; cursor: pointer; padding: 4px 6px 4px 12px; font-weight: 800; display: flex;
+  justify-content: space-between; gap: 8px; flex: 1; min-width: max-content; }
 .body { overflow: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .collapsed .body, .collapsed .foot { display: none; }
-.collapsed .tab { border-bottom: 0; }
+.collapsed .bar { border-bottom: 0; }
+.quick { display: none; background: #f2f5f8; color: #121a26; border: 0; border-radius: 6px;
+  padding: 5px 8px; font-weight: 800; font-size: 12px; margin-left: 6px; }
+.size { flex: none; }
+.compact .quick { display: block; }
+.compact .tab { font-size: 12px; padding-left: 4px; }
+.compact .bar { border-bottom: 0; }
+.compact .foot, .compact .body > .big, .compact .body > details { display: none; }
+.compact .body { padding: 8px 10px; border-top: 1px solid #2a3850; }
+.compact .card:not(.editing):not(:focus-within) { display: none; }
+.compact .body:not(:has(.card.editing, .card:focus-within, .banner:not([hidden]))) { display: none; }
 .foot { padding: 8px 12px 12px; border-top: 1px solid #2a3850; display: flex; flex-direction: column; gap: 8px; }
 button { font: inherit; color: inherit; cursor: pointer; }
 button:disabled { opacity: .45; cursor: default; }
@@ -220,21 +239,28 @@ function createSession(initialGeneration: number) {
   // ---- DOM ----
   const host = make("div");
   host.setAttribute("data-amu-creator", "");
-  host.style.cssText = "position:fixed;top:56px;right:12px;z-index:2147483647";
+  // top, right and width come from `applyLayout`.
+  host.style.cssText = "position:fixed;top:48px;right:12px;width:340px;z-index:2147483647";
   const shadow = attachClosedShadow(host);
   const style = make("style");
   style.textContent = PANEL_CSS;
   const panel = make("div", "panel");
+  const bar = make("div", "bar");
+  // Compact mode's own comment button; the full panel uses `big`.
+  const quick = make("button", "quick", COMMENT_HERE);
   const tab = make("button", "tab");
   const tabLabel = make("span");
   const tabArrow = make("span", undefined, "▾");
   tab.append(tabLabel, tabArrow);
+  const sizeToggle = make("button", "mini size");
+  sizeToggle.hidden = true;
+  bar.append(quick, tab, sizeToggle);
   const body = make("div", "body");
   const broken = make("div", "banner warn", BROKEN_NOTICE);
   broken.hidden = true;
   const notice = make("div", "banner info");
   notice.hidden = true;
-  const big = make("button", "big", "▶ いま止めた位置にコメント");
+  const big = make("button", "big", COMMENT_HERE);
   const placingHint = make(
     "div",
     "banner info",
@@ -274,7 +300,7 @@ function createSession(initialGeneration: number) {
   });
   const scenes = make("div", "chips");
   foot.append(sendAll, confirmNote, track, speeds, scenes);
-  panel.append(tab, body, foot);
+  panel.append(bar, body, foot);
   shadow.append(style, panel);
 
   const isOurs = (node: Node | null): boolean =>
@@ -409,16 +435,18 @@ function createSession(initialGeneration: number) {
   };
 
   // ---- capture ----
+  /** The shot is the composition (never the player box), cut to what the preview shows. */
   const measure = (spec: CaptureSpec) => {
     const comp = studio.compositionRect();
-    if (comp === null) return null;
-    if (spec.pin === null) return { rect: comp };
-    const rect = pinCropRect(comp, spec.pin.x, spec.pin.y, {
+    const visible = comp === null ? null : studio.clipToPreview(comp);
+    if (comp === null || visible === null) return null;
+    if (spec.pin === null) return { rect: visible };
+    const crop = pinCropRect(comp, spec.pin.x, spec.pin.y, {
       width: comp.width / 2,
       height: comp.height / 2,
     });
     return {
-      rect,
+      rect: intersectRect(crop, visible) ?? crop,
       pin: { x: comp.x + spec.pin.x * comp.width, y: comp.y + spec.pin.y * comp.height },
     };
   };
@@ -427,6 +455,7 @@ function createSession(initialGeneration: number) {
   const viewKeyForRequest = (requestId: string): string =>
     boundRequests.get(requestId) ?? placeholderKey(requestId);
   let restoreFocus: Element | null = null;
+  let restoreChrome: (() => void) | null = null;
   const capture: CaptureClient = createCaptureClient({
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -444,12 +473,23 @@ function createSession(initialGeneration: number) {
     seek: studio.seekAndSettle,
     waitFrames: studio.waitFrames,
     // Opacity, not visibility: the textarea keeps focus and typing while hidden.
+    // Studio's controls over the preview are hidden too, and put back exactly in `show`.
     hide: () => {
       restoreFocus = focusedInPanel();
       host.style.opacity = "0";
       host.style.pointerEvents = "none";
+      restoreChrome?.();
+      const comp = studio.compositionRect();
+      const visible = comp === null ? null : studio.clipToPreview(comp);
+      try {
+        restoreChrome = studio.hidePlayerChrome(visible, isOurs);
+      } catch {
+        restoreChrome = null;
+      }
     },
     show: () => {
+      restoreChrome?.();
+      restoreChrome = null;
       host.style.opacity = "";
       host.style.pointerEvents = "";
       if (
@@ -641,15 +681,11 @@ function createSession(initialGeneration: number) {
         studio.seekTo(timeSec);
       }),
     );
+    // Trusted input arrives through the panel shield (`onShielded`); this covers a guest without it.
     listen(
       text,
       "input",
-      trusted(() => {
-        if (placeholderOf(view.key) === undefined) localText.set(view.key, text.value);
-        scheduler.change(view.key, text.value);
-        updateCard(view);
-        renderFooter();
-      }),
+      trusted(() => onTextInput(view)),
     );
     listen(text, "blur", () => scheduler.flush(view.key));
     listen(
@@ -696,9 +732,18 @@ function createSession(initialGeneration: number) {
     return view;
   };
 
+  const onTextInput = (view: CardView) => {
+    if (placeholderOf(view.key) === undefined) localText.set(view.key, view.text.value);
+    scheduler.change(view.key, view.text.value);
+    updateCard(view);
+    renderFooter();
+  };
+
   const updateCard = (view: CardView) => {
     const placeholder = placeholderOf(view.key);
     const comment = commentById(view.key);
+    // Compact mode still shows the cards being written.
+    view.root.classList.toggle("editing", placeholder !== undefined || isDirty(view.key));
     const armed = Date.now() - view.deleteArmedAt <= DELETE_CONFIRM_MS;
     view.remove.textContent = armed ? "本当に削除する" : "削除";
     view.shot.textContent =
@@ -822,7 +867,9 @@ function createSession(initialGeneration: number) {
     const proposed = state?.comments.some((comment) => comment.status === "proposed") ?? false;
     confirmNote.hidden = !(justProposed || proposed);
     big.disabled = capture.busy();
-    big.textContent = capture.busy() ? "撮影中…" : "▶ いま止めた位置にコメント";
+    big.textContent = capture.busy() ? "撮影中…" : COMMENT_HERE;
+    quick.disabled = big.disabled;
+    quick.textContent = big.textContent;
     placingHint.hidden = placing === null;
   };
 
@@ -1071,8 +1118,8 @@ function createSession(initialGeneration: number) {
     ];
     hooked = { doc, remove: () => removers.forEach((remove) => remove()) };
   };
-  // Keys typed in the panel stay out of Studio's shortcuts; clicks do not deselect in Studio.
-  for (const type of [...KEY_EVENTS, "pointerdown", "mousedown", "click"]) {
+  // Clicks in the panel do not deselect in Studio. Keys never get here: the panel shield stops them.
+  for (const type of ["pointerdown", "mousedown", "click"]) {
     listen(panel, type, stopPropagation);
   }
   listen(
@@ -1085,6 +1132,15 @@ function createSession(initialGeneration: number) {
     }),
   );
   listen(big, "click", trusted(commentHere));
+  listen(quick, "click", trusted(commentHere));
+  listen(
+    sizeToggle,
+    "click",
+    trusted(() => {
+      userExpanded = !userExpanded;
+      applyLayout();
+    }),
+  );
   listen(
     sendAll,
     "click",
@@ -1102,6 +1158,65 @@ function createSession(initialGeneration: number) {
       refreshFill();
     }),
   );
+
+  // ---- placement ----
+  /** The user opened the full list although it covers the video. */
+  let userExpanded = false;
+  let layout: PanelLayout | null = null;
+  let layoutFrame: number | null = null;
+  let layoutTargets: { player: Element | null; iframe: Element | null } = {
+    player: null,
+    iframe: null,
+  };
+  const applyLayout = () => {
+    const comp = studio.compositionRect();
+    const next = layoutPanel({
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      headerBottom: studio.headerBottom(),
+      composition: comp === null ? null : studio.clipToPreview(comp),
+      userExpanded,
+    });
+    if (
+      layout !== null &&
+      layout.top === next.top &&
+      layout.width === next.width &&
+      layout.maxHeight === next.maxHeight &&
+      layout.crowded === next.crowded &&
+      layout.compact === next.compact
+    ) {
+      return;
+    }
+    layout = next;
+    host.style.top = `${next.top}px`;
+    host.style.right = `${next.right}px`;
+    host.style.width = `${next.width}px`;
+    panel.style.maxHeight = `${next.maxHeight}px`;
+    panel.classList.toggle("compact", next.compact);
+    sizeToggle.hidden = !next.crowded;
+    sizeToggle.textContent = next.compact ? "一覧を開く" : "小さくする";
+    sizeToggle.title = next.compact
+      ? "コメントの一覧を開きます（動画に重なります）"
+      : "動画に重ならないよう小さくします";
+  };
+  const scheduleLayout = () => {
+    if (layoutFrame !== null) return;
+    layoutFrame = requestAnimationFrame(() => {
+      layoutFrame = null;
+      applyLayout();
+    });
+  };
+  const resizeObserver = new NativeResizeObserver(scheduleLayout);
+  /** Watches the current player and preview iframe; Studio may replace either. */
+  const observeLayoutTargets = () => {
+    const player = studio.findPlayer();
+    const iframe = studio.previewIframe();
+    if (player === layoutTargets.player && iframe === layoutTargets.iframe) return;
+    resizeObserver.disconnect();
+    if (player !== null) resizeObserver.observe(player);
+    if (iframe !== null) resizeObserver.observe(iframe);
+    layoutTargets = { player, iframe };
+  };
+  cleanups.push(listen(window, "resize", scheduleLayout));
 
   // ---- Studio integration ----
   const translator = studio.createTranslator((node) => isOurs(node));
@@ -1122,6 +1237,9 @@ function createSession(initialGeneration: number) {
     }
     broken.hidden = (logoFound && player !== null) || Date.now() - startedAt < BROKEN_AFTER_MS;
     hookComposition();
+    observeLayoutTargets();
+    // Pan, zoom and Studio's own layout changes do not resize the player.
+    applyLayout();
     // Scenes are read from the composition DOM; every few seconds is enough.
     ticks += 1;
     if (ticks % SCENE_REFRESH_TICKS === 1) refreshScenes();
@@ -1159,6 +1277,8 @@ function createSession(initialGeneration: number) {
 
   const unmount = () => {
     capture.cancel();
+    resizeObserver.disconnect();
+    if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
     scheduler.clear();
     if (noticeTimer !== null) clearTimeout(noticeTimer);
     observedPlayer?.remove();
@@ -1171,7 +1291,21 @@ function createSession(initialGeneration: number) {
     host.remove();
   };
 
+  /** An event the panel shield stopped at the window; text input still reaches its card. */
+  const onShielded = (event: Event) => {
+    if (event.type !== "input" || !isTrustedEvent(event)) return;
+    const active = shadow.activeElement;
+    for (const view of views.values()) {
+      if (view.text === active) {
+        onTextInput(view);
+        return;
+      }
+    }
+  };
+
   return {
+    host,
+    onShielded,
     mount,
     unmount,
     setGeneration: (value: number) => {
@@ -1188,6 +1322,18 @@ function createSession(initialGeneration: number) {
 let session: Session | null = null;
 /** Generation of an activation that arrived before the document had a body. */
 let pendingGeneration: number | null = null;
+
+// Installed when the preload loads, before Studio's scripts, so these window
+// capture listeners run first. See `panelShield.ts`.
+installPanelShield<Event>({
+  listen: (type, handler) => {
+    listen(window, type, handler, { capture: true });
+  },
+  composedPath,
+  stopImmediatePropagation,
+  host: () => session?.host ?? null,
+  deliver: (event) => session?.onShielded(event),
+});
 
 const startPending = () => {
   if (pendingGeneration === null || session !== null || !document.body) return;

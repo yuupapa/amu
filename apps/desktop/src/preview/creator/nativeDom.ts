@@ -17,6 +17,7 @@ const nativeStopImmediatePropagation = Event.prototype.stopImmediatePropagation;
 const isTrustedGetter = Object.getOwnPropertyDescriptor(Event.prototype, "isTrusted")?.get;
 
 export const NativeMutationObserver = MutationObserver;
+export const NativeResizeObserver = ResizeObserver;
 
 /** Adds a listener with the original `addEventListener`; returns its remover. */
 export const listen = <E extends Event = Event>(
@@ -43,6 +44,11 @@ export const isTrustedEvent = (event: Event): boolean =>
 /** Keeps an event from the page: no default action, no other listener. */
 export const swallow = (event: Event): void => {
   Reflect.apply(nativePreventDefault, event, []);
+  Reflect.apply(nativeStopImmediatePropagation, event, []);
+};
+
+/** No other listener sees the event; its default action (inserting text) still happens. */
+export const stopImmediatePropagation = (event: Event): void => {
   Reflect.apply(nativeStopImmediatePropagation, event, []);
 };
 

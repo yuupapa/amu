@@ -582,7 +582,7 @@ function RightPanelEmptyState(props: {
   );
 }
 
-function surfaceTitle(
+export function surfaceTitle(
   surface: RightPanelSurface,
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>,
   terminalLabelsById: ReadonlyMap<string, string>,
@@ -609,7 +609,11 @@ function surfaceTitle(
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
-      if (snapshot?.creator) return "Amu Creator";
+      if (snapshot?.creator) {
+        // The folder or video name tells two Creator tabs apart; the tab truncates, the tooltip shows it all.
+        const label = snapshot.creator.label.trim();
+        return label === "" ? "Amu Creator" : `Amu Creator — ${label}`;
+      }
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
       if (snapshot.navStatus.title.trim().length > 0) return snapshot.navStatus.title;
       try {

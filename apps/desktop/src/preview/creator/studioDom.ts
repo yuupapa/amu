@@ -8,13 +8,25 @@
  *   down with CSS.
  * - Scene hosts in the assembled preview carry `data-composition-file` and
  *   `data-start`; the composition root has `data-composition-id`.
- * - The top-left logo is an `<svg aria-label="Hyperframes">`.
+ * - The top-left logo is an `<svg aria-label="Hyperframes">`, inside the
+ *   full-width header bar (`h-10`).
+ * - The player sits in `[data-preview-pan-surface]` (pan and zoom, overflow
+ *   hidden). Studio draws its preview overlays (the ruler, safe-margin, snap
+ *   and grid toolbar in the top-right, selection boxes, guides) in a later
+ *   sibling of the player's stage; the playback bar is below the surface.
  * Not unit-tested (desktop has no DOM test environment); checked live in Task 12.
  */
 import { toPageRect, type Rect } from "../creatorGeometry.ts";
 import { waitForFrames } from "./frameWait.ts";
 import { translate } from "./jaDictionary.ts";
 import { NativeMutationObserver } from "./nativeDom.ts";
+import {
+  hideVisibility,
+  intersectRect,
+  outermost,
+  overlaysAbove,
+  samplePoints,
+} from "./playerChrome.ts";
 import type { SceneSource } from "./sceneNames.ts";
 
 type PlayerElement = HTMLElement & {
@@ -134,6 +146,100 @@ export const compositionRect = (): Rect | null => {
     iframeScaleY: scale.y,
   });
   return rect.width > 0 && rect.height > 0 ? rect : null;
+};
+
+/** The visible preview area (pan surface), or null when Studio's layout is not found. */
+const previewSurface = (): Element | null =>
+  findPlayer()?.closest("[data-preview-pan-surface]") ?? null;
+
+/**
+ * `rect` cut to the preview surface, so a zoomed or panned composition never
+ * takes in the playback bar or panels around the preview. Null when nothing of
+ * it is visible; `rect` itself when Studio's surface is not found.
+ */
+export const clipToPreview = (rect: Rect): Rect | null => {
+  const surface = previewSurface()?.getBoundingClientRect();
+  return surface === undefined ? rect : intersectRect(rect, surface);
+};
+
+/** Bottom of Studio's header in viewport px: the first full-width ancestor of the logo. */
+export const headerBottom = (): number | null => {
+  for (
+    let node = findLogo()?.parentElement ?? null;
+    node !== null && node !== document.body;
+    node = node.parentElement
+  ) {
+    const box = node.getBoundingClientRect();
+    if (box.width >= window.innerWidth * 0.6) {
+      return box.height > 0 && box.height <= 120 ? box.bottom : null;
+    }
+  }
+  return null;
+};
+
+/** Studio's preview toolbar buttons, by English label or our translation of it. */
+const PLAYER_TOOLBAR_SELECTOR = [
+  "Toggle ruler",
+  "Toggle safe margins",
+  "Toggle snap",
+  "Toggle grid",
+  "Grid options",
+  "Set motion destination",
+]
+  .flatMap((label) => [label, translate(label, "chrome")])
+  .filter((label): label is string => label !== null)
+  .map((label) => `[aria-label="${CSS.escape(label)}"]`)
+  .join(", ");
+
+const isPositioned = (element: Element): boolean => getComputedStyle(element).position !== "static";
+
+/**
+ * Hides Studio's controls over the preview with `visibility: hidden` for a
+ * shot and returns the exact restore:
+ * - the player's own control bar (in its open shadow root, if it has one);
+ * - the toolbar holding the ruler, safe-margin, snap and grid buttons;
+ * - positioned later siblings of the player's branch up to the pan surface
+ *   (Studio's overlay layer, including guides that take no pointer events);
+ * - anything hit-tested above the player inside `composition`.
+ * The player, its ancestors and the overlay itself are never hidden.
+ */
+export const hidePlayerChrome = (
+  composition: Rect | null,
+  isOurs: (node: Node) => boolean,
+): (() => void) => {
+  const player = findPlayer();
+  if (player === null) return () => {};
+  const isPlayerBranch = (element: Element) => element === player || element.contains(player);
+  const candidates: Element[] = [...(player.shadowRoot?.querySelectorAll(".hfp-controls") ?? [])];
+  for (const button of document.querySelectorAll(PLAYER_TOOLBAR_SELECTOR)) {
+    const bar = button.parentElement?.closest(".absolute") ?? null;
+    candidates.push(bar !== null && !isPlayerBranch(bar) ? bar : button);
+  }
+  const surface = previewSurface();
+  if (surface !== null) {
+    for (let branch: Element = player; branch !== surface;) {
+      const parent = branch.parentElement;
+      if (parent === null) break;
+      for (let next = branch.nextElementSibling; next !== null; next = next.nextElementSibling) {
+        if (isPositioned(next)) candidates.push(next);
+      }
+      branch = parent;
+    }
+  }
+  if (composition !== null) {
+    const stacks = samplePoints(composition).map(({ x, y }) => document.elementsFromPoint(x, y));
+    candidates.push(...overlaysAbove(stacks, isPlayerBranch, isOurs));
+  }
+  const targets = outermost(
+    [...new Set(candidates)].filter(
+      (element) =>
+        !isPlayerBranch(element) &&
+        !isOurs(element) &&
+        (element instanceof HTMLElement || element instanceof SVGElement),
+    ),
+    (outer, inner) => outer.contains(inner),
+  );
+  return hideVisibility(targets.map((element) => (element as HTMLElement | SVGElement).style));
 };
 
 /** A point from an event inside the composition iframe, in this page's viewport px. */
