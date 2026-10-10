@@ -4332,3 +4332,399 @@ describe("PreviewOperationError", () => {
     expect(PreviewManager.PreviewOperationError.toTimelineMessage(error)).toBe(cause.message);
   });
 });
+
+describe("PreviewManager Amu Creator", () => {
+  const BINDING = "11111111-1111-4111-8111-111111111111";
+
+  interface CreatorTestImage {
+    readonly getSize: () => { readonly width: number; readonly height: number };
+    readonly resize: (options: { readonly width: number; readonly height: number }) => {
+      readonly getSize: () => { readonly width: number; readonly height: number };
+      readonly toPNG: () => Buffer;
+    };
+    readonly toPNG: () => Buffer;
+  }
+
+  const makeCreatorImage = (width: number, height: number): CreatorTestImage => ({
+    getSize: () => ({ width, height }),
+    resize: (options) => ({
+      getSize: () => ({ width: options.width, height: options.height }),
+      toPNG: () => Buffer.from(`png-${options.width}x${options.height}`),
+    }),
+    toPNG: () => Buffer.from(`png-${width}x${height}`),
+  });
+
+  const makeCreatorGuest = (id = 42) => {
+    const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+    const ipcHandlers = new Map<string, (event: unknown, ...args: unknown[]) => void>();
+    const mainFrame = { routingId: id };
+    const childFrame = { routingId: id + 1000 };
+    const send = vi.fn();
+    const capturePage = vi.fn(async (_rect?: unknown): Promise<CreatorTestImage> =>
+      makeCreatorImage(2400, 1350),
+    );
+    const executeJavaScriptInIsolatedWorld = vi.fn(async () => [1000, 600]);
+    const webContents = {
+      id,
+      mainFrame,
+      isDestroyed: () => false,
+      getType: () => "webview",
+      getURL: () => "http://localhost:3002/",
+      getTitle: () => "Studio",
+      isLoading: () => false,
+      getZoomFactor: () => 1,
+      setZoomFactor: vi.fn(),
+      setAudioMuted: vi.fn(),
+      setBackgroundThrottling: vi.fn(),
+      isCurrentlyAudible: () => false,
+      on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+      }),
+      once: vi.fn(),
+      off: vi.fn(),
+      ipc: {
+        on: vi.fn((channel: string, listener: (event: unknown, ...args: unknown[]) => void) => {
+          ipcHandlers.set(channel, listener);
+        }),
+        off: vi.fn(),
+        removeListener: vi.fn(),
+      },
+      send,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      setIgnoreMenuShortcuts: vi.fn(),
+      setWindowOpenHandler: vi.fn(),
+      executeJavaScriptInIsolatedWorld,
+      capturePage,
+      debugger: {
+        isAttached: () => false,
+        attach: vi.fn(),
+        sendCommand: vi.fn(async () => undefined),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    };
+    return {
+      webContents: webContents as unknown as Electron.WebContents,
+      capturePage,
+      executeJavaScriptInIsolatedWorld,
+      send,
+      ipcHandlers,
+      fromMainFrame: { senderFrame: mainFrame },
+      fromChildFrame: { senderFrame: childFrame },
+      emit: (event: string, ...args: unknown[]) => {
+        for (const listener of listeners.get(event) ?? []) listener(...args);
+      },
+      sent: (channel: string) =>
+        send.mock.calls
+          .filter(([sentChannel]) => sentChannel === channel)
+          .map(([, value]) => value),
+    };
+  };
+
+  const collectCreatorEvents = (manager: PreviewManager.PreviewManager["Service"]) =>
+    Effect.gen(function* () {
+      const events: Array<Record<string, unknown>> = [];
+      yield* manager.subscribeCreatorEvents((event) =>
+        Effect.sync(() => {
+          events.push(event as unknown as Record<string, unknown>);
+        }),
+      );
+      return events;
+    });
+
+  const openCreatorTab = (
+    manager: PreviewManager.PreviewManager["Service"],
+    guests: ReadonlyArray<ReturnType<typeof makeCreatorGuest>>,
+    zoomFactor?: number,
+  ) =>
+    Effect.gen(function* () {
+      const byId = new Map(guests.map((guest) => [guest.webContents.id, guest.webContents]));
+      fromId.mockImplementation((id) => (id === undefined ? null : (byId.get(id) ?? null)));
+      yield* manager.createTab(
+        "tab_creator",
+        zoomFactor === undefined ? undefined : { zoomFactor },
+      );
+      yield* manager.registerWebview("tab_creator", guests[0]!.webContents.id);
+    });
+
+  effectIt.effect(
+    "activates the current document and revokes only on a new main-frame document",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const guest = makeCreatorGuest();
+          const events = yield* collectCreatorEvents(manager);
+          yield* openCreatorTab(manager, [guest]);
+
+          const registered = yield* manager.registerCreatorSession("tab_creator", BINDING);
+          expect(registered).toEqual({ ok: true, epoch: 1, generation: 1 });
+          expect(guest.sent("creator:activate")).toEqual([{ generation: 1 }]);
+          yield* settle(() => events.length === 1);
+          expect(events).toEqual([
+            {
+              kind: "activated",
+              tabId: "tab_creator",
+              bindingId: BINDING,
+              epoch: 1,
+              generation: 1,
+            },
+          ]);
+
+          guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+          guest.emit("did-start-navigation", { isMainFrame: false, isSameDocument: false });
+          expect(yield* manager.isCreatorSessionCurrent("tab_creator", 1)).toBe(true);
+
+          guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+          expect(yield* manager.isCreatorSessionCurrent("tab_creator", 1)).toBe(false);
+          yield* settle(() => events.length === 2);
+          expect(events[1]).toEqual({
+            kind: "revoked",
+            tabId: "tab_creator",
+            bindingId: BINDING,
+            epoch: 2,
+            reason: "navigation",
+          });
+          expect(guest.sent("creator:activate").at(-1)).toEqual({ generation: null });
+          expect(
+            yield* manager.creatorApprove("tab_creator", 1, "33333333-3333-4333-8333-333333333333"),
+          ).toEqual({ ok: false, reason: "inactive" });
+
+          // Re-registering activates the new document with a newer epoch.
+          expect(yield* manager.registerCreatorSession("tab_creator", BINDING)).toEqual({
+            ok: true,
+            epoch: 3,
+            generation: 2,
+          });
+        }),
+      ),
+  );
+
+  effectIt.effect("approves only while the session is live on the generation asked about", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        yield* openCreatorTab(manager, [guest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        const proposalId = "33333333-3333-4333-8333-333333333333";
+
+        const approved = yield* manager.creatorApprove("tab_creator", 1, proposalId);
+        expect(approved).toEqual({ ok: true, epoch: 1 });
+        expect(yield* manager.creatorApprove("tab_creator", 2, proposalId)).toEqual({
+          ok: false,
+          reason: "stale_generation",
+        });
+        yield* manager.revokeAllCreatorSessions();
+        expect(yield* manager.creatorApprove("tab_creator", 1, proposalId)).toEqual({
+          ok: false,
+          reason: "inactive",
+        });
+      }),
+    ),
+  );
+
+  effectIt.effect(
+    "forwards guest messages only from the main frame of the current attachment",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const guest = makeCreatorGuest(42);
+          const other = makeCreatorGuest(43);
+          const events = yield* collectCreatorEvents(manager);
+          yield* openCreatorTab(manager, [guest, other]);
+          const draft =
+            (handler: ((event: unknown, ...args: unknown[]) => void) | undefined) =>
+            (frame: unknown, generation: number, comment: string) =>
+              handler?.(frame, { generation, payload: { comment } });
+
+          // No session yet: nothing is forwarded.
+          draft(guest.ipcHandlers.get("creator:draft"))(guest.fromMainFrame, 1, "before");
+          yield* manager.registerCreatorSession("tab_creator", BINDING);
+          const firstDraft = guest.ipcHandlers.get("creator:draft");
+          draft(firstDraft)(guest.fromChildFrame, 1, "child");
+          draft(firstDraft)(guest.fromMainFrame, 1, "main");
+          yield* settle(() => events.some((event) => event["kind"] === "draft"));
+          expect(events.filter((event) => event["kind"] === "draft")).toEqual([
+            {
+              kind: "draft",
+              tabId: "tab_creator",
+              bindingId: BINDING,
+              epoch: 1,
+              generation: 1,
+              payload: { comment: "main" },
+            },
+          ]);
+
+          // Swap the guest out and back: the first attachment's handler is stale.
+          yield* manager.registerWebview("tab_creator", 43);
+          yield* settle(() => events.some((event) => event["reason"] === "guest-swapped"));
+          yield* manager.registerWebview("tab_creator", 42);
+          const registered = yield* manager.registerCreatorSession("tab_creator", BINDING);
+          expect(registered).toMatchObject({ ok: true, generation: 1 });
+          draft(firstDraft)(guest.fromMainFrame, 1, "stale attachment");
+          draft(guest.ipcHandlers.get("creator:draft"))(guest.fromMainFrame, 1, "current");
+          yield* settle(() => events.filter((event) => event["kind"] === "draft").length === 2);
+          expect(
+            events
+              .filter((event) => event["kind"] === "draft")
+              .map((event) => (event["payload"] as { comment: string }).comment),
+          ).toEqual(["main", "current"]);
+        }),
+      ),
+  );
+
+  effectIt.effect("captures one zoom-corrected, resized shot per request", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        const events = yield* collectCreatorEvents(manager);
+        yield* openCreatorTab(manager, [guest], 1.5);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        const request = guest.ipcHandlers.get("creator:capture-request")!;
+        const ready = guest.ipcHandlers.get("creator:capture-ready")!;
+
+        request(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          purpose: "draft",
+          timeSec: 3,
+        });
+        expect(guest.sent("creator:capture-begin")).toEqual([{ requestId: "r1" }]);
+        request(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r2",
+          purpose: "draft",
+          timeSec: 4,
+        });
+        yield* settle(() => guest.sent("creator:capture-done").length === 1);
+        expect(guest.sent("creator:capture-done")).toEqual([{ requestId: "r2", ok: false }]);
+
+        ready(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          rect: { x: 100, y: 50, width: 400, height: 300 },
+        });
+        yield* settle(() => events.some((event) => event["kind"] === "shot"));
+        expect(guest.capturePage).toHaveBeenCalledWith({ x: 150, y: 75, width: 600, height: 450 });
+        const shot = events.find((event) => event["kind"] === "shot")!;
+        expect(shot).toMatchObject({
+          kind: "shot",
+          tabId: "tab_creator",
+          bindingId: BINDING,
+          epoch: 1,
+          generation: 1,
+          requestId: "r1",
+          purpose: "draft",
+          timeSec: 3,
+          commentId: null,
+          width: 1280,
+          height: 720,
+        });
+        expect(Buffer.from(shot["png"] as Uint8Array).toString()).toBe("png-1280x720");
+        yield* settle(() => guest.sent("creator:capture-done").length === 2);
+        expect(guest.sent("creator:capture-done").at(-1)).toEqual({ requestId: "r1", ok: true });
+      }),
+    ),
+  );
+
+  effectIt.effect("drops a capture revoked while capturePage runs", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        const events = yield* collectCreatorEvents(manager);
+        yield* openCreatorTab(manager, [guest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        let release!: (image: CreatorTestImage) => void;
+        guest.capturePage.mockImplementationOnce(
+          () =>
+            new Promise<CreatorTestImage>((resolve) => {
+              release = resolve;
+            }),
+        );
+        guest.ipcHandlers.get("creator:capture-request")!(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          purpose: "place",
+          timeSec: 1,
+          commentId: "44444444-4444-4444-8444-444444444444",
+        });
+        guest.ipcHandlers.get("creator:capture-ready")!(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          rect: { x: 0, y: 0, width: 200, height: 100 },
+          pin: { x: 50, y: 50 },
+        });
+        yield* settle(() => guest.capturePage.mock.calls.length === 1);
+
+        guest.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+        release(makeCreatorImage(200, 100));
+        yield* settle(() => false);
+
+        expect(events.some((event) => event["kind"] === "shot")).toBe(false);
+        expect(guest.sent("creator:capture-done")).toEqual([{ requestId: "r1", ok: false }]);
+      }),
+    ),
+  );
+
+  effectIt.effect("times a capture out after 5 seconds and ignores its late ready", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        const events = yield* collectCreatorEvents(manager);
+        yield* openCreatorTab(manager, [guest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        guest.ipcHandlers.get("creator:capture-request")!(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          purpose: "draft",
+          timeSec: 1,
+        });
+        yield* TestClock.adjust(5_000);
+        yield* settle(() => guest.sent("creator:capture-done").length === 1);
+        expect(guest.sent("creator:capture-done")).toEqual([{ requestId: "r1", ok: false }]);
+
+        guest.ipcHandlers.get("creator:capture-ready")!(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          rect: { x: 0, y: 0, width: 200, height: 100 },
+        });
+        yield* settle(() => false);
+        expect(guest.capturePage).not.toHaveBeenCalled();
+        expect(events.some((event) => event["kind"] === "shot")).toBe(false);
+      }),
+    ),
+  );
+
+  effectIt.effect("revokes when the tab closes and when the guest is destroyed", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        const events = yield* collectCreatorEvents(manager);
+        yield* openCreatorTab(manager, [guest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        guest.emit("destroyed");
+        yield* settle(() => events.length === 2);
+        expect(events[1]).toMatchObject({ kind: "revoked", reason: "destroyed", epoch: 2 });
+
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        yield* manager.closeTab("tab_creator");
+        yield* settle(() => events.length === 4);
+        expect(events[3]).toMatchObject({ kind: "revoked", reason: "tab-closed", epoch: 4 });
+      }),
+    ),
+  );
+
+  effectIt.effect("pushes panel state only to a live session", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        yield* openCreatorTab(manager, [guest]);
+        expect(yield* manager.pushCreatorState("tab_creator", { comments: [] })).toBe(false);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        expect(yield* manager.pushCreatorState("tab_creator", { comments: [] })).toBe(true);
+        expect(guest.sent("creator:state")).toEqual([{ generation: 1, state: { comments: [] } }]);
+        yield* manager.revokeCreatorSession("tab_creator");
+        expect(yield* manager.pushCreatorState("tab_creator", { comments: [] })).toBe(false);
+      }),
+    ),
+  );
+});

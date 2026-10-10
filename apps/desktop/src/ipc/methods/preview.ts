@@ -1,5 +1,11 @@
 import {
   DesktopPreviewAnnotationSendEnabledInputSchema,
+  DesktopPreviewCreatorApproveInputSchema,
+  DesktopPreviewCreatorApproveResultSchema,
+  DesktopPreviewCreatorGenerationInputSchema,
+  DesktopPreviewCreatorPushStateInputSchema,
+  DesktopPreviewCreatorRegisterInputSchema,
+  DesktopPreviewCreatorRegisterResultSchema,
   DesktopPreviewAnnotationThemeInputSchema,
   DesktopPreviewArtifactInputSchema,
   DesktopPreviewConfigInputSchema,
@@ -53,6 +59,9 @@ export const installPreviewEventForwarding = Effect.fn(
   );
   yield* manager.subscribePointerEvents((event) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL, event),
+  );
+  yield* manager.subscribeCreatorEvents((event) =>
+    electronWindow.sendAll(IpcChannels.PREVIEW_CREATOR_EVENT_CHANNEL, event),
   );
 });
 
@@ -431,6 +440,76 @@ export const saveRecording = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const registerCreatorSession = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_REGISTER_CHANNEL,
+  payload: DesktopPreviewCreatorRegisterInputSchema,
+  result: DesktopPreviewCreatorRegisterResultSchema,
+  handler: Effect.fn("desktop.ipc.preview.registerCreatorSession")(function* ({
+    tabId,
+    bindingId,
+  }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.registerCreatorSession(tabId, bindingId);
+  }),
+});
+
+export const revokeCreatorSession = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_REVOKE_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.revokeCreatorSession")(function* ({ tabId }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.revokeCreatorSession(tabId);
+  }),
+});
+
+export const revokeAllCreatorSessions = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_REVOKE_ALL_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.revokeAllCreatorSessions")(function* () {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.revokeAllCreatorSessions();
+  }),
+});
+
+export const isCreatorSessionCurrent = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_IS_CURRENT_CHANNEL,
+  payload: DesktopPreviewCreatorGenerationInputSchema,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.preview.isCreatorSessionCurrent")(function* ({
+    tabId,
+    generation,
+  }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.isCreatorSessionCurrent(tabId, generation);
+  }),
+});
+
+export const creatorApprove = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_APPROVE_CHANNEL,
+  payload: DesktopPreviewCreatorApproveInputSchema,
+  result: DesktopPreviewCreatorApproveResultSchema,
+  handler: Effect.fn("desktop.ipc.preview.creatorApprove")(function* ({
+    tabId,
+    generation,
+    proposalId,
+  }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.creatorApprove(tabId, generation, proposalId);
+  }),
+});
+
+export const pushCreatorState = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_PUSH_STATE_CHANNEL,
+  payload: DesktopPreviewCreatorPushStateInputSchema,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.preview.pushCreatorState")(function* ({ tabId, state }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.pushCreatorState(tabId, state);
+  }),
+});
+
 export const methods = [
   setForwardedShortcuts,
   createTab,
@@ -463,4 +542,10 @@ export const methods = [
   startRecording,
   stopRecording,
   saveRecording,
+  registerCreatorSession,
+  revokeCreatorSession,
+  revokeAllCreatorSessions,
+  isCreatorSessionCurrent,
+  creatorApprove,
+  pushCreatorState,
 ] as const;

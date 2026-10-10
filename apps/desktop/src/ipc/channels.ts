@@ -106,6 +106,13 @@ export const PREVIEW_RECORDING_SAVE_CHANNEL = "desktop:preview-recording-save";
 export const PREVIEW_RECORDING_FRAME_CHANNEL = "desktop:preview-recording-frame";
 export const PREVIEW_STATE_CHANGE_CHANNEL = "desktop:preview-state-change";
 export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
+export const PREVIEW_CREATOR_EVENT_CHANNEL = "desktop:preview-creator-event";
+export const PREVIEW_CREATOR_REGISTER_CHANNEL = "desktop:preview-creator-register";
+export const PREVIEW_CREATOR_REVOKE_CHANNEL = "desktop:preview-creator-revoke";
+export const PREVIEW_CREATOR_REVOKE_ALL_CHANNEL = "desktop:preview-creator-revoke-all";
+export const PREVIEW_CREATOR_IS_CURRENT_CHANNEL = "desktop:preview-creator-is-current";
+export const PREVIEW_CREATOR_APPROVE_CHANNEL = "desktop:preview-creator-approve";
+export const PREVIEW_CREATOR_PUSH_STATE_CHANNEL = "desktop:preview-creator-push-state";
 
 export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
 

@@ -1,7 +1,8 @@
 import * as Schema from "effect/Schema";
 
 import { SnapShotSource } from "./chatAttachment.ts";
-import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { EnvironmentId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { CreatorBindingId, CreatorEpoch, CreatorProposalId } from "./creator.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
   BrowserImportResult,
@@ -1077,6 +1078,106 @@ export const DesktopPreviewAnnotationSendEnabledInputSchema = Schema.Struct({
   enabled: Schema.Boolean,
 });
 
+/**
+ * Amu Creator on a preview tab. The desktop main keeps one session per tab:
+ * `generation` is the guest's main-frame document, `epoch` grows on every
+ * activation and revocation. The renderer registers after the tab opens and
+ * again after each `revoked` it wants to recover from.
+ */
+export const DesktopPreviewCreatorRegisterInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  bindingId: CreatorBindingId,
+});
+
+export const DesktopPreviewCreatorGenerationInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  generation: NonNegativeInt,
+});
+
+export const DesktopPreviewCreatorApproveInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  generation: NonNegativeInt,
+  proposalId: CreatorProposalId,
+});
+export type DesktopPreviewCreatorApproveInput = typeof DesktopPreviewCreatorApproveInputSchema.Type;
+
+/** `state` is the panel state for the guest overlay; main only size-checks and forwards it. */
+export const DesktopPreviewCreatorPushStateInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  state: Schema.Unknown,
+});
+
+const CreatorRefused = Schema.Struct({ ok: Schema.Literal(false), reason: Schema.String });
+
+export const DesktopPreviewCreatorRegisterResultSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), epoch: CreatorEpoch, generation: NonNegativeInt }),
+  CreatorRefused,
+]);
+export type DesktopPreviewCreatorRegisterResult =
+  typeof DesktopPreviewCreatorRegisterResultSchema.Type;
+
+/** `ok: true` is the approval point: pass `epoch` to `creator.confirmSend`. */
+export const DesktopPreviewCreatorApproveResultSchema = Schema.Union([
+  Schema.Struct({ ok: Schema.Literal(true), epoch: CreatorEpoch }),
+  CreatorRefused,
+]);
+export type DesktopPreviewCreatorApproveResult =
+  typeof DesktopPreviewCreatorApproveResultSchema.Type;
+
+export type DesktopPreviewCreatorGuestKind =
+  | "draft"
+  | "update"
+  | "place"
+  | "delete"
+  | "propose"
+  | "cancel"
+  | "confirm-by-user";
+
+export type DesktopPreviewCreatorRevokeReason =
+  | "navigation"
+  | "guest-swapped"
+  | "tab-closed"
+  | "destroyed"
+  | "renderer"
+  | "revoke-all"
+  | "replaced";
+
+interface DesktopPreviewCreatorEventBase {
+  readonly tabId: string;
+  /** The binding the renderer registered; decode it before use. */
+  readonly bindingId: string;
+  readonly epoch: number;
+}
+
+/**
+ * Main -> renderer. Guest messages are forwarded with the session's stamp;
+ * `payload` is untrusted page data the renderer must decode before using.
+ */
+export type DesktopPreviewCreatorEvent =
+  | (DesktopPreviewCreatorEventBase & { readonly kind: "activated"; readonly generation: number })
+  | (DesktopPreviewCreatorEventBase & {
+      readonly kind: "revoked";
+      readonly reason: DesktopPreviewCreatorRevokeReason;
+    })
+  | (DesktopPreviewCreatorEventBase & {
+      readonly kind: DesktopPreviewCreatorGuestKind;
+      readonly generation: number;
+      readonly payload: unknown;
+    })
+  | (DesktopPreviewCreatorEventBase & {
+      readonly kind: "shot";
+      readonly generation: number;
+      readonly requestId: string;
+      readonly purpose: "draft" | "place";
+      readonly timeSec: number;
+      readonly commentId: string | null;
+      /** Untrusted, as sent by the guest with the capture request. */
+      readonly place: unknown;
+      readonly png: Uint8Array;
+      readonly width: number;
+      readonly height: number;
+    });
+
 export const DesktopPreviewArtifactInputSchema = Schema.Struct({
   path: Schema.String.check(Schema.isTrimmed()).check(Schema.isNonEmpty()),
 });
@@ -1317,6 +1418,23 @@ export interface DesktopPreviewBridge {
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
+  /** Amu Creator session events for every tab; filter by `tabId`. */
+  onCreatorEvent: (listener: (event: DesktopPreviewCreatorEvent) => void) => () => void;
+  /** Activates Creator on the tab's current document; emits `activated`. */
+  registerCreatorSession: (
+    tabId: string,
+    bindingId: CreatorBindingId,
+  ) => Promise<DesktopPreviewCreatorRegisterResult>;
+  revokeCreatorSession: (tabId: string) => Promise<void>;
+  /** Revokes every tab, e.g. when the Creator setting is turned off. */
+  revokeAllCreatorSessions: () => Promise<void>;
+  isCreatorSessionCurrent: (tabId: string, generation: number) => Promise<boolean>;
+  /** Decided in main against navigation: approved only while the session is live on `generation`. */
+  creatorApprove: (
+    input: DesktopPreviewCreatorApproveInput,
+  ) => Promise<DesktopPreviewCreatorApproveResult>;
+  /** Sends panel state to the tab's overlay. False when the session is not live or it is too big. */
+  pushCreatorState: (tabId: string, state: unknown) => Promise<boolean>;
 }
 
 export type ConfirmDialogVariant = "default" | "destructive";

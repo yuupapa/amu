@@ -6,12 +6,17 @@
  * here). Single layer-scoped browser session partition.
  */
 import {
+  CREATOR_LIMITS,
   DesktopPreviewRecordingInputSchema,
   DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
 } from "@t3tools/contracts";
 import type {
   DesktopPreviewAnnotationTheme,
   DesktopPreviewColorScheme,
+  DesktopPreviewCreatorApproveResult,
+  DesktopPreviewCreatorEvent,
+  DesktopPreviewCreatorRegisterResult,
+  DesktopPreviewCreatorRevokeReason,
   DesktopPreviewFavicon,
   DesktopPreviewPointerEvent,
   PreviewAnnotationPayload,
@@ -78,6 +83,25 @@ import {
   START_PICK_CHANNEL,
 } from "./GuestProtocol.ts";
 import { isPreviewAnnotationPayload } from "./PickedElementPayload.ts";
+import { fitLongEdge, planCreatorCapture } from "./creatorCapture.ts";
+import {
+  CREATOR_ACTIVATE_CHANNEL,
+  CREATOR_CAPTURE_BEGIN_CHANNEL,
+  CREATOR_CAPTURE_DONE_CHANNEL,
+  CREATOR_CAPTURE_READY_CHANNEL,
+  CREATOR_CAPTURE_REQUEST_CHANNEL,
+  CREATOR_GUEST_CHANNELS,
+  CREATOR_REFUSED_CHANNEL,
+  CREATOR_STATE_CHANNEL,
+} from "./CreatorProtocol.ts";
+import {
+  CREATOR_GUEST_MESSAGE_KINDS,
+  type CreatorGuestMessageKind,
+  type CreatorRevocation,
+  isCreatorGuestUrl,
+  makeCreatorLedger,
+  measureGuestPayload,
+} from "./creatorSessions.ts";
 import { captureFavicon, safeHttpOrigin, selectFaviconCandidates } from "./FaviconCapture.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS, type RecordingInputOptions } from "./RecordingInput.ts";
 
@@ -285,18 +309,19 @@ const normalizeCaptureRect = (value: unknown): PreviewAnnotationRect | null => {
 };
 
 /** `capturePage` never settles when the guest's compositor is wedged. */
-const ANNOTATION_SCREENSHOT_TIMEOUT = "5 seconds";
+const GUEST_CAPTURE_TIMEOUT = "5 seconds";
 
 /**
- * Crops the guest for a picked annotation. A stalled `capturePage` resolves to
- * `null` after the timeout: the annotation is still sendable without its
- * screenshot, and the pick session must settle either way.
+ * Crops the guest (`cropRect` goes to `capturePage` as is; null for the whole page).
+ * A stalled `capturePage` resolves to `null` after the timeout, so callers
+ * waiting on it always settle. Shared by annotation picks and Amu Creator.
  */
-const captureAnnotationScreenshot = (
+const captureGuestImage = (
+  operation: "captureAnnotationScreenshot" | "captureCreatorShot",
   tabId: string,
   wc: Electron.WebContents,
   cropRect: PreviewAnnotationRect | null,
-): Effect.Effect<PreviewAnnotationPayload["screenshot"], PreviewManagerError> =>
+): Effect.Effect<Electron.NativeImage | null, PreviewManagerError> =>
   Effect.tryPromise({
     // The unused abort signal is what makes this interruptible, and therefore
     // what lets the timeout below fire. Drop the parameter and a stalled
@@ -314,13 +339,37 @@ const captureAnnotationScreenshot = (
       ),
     catch: (cause) =>
       new PreviewOperationError({
-        operation: "captureAnnotationScreenshot",
+        operation,
         tabId,
         webContentsId: wc.id,
         cause,
       }),
   }).pipe(
+    Effect.timeoutOption(GUEST_CAPTURE_TIMEOUT),
+    Effect.flatMap((image) =>
+      Option.isSome(image)
+        ? Effect.succeed(image.value)
+        : Effect.logWarning(
+            operation === "captureAnnotationScreenshot"
+              ? "preview annotation screenshot timed out"
+              : "preview creator shot timed out",
+          ).pipe(Effect.annotateLogs({ tabId, webContentsId: wc.id }), Effect.as(null)),
+    ),
+  );
+
+/**
+ * Crops the guest for a picked annotation. A stalled capture yields `null`:
+ * the annotation is still sendable without its screenshot, and the pick
+ * session must settle either way.
+ */
+const captureAnnotationScreenshot = (
+  tabId: string,
+  wc: Electron.WebContents,
+  cropRect: PreviewAnnotationRect | null,
+): Effect.Effect<PreviewAnnotationPayload["screenshot"], PreviewManagerError> =>
+  captureGuestImage("captureAnnotationScreenshot", tabId, wc, cropRect).pipe(
     Effect.map((image): PreviewAnnotationPayload["screenshot"] => {
+      if (image === null) return null;
       const size = image.getSize();
       return {
         dataUrl: image.toDataURL(),
@@ -329,16 +378,10 @@ const captureAnnotationScreenshot = (
         cropRect: cropRect ?? { x: 0, y: 0, width: size.width, height: size.height },
       };
     }),
-    Effect.timeoutOption(ANNOTATION_SCREENSHOT_TIMEOUT),
-    Effect.flatMap((screenshot) =>
-      Option.isSome(screenshot)
-        ? Effect.succeed(screenshot.value)
-        : Effect.logWarning("preview annotation screenshot timed out").pipe(
-            Effect.annotateLogs({ tabId, webContentsId: wc.id }),
-            Effect.as(null),
-          ),
-    ),
   );
+
+/** Isolated world used to read the guest's viewport where page scripts cannot patch it. */
+const CREATOR_VIEWPORT_WORLD_ID = 1002;
 
 const findZoomStep = (current: number): number => {
   const index = ZOOM_LEVELS.findIndex(
@@ -436,6 +479,8 @@ const isRecordingInput = Schema.is(DesktopPreviewRecordingInputSchema);
 type RecordingInputListener = (event: DesktopPreviewRecordingInputEvent) => Effect.Effect<void>;
 
 type PointerEventListener = (event: DesktopPreviewPointerEvent) => Effect.Effect<void>;
+
+type CreatorEventListener = (event: DesktopPreviewCreatorEvent) => Effect.Effect<void>;
 
 /**
  * Protocols a preview page may open in a real popup window.
@@ -573,6 +618,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     new Set(),
   );
   const pickSessionsRef = yield* Ref.make<ReadonlyMap<string, PickSession>>(new Map());
+  // Amu Creator: per-tab sessions, document generations and epochs. Main is the
+  // only owner of these; see creatorSessions.ts.
+  const creatorLedger = makeCreatorLedger();
+  const creatorEventListenersRef = yield* Ref.make<ReadonlySet<CreatorEventListener>>(new Set());
+  const clock = yield* Clock.Clock;
   const controlSessionsRef = yield* SynchronizedRef.make<
     ReadonlyMap<number, BrowserControlSession>
   >(new Map());
@@ -836,7 +886,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   const deliverEvent = (
-    eventKind: "state-change" | "recording-frame" | "recording-input" | "pointer-event",
+    eventKind:
+      | "state-change"
+      | "recording-frame"
+      | "recording-input"
+      | "pointer-event"
+      | "creator-event",
     tabId: string,
     delivery: () => Effect.Effect<void>,
   ) =>
@@ -1237,6 +1292,175 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     }
   });
 
+  const publishCreatorEvent = Effect.fn("PreviewManager.publishCreatorEvent")(function* (
+    event: DesktopPreviewCreatorEvent,
+  ) {
+    const listeners = yield* Ref.get(creatorEventListenersRef);
+    yield* Effect.forEach(
+      listeners,
+      (listener) => deliverEvent("creator-event", event.tabId, () => listener(event)),
+      { discard: true },
+    );
+  });
+
+  const sendToCreatorGuest = (webContentsId: number, channel: string, value: unknown) =>
+    attempt({ operation: "creator.sendToGuest", webContentsId }, () => {
+      const guest = webContents.fromId(webContentsId);
+      if (guest && !guest.isDestroyed()) guest.send(channel, value);
+    }).pipe(Effect.ignore);
+
+  /** Tells the guest and the renderer that a session ended, releasing a capture it held. */
+  const announceCreatorRevocation = (
+    revocation: CreatorRevocation | null,
+    reason: DesktopPreviewCreatorRevokeReason,
+  ): Effect.Effect<void> =>
+    revocation === null
+      ? Effect.void
+      : Effect.gen(function* () {
+          if (revocation.discardedCaptureId !== null) {
+            yield* sendToCreatorGuest(revocation.webContentsId, CREATOR_CAPTURE_DONE_CHANNEL, {
+              requestId: revocation.discardedCaptureId,
+              ok: false,
+            });
+          }
+          yield* sendToCreatorGuest(revocation.webContentsId, CREATOR_ACTIVATE_CHANNEL, {
+            generation: null,
+          });
+          yield* publishCreatorEvent({
+            kind: "revoked",
+            tabId: revocation.tabId,
+            bindingId: revocation.bindingId,
+            epoch: revocation.epoch,
+            reason,
+          });
+        });
+
+  /**
+   * Activates Creator on the tab's guest as it is now: its current main-frame
+   * document and attachment. The renderer calls this again after a `revoked`
+   * it wants to recover from; main never re-activates on its own.
+   */
+  const registerCreatorSession = Effect.fn("PreviewManager.registerCreatorSession")(function* (
+    tabId: string,
+    bindingId: string,
+  ) {
+    // One synchronous step, so no navigation can land between the checks and the activation.
+    const outcome = yield* Effect.sync(() => {
+      const tab = SynchronizedRef.getUnsafe(tabsRef).get(tabId);
+      if (!tab || tab.webContentsId === null || Ref.getUnsafe(closingTabIdsRef).has(tabId)) {
+        return "no_guest" as const;
+      }
+      const wc = webContents.fromId(tab.webContentsId);
+      const managed = Ref.getUnsafe(attachedRef).get(tab.webContentsId);
+      if (!wc || wc.isDestroyed() || managed?.webContents !== wc) return "no_guest" as const;
+      if (!isCreatorGuestUrl(wc.getURL())) return "not_local_page" as const;
+      return creatorLedger.register({
+        tabId,
+        bindingId,
+        webContentsId: wc.id,
+        attachmentId: managed.attachmentId,
+      });
+    });
+    if (typeof outcome === "string") {
+      return { ok: false, reason: outcome } satisfies DesktopPreviewCreatorRegisterResult;
+    }
+    const { activated, revoked, discardedCaptureId } = outcome;
+    if (revoked !== null) {
+      yield* announceCreatorRevocation(revoked, "replaced");
+    } else if (discardedCaptureId !== null) {
+      yield* sendToCreatorGuest(activated.webContentsId, CREATOR_CAPTURE_DONE_CHANNEL, {
+        requestId: discardedCaptureId,
+        ok: false,
+      });
+    }
+    yield* sendToCreatorGuest(activated.webContentsId, CREATOR_ACTIVATE_CHANNEL, {
+      generation: activated.generation,
+    });
+    yield* publishCreatorEvent({
+      kind: "activated",
+      tabId,
+      bindingId,
+      epoch: activated.epoch,
+      generation: activated.generation,
+    });
+    return {
+      ok: true,
+      epoch: activated.epoch,
+      generation: activated.generation,
+    } satisfies DesktopPreviewCreatorRegisterResult;
+  });
+
+  const revokeCreatorSession = (tabId: string) =>
+    Effect.suspend(() => announceCreatorRevocation(creatorLedger.revoke(tabId), "renderer"));
+
+  const revokeAllCreatorSessions = () =>
+    Effect.suspend(() =>
+      Effect.forEach(
+        creatorLedger.revokeAll(),
+        (revocation) => announceCreatorRevocation(revocation, "revoke-all"),
+        { discard: true },
+      ),
+    );
+
+  const isCreatorSessionCurrent = (tabId: string, generation: number) =>
+    Effect.sync(() => creatorLedger.isCurrent(tabId, generation));
+
+  /**
+   * The approval point for a Creator send, decided synchronously on main's
+   * event loop, the same loop that handles navigation.
+   */
+  const creatorApprove = Effect.fn("PreviewManager.creatorApprove")(function* (
+    tabId: string,
+    generation: number,
+    proposalId: string,
+  ) {
+    yield* Effect.annotateCurrentSpan({ tabId, proposalId });
+    const approval = creatorLedger.approve(tabId, generation);
+    return (
+      approval.ok ? { ok: true, epoch: approval.epoch } : { ok: false, reason: approval.reason }
+    ) satisfies DesktopPreviewCreatorApproveResult;
+  });
+
+  /** Forwards panel state to the tab's overlay while its session is live. */
+  const pushCreatorState = Effect.fn("PreviewManager.pushCreatorState")(function* (
+    tabId: string,
+    state: unknown,
+  ) {
+    const target = yield* Effect.sync(() => {
+      const session = creatorLedger.session(tabId);
+      if (!session?.active) return null;
+      if (
+        Ref.getUnsafe(attachedRef).get(session.webContentsId)?.attachmentId !== session.attachmentId
+      ) {
+        return null;
+      }
+      // The whole comment store is at most this big, so its panel state is too.
+      const measured = measureGuestPayload(state, CREATOR_LIMITS.maxStoreBytes);
+      if (!measured || measured.bytes > CREATOR_LIMITS.maxStoreBytes) return null;
+      return { session, state: measured.json };
+    });
+    if (target === null) return false;
+    yield* sendToCreatorGuest(target.session.webContentsId, CREATOR_STATE_CHANNEL, {
+      generation: target.session.generation,
+      state: target.state,
+    });
+    return true;
+  });
+
+  /** Scales the crop to the stored shot size and encodes it; null for an empty image. */
+  const encodeCreatorShot = (image: Electron.NativeImage) => {
+    const size = image.getSize();
+    if (size.width <= 0 || size.height <= 0) return null;
+    const target = fitLongEdge(size);
+    const output =
+      target.width === size.width && target.height === size.height
+        ? image
+        : image.resize({ width: target.width, height: target.height, quality: "good" });
+    const encoded = output.getSize();
+    // A copy, so IPC does not clone the whole pooled buffer behind the PNG.
+    return { png: new Uint8Array(output.toPNG()), width: encoded.width, height: encoded.height };
+  };
+
   const computeNavStatus = (wc: Electron.WebContents): PreviewNavStatus => {
     const url = wc.getURL();
     const title = wc.getTitle();
@@ -1333,7 +1557,176 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const navigationStarted = (
       event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
     ) => {
-      if (event.isMainFrame && !event.isSameDocument) cancelFaviconCapture();
+      if (event.isMainFrame && !event.isSameDocument) {
+        cancelFaviconCapture();
+        // Studio rewrites the URL hash while playing; only a new document revokes.
+        runFork(announceCreatorRevocation(creatorLedger.navigationStarted(wc.id), "navigation"));
+      }
+    };
+    /**
+     * Creator guest IPC is accepted only from this guest's main frame, on this
+     * attachment, while it shows a loopback Studio page. The ledger then checks
+     * the session, document generation, size and rate.
+     */
+    const fromCreatorGuest = (event: Electron.IpcMainEvent): boolean =>
+      event.senderFrame === wc.mainFrame &&
+      !wc.isDestroyed() &&
+      webContents.fromId(wc.id) === wc &&
+      Ref.getUnsafe(attachedRef).get(wc.id)?.attachmentId === attachmentId &&
+      isCreatorGuestUrl(wc.getURL());
+    const creatorRefused = (kind: CreatorGuestMessageKind, reason: string) => {
+      if (reason === "too_large" || reason === "rate_limited" || reason === "bad_request") {
+        runFork(sendToCreatorGuest(wc.id, CREATOR_REFUSED_CHANNEL, { kind, reason }));
+      }
+    };
+    const creatorGuestHandlers = CREATOR_GUEST_MESSAGE_KINDS.map((kind) => {
+      const handler = (event: Electron.IpcMainEvent, message?: unknown): void => {
+        if (!fromCreatorGuest(event)) return;
+        const admitted = creatorLedger.admitGuestMessage({
+          tabId,
+          webContentsId: wc.id,
+          attachmentId,
+          kind,
+          message,
+          now: clock.currentTimeMillisUnsafe(),
+        });
+        if (!admitted.ok) {
+          creatorRefused(kind, admitted.reason);
+          return;
+        }
+        const { session } = admitted;
+        runFork(
+          publishCreatorEvent({
+            kind,
+            tabId,
+            bindingId: session.bindingId,
+            epoch: session.epoch,
+            generation: session.generation,
+            payload: admitted.payload,
+          }),
+        );
+      };
+      return [CREATOR_GUEST_CHANNELS[kind], handler] as const;
+    });
+    const releaseCreatorCapture = (requestId: string, ok: boolean) =>
+      sendToCreatorGuest(wc.id, CREATOR_CAPTURE_DONE_CHANNEL, { requestId, ok });
+    const creatorCaptureRequest = (event: Electron.IpcMainEvent, message?: unknown): void => {
+      if (!fromCreatorGuest(event)) return;
+      const begun = creatorLedger.beginCapture({
+        tabId,
+        webContentsId: wc.id,
+        attachmentId,
+        message,
+        now: clock.currentTimeMillisUnsafe(),
+      });
+      if (!begun.ok) {
+        if (begun.requestId !== null && begun.reason !== "duplicate_request") {
+          runFork(releaseCreatorCapture(begun.requestId, false));
+        }
+        return;
+      }
+      const { requestId } = begun.capture;
+      runFork(sendToCreatorGuest(wc.id, CREATOR_CAPTURE_BEGIN_CHANNEL, { requestId }));
+      runFork(
+        Effect.sleep(CREATOR_LIMITS.captureTimeoutMs).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              creatorLedger.expireCapture(tabId, requestId)
+                ? releaseCreatorCapture(requestId, false)
+                : Effect.void,
+            ),
+          ),
+        ),
+      );
+    };
+    // Read where page scripts cannot patch `innerWidth`/`innerHeight`.
+    const readCreatorViewport = attemptPromise(
+      { operation: "creator.readViewport", tabId, webContentsId: wc.id },
+      () =>
+        wc.executeJavaScriptInIsolatedWorld(CREATOR_VIEWPORT_WORLD_ID, [
+          { code: "[window.innerWidth, window.innerHeight]" },
+        ]),
+    ).pipe(
+      Effect.timeoutOption(GUEST_CAPTURE_TIMEOUT),
+      Effect.map((read) => {
+        const value: unknown = Option.getOrNull(read);
+        return Array.isArray(value) && typeof value[0] === "number" && typeof value[1] === "number"
+          ? { width: value[0], height: value[1] }
+          : null;
+      }),
+      Effect.orElseSucceed(() => null),
+    );
+    const captureCreatorShot = Effect.fn("PreviewManager.captureCreatorShot")(function* (
+      requestId: string,
+      rect: unknown,
+      pin: unknown,
+    ) {
+      const viewport = yield* readCreatorViewport;
+      const zoomFactor =
+        (yield* SynchronizedRef.get(tabsRef)).get(tabId)?.zoomFactor ?? DEFAULT_ZOOM_FACTOR;
+      const plan =
+        viewport === null ? null : planCreatorCapture({ rect, pin, viewport, zoomFactor });
+      const image = plan?.ok
+        ? yield* captureGuestImage("captureCreatorShot", tabId, wc, plan.rect).pipe(
+            Effect.orElseSucceed(() => null),
+          )
+        : null;
+      // Checked again after capturePage: a revoke, timeout or re-registration in
+      // the meantime already released the guest, and this result is dropped.
+      const finished = creatorLedger.finishCapture(tabId, requestId);
+      if (!finished.ok) {
+        if (finished.reason !== "no_capture") yield* releaseCreatorCapture(requestId, false);
+        return;
+      }
+      const shot = image === null ? null : encodeCreatorShot(image);
+      if (shot === null) {
+        yield* releaseCreatorCapture(requestId, false);
+        return;
+      }
+      const { session, capture } = finished;
+      yield* publishCreatorEvent({
+        kind: "shot",
+        tabId,
+        bindingId: session.bindingId,
+        epoch: session.epoch,
+        generation: session.generation,
+        requestId,
+        purpose: capture.purpose,
+        timeSec: capture.timeSec,
+        commentId: capture.commentId,
+        place: capture.place,
+        ...shot,
+      });
+      yield* releaseCreatorCapture(requestId, true);
+    });
+    const creatorCaptureReady = (event: Electron.IpcMainEvent, message?: unknown): void => {
+      if (!fromCreatorGuest(event)) return;
+      const ready = creatorLedger.captureReady({
+        tabId,
+        webContentsId: wc.id,
+        attachmentId,
+        message,
+        now: clock.currentTimeMillisUnsafe(),
+      });
+      // A late or foreign ready has no pending request and is dropped.
+      if (!ready.ok) return;
+      runFork(captureCreatorShot(ready.capture.requestId, ready.rect, ready.pin));
+    };
+    // An activation sent while a navigation was in flight reached the old
+    // document; deliver it to the document it was meant for.
+    const creatorDocumentReady = (): void => {
+      const session = creatorLedger.currentDocumentSession(wc.id);
+      if (session?.attachmentId !== attachmentId || !isCreatorGuestUrl(wc.getURL())) return;
+      runFork(
+        sendToCreatorGuest(wc.id, CREATOR_ACTIVATE_CHANNEL, { generation: session.generation }),
+      );
+    };
+    const documentReady = (): void => {
+      restoreRecordingCursor();
+      creatorDocumentReady();
+    };
+    const creatorGuestDestroyed = (): void => {
+      runFork(announceCreatorRevocation(creatorLedger.forgetWebContents(wc.id), "destroyed"));
     };
     const audioStateChanged = (
       event: Electron.Event<Electron.WebContentsAudioStateChangedEventParams>,
@@ -1578,7 +1971,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("page-favicon-updated", faviconUpdated as never);
         wc.off("did-start-loading", sync);
         wc.off("did-stop-loading", sync);
-        wc.off("dom-ready", restoreRecordingCursor);
+        wc.off("dom-ready", documentReady);
         wc.off("did-fail-load", failed as never);
         wc.off("audio-state-changed", audioStateChanged);
         wc.off("did-create-window", windowCreated);
@@ -1586,6 +1979,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.ipc.off(HUMAN_INPUT_CHANNEL, humanInput);
         wc.ipc.off(RECORDING_INPUT_CHANNEL, recordingInput);
         wc.ipc.off(MOUSE_NAVIGATE_CHANNEL, mouseNavigate);
+        wc.off("destroyed", creatorGuestDestroyed);
+        for (const [channel, handler] of creatorGuestHandlers) wc.ipc.off(channel, handler);
+        wc.ipc.off(CREATOR_CAPTURE_REQUEST_CHANNEL, creatorCaptureRequest);
+        wc.ipc.off(CREATOR_CAPTURE_READY_CHANNEL, creatorCaptureReady);
+        // Callers revoke with a specific reason first; this catches any other detach.
+        runFork(announceCreatorRevocation(creatorLedger.forgetWebContents(wc.id), "destroyed"));
       }).pipe(Effect.ignore),
     );
     const install = Effect.fn("PreviewManager.installWebContentsListeners")(function* () {
@@ -1600,12 +1999,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("page-favicon-updated", faviconUpdated as never);
         wc.on("did-start-loading", sync);
         wc.on("did-stop-loading", sync);
-        wc.on("dom-ready", restoreRecordingCursor);
+        wc.on("dom-ready", documentReady);
         wc.on("did-fail-load", failed as never);
         wc.on("audio-state-changed", audioStateChanged);
         wc.ipc.on(HUMAN_INPUT_CHANNEL, humanInput);
         wc.ipc.on(RECORDING_INPUT_CHANNEL, recordingInput);
         wc.ipc.on(MOUSE_NAVIGATE_CHANNEL, mouseNavigate);
+        wc.on("destroyed", creatorGuestDestroyed);
+        for (const [channel, handler] of creatorGuestHandlers) wc.ipc.on(channel, handler);
+        wc.ipc.on(CREATOR_CAPTURE_REQUEST_CHANNEL, creatorCaptureRequest);
+        wc.ipc.on(CREATOR_CAPTURE_READY_CHANNEL, creatorCaptureReady);
         wc.setWindowOpenHandler((details) => {
           if (previewWindowOpenAction(details) === "popup") {
             return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
@@ -1716,6 +2119,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (!(yield* SynchronizedRef.get(tabsRef)).has(tabId)) return;
     clearPendingRecording(tabId);
     annotationSendEnabled.delete(tabId);
+    yield* announceCreatorRevocation(creatorLedger.closeTab(tabId), "tab-closed");
     yield* Effect.all(
       [
         cancelPickElement(tabId),
@@ -1831,6 +2235,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     if (replacedWebContentsId !== null) {
       // The replaced guest can no longer redeem a display-media grant.
       clearPendingRecording(tabId);
+      yield* announceCreatorRevocation(creatorLedger.revoke(tabId), "guest-swapped");
       yield* Effect.all(
         [
           detachControlSession(replacedWebContentsId),
@@ -2041,6 +2446,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           ) {
             return;
           }
+          yield* announceCreatorRevocation(creatorLedger.revoke(tabId), "destroyed");
           yield* Effect.all(
             [
               detachControlSession(webContentsId),
@@ -3343,6 +3749,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         Ref.set(pointerEventListenersRef, new Set()),
         Ref.set(recordingFrameListenersRef, new Set()),
         Ref.set(recordingInputListenersRef, new Set()),
+        Ref.set(creatorEventListenersRef, new Set()),
       ],
       { discard: true },
     );
@@ -3353,6 +3760,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   return {
     cancelPickElement,
     captureScreenshot,
+    creatorApprove,
+    isCreatorSessionCurrent,
+    pushCreatorState,
+    registerCreatorSession,
+    revokeAllCreatorSessions,
+    revokeCreatorSession,
     closeTab,
     copyArtifactToClipboard,
     createTab,
@@ -3391,6 +3804,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     subscribeRecordingFrames: (listener: RecordingFrameListener) =>
       subscribe(recordingFrameListenersRef, listener),
     subscribeStateChanges: (listener: Listener) => subscribe(listenersRef, listener),
+    subscribeCreatorEvents: (listener: CreatorEventListener) =>
+      subscribe(creatorEventListenersRef, listener),
     zoomIn: (tabId: string) => applyZoom(tabId, (current) => nextZoomLevel(current, "in")),
     zoomOut: (tabId: string) => applyZoom(tabId, (current) => nextZoomLevel(current, "out")),
   };
@@ -3633,6 +4048,23 @@ export class PreviewManager extends Context.Service<
     readonly subscribeRecordingFrames: (
       listener: RecordingFrameListener,
     ) => Effect.Effect<void, never, Scope.Scope>;
+    /** Amu Creator: activates the tab's current document for `bindingId`. */
+    readonly registerCreatorSession: (
+      tabId: string,
+      bindingId: string,
+    ) => Effect.Effect<DesktopPreviewCreatorRegisterResult>;
+    readonly revokeCreatorSession: (tabId: string) => Effect.Effect<void>;
+    readonly revokeAllCreatorSessions: () => Effect.Effect<void>;
+    readonly isCreatorSessionCurrent: (tabId: string, generation: number) => Effect.Effect<boolean>;
+    readonly creatorApprove: (
+      tabId: string,
+      generation: number,
+      proposalId: string,
+    ) => Effect.Effect<DesktopPreviewCreatorApproveResult>;
+    readonly pushCreatorState: (tabId: string, state: unknown) => Effect.Effect<boolean>;
+    readonly subscribeCreatorEvents: (
+      listener: CreatorEventListener,
+    ) => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("@t3tools/desktop/preview/Manager/PreviewManager") {}
 
@@ -3734,6 +4166,13 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     subscribePointerEvents: operations.subscribePointerEvents,
     subscribeRecordingFrames: operations.subscribeRecordingFrames,
     subscribeRecordingInputs: operations.subscribeRecordingInputs,
+    registerCreatorSession: operations.registerCreatorSession,
+    revokeCreatorSession: operations.revokeCreatorSession,
+    revokeAllCreatorSessions: operations.revokeAllCreatorSessions,
+    isCreatorSessionCurrent: operations.isCreatorSessionCurrent,
+    creatorApprove: operations.creatorApprove,
+    pushCreatorState: operations.pushCreatorState,
+    subscribeCreatorEvents: operations.subscribeCreatorEvents,
   });
 }).pipe(Effect.withSpan("PreviewManager.make"));
 
