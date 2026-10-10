@@ -9,8 +9,6 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   "{0}m ago": "{0}分前",
   "{0}h ago": "{0}時間前",
   "{0}d ago": "{0}日前",
-  "{0}w ago": "{0}週間前",
-  "{0}mo ago": "{0}か月前",
   "{0}m": "{0}分",
   "{0}h": "{0}時間",
   "{0}d": "{0}日",
@@ -47,10 +45,7 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   "{0} — Unavailable. {1}": "{0}：使えません。{1}",
   "Sign in with Cursor or add CURSOR_API_KEY in provider settings.":
     "Cursor にサインインするか、プロバイダーの設定で CURSOR_API_KEY を追加してください。",
-  "· Sign in with Cursor or add CURSOR_API_KEY in provider settings.":
-    "・Cursor にサインインするか、プロバイダーの設定で CURSOR_API_KEY を追加してください。",
   "Last user message": "最後のユーザーメッセージ",
-  "· Created": "・作成",
   Composer: "入力欄",
   Other: "その他",
   Archived: "アーカイブ済み",
@@ -58,6 +53,9 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   "Context handoff": "引き継ぎ",
   "Update Available: {0}": "更新があります：{0}",
   "Check for updates": "更新を確認",
+  "Check for Updates": "更新を確認",
+  "Up to Date": "最新です",
+  "Downloading…": "ダウンロード中…",
   "Provider error": "プロバイダーのエラー",
 
   // Settings
@@ -79,19 +77,23 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   "Branch prefix": "ブランチの接頭辞",
   "Static prefix": "固定の接頭辞",
   "No prefix": "接頭辞なし",
-  "Worktree branch naming": "ワークツリーのブランチ名の付け方",
+  "Worktree branch naming": "作業ツリーのブランチ名の付け方",
   "Choose how new worktree branches are named from your first message.":
-    "最初のメッセージから、新しいワークツリーのブランチ名をどう付けるかを選びます。",
-  "Worktree location": "ワークツリーの場所",
+    "最初のメッセージから、新しい作業ツリーのブランチ名をどう付けるかを選びます。",
+  "Worktree location": "作業ツリーの場所",
   "Folder where new worktrees are created, on any drive, such as D:\\worktrees or ~/worktrees. Existing worktrees stay where they are. Leave empty to use the T3 home folder.":
-    "新しいワークツリーを作るフォルダーです（例：D:\\worktrees、~/worktrees）。どのドライブでも使えます。今あるワークツリーは動きません。空にすると Amu のホームフォルダーを使います。",
+    "新しい作業ツリーを作るフォルダーです（例：D:\\worktrees、~/worktrees）。どのドライブでも使えます。今ある作業ツリーは動きません。空にすると Amu のホームフォルダーを使います。",
   "Keep branch and worktree controls below the composer after a thread starts.":
-    "スレッドを始めたあとも、入力欄の下にブランチとワークツリーの操作を出したままにします。",
+    "スレッドを始めたあとも、入力欄の下にブランチと作業ツリーの操作を出したままにします。",
   "Keep composer context visible in active threads":
     "進行中のスレッドで入力欄の文脈を出したままにする",
   "Composer context": "入力欄の文脈",
   "Working section (beta)": "作業中のセクション（ベータ）",
+  "Fold working and monitoring threads into a Working section. They return to the top of the inbox when they need you.":
+    "作業中と監視中のスレッドを「作業中」のセクションにまとめます。対応が必要になると、受信一覧の先頭に戻ります。",
   "Project order": "プロジェクトの並び順",
+  "Order of projects in the sidebar project picker and command palette.":
+    "サイドバーのプロジェクト選択とコマンドパレットでの、プロジェクトの並び順です。",
   "Terminal input": "ターミナルの入力",
   "Terminal scrollback": "ターミナルのスクロールバック",
   "Toggle account email visibility": "アカウントのメールアドレスの表示を切り替え",
@@ -143,7 +145,7 @@ export const japaneseUiTextV2: Readonly<Record<string, string>> = {
   "Composer: Host": "入力欄：ホスト",
   "Composer: Mode": "入力欄：モード",
   "Composer: Opposite Queue or Steer Action": "入力欄：キューと割り込みを入れ替えて送る",
-  "Composer: Previous Worktree": "入力欄：前のワークツリー",
+  "Composer: Previous Worktree": "入力欄：前の作業ツリー",
   "Composer: Send and Start New Thread": "入力欄：送信して新しいスレッドを始める",
   "Composer: Start in Background": "入力欄：裏で始める",
   "Composer: Stash": "入力欄：一時退避",
