@@ -69,6 +69,37 @@ describe("creator ledger: registration and revocation", () => {
     expect(again.activated.epoch).toBe(registered.activated.epoch + 1);
   });
 
+  it("does not reuse a document generation after forgetting and recreating a guest", () => {
+    const { ledger, registered } = setup();
+    ledger.forgetWebContents(WC);
+    const recreated = ledger.register({
+      tabId: "tab",
+      bindingId: BINDING,
+      webContentsId: WC,
+      attachmentId: Symbol(),
+    });
+    expect(recreated.activated.generation).toBeGreaterThan(registered.activated.generation);
+  });
+
+  it("assigns distinct document generations to different guests", () => {
+    const { ledger, registered } = setup();
+    const other = ledger.register({
+      tabId: "other-tab",
+      bindingId: OTHER_BINDING,
+      webContentsId: WC + 1,
+      attachmentId: Symbol(),
+    });
+    expect(other.activated.generation).toBeGreaterThan(registered.activated.generation);
+    ledger.navigationStarted(WC);
+    const navigated = ledger.register({
+      tabId: "tab",
+      bindingId: BINDING,
+      webContentsId: WC,
+      attachmentId: ATTACHMENT,
+    });
+    expect(navigated.activated.generation).toBeGreaterThan(other.activated.generation);
+  });
+
   it("revokes the previous binding when another binding takes the tab", () => {
     const { ledger, registered } = setup();
     const next = ledger.register({
@@ -83,6 +114,7 @@ describe("creator ledger: registration and revocation", () => {
     });
     expect(next.activated).toMatchObject({
       bindingId: OTHER_BINDING,
+      generation: registered.activated.generation,
       epoch: registered.activated.epoch + 2,
     });
   });
@@ -563,13 +595,13 @@ describe("creator ledger: stalled capturePage hold (fix round 2)", () => {
     const { ledger } = setup();
     stall(ledger);
     ledger.forgetWebContents(WC);
-    ledger.register({
+    const { activated } = ledger.register({
       tabId: "tab",
       bindingId: BINDING,
       webContentsId: WC,
       attachmentId: ATTACHMENT,
     });
-    expect(ledger.beginCapture(request("b", 2_000)).ok).toBe(true);
+    expect(ledger.beginCapture(request("b", 2_000, activated.generation)).ok).toBe(true);
   });
 
   it("a committed main-frame navigation clears the hold", () => {

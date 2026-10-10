@@ -12,6 +12,7 @@
  * Not unit-tested (desktop has no DOM test environment); checked live in Task 12.
  */
 import { toPageRect, type Rect } from "../creatorGeometry.ts";
+import { waitForFrames } from "./frameWait.ts";
 import { translate } from "./jaDictionary.ts";
 import { NativeMutationObserver } from "./nativeDom.ts";
 import type { SceneSource } from "./sceneNames.ts";
@@ -93,17 +94,16 @@ export const setPlaybackRate = (rate: number): void => {
 };
 
 export const waitFrames = (count: number): Promise<void> =>
-  new Promise((resolve) => {
-    const step = (left: number) => {
-      if (left <= 0) resolve();
-      else requestAnimationFrame(() => step(left - 1));
-    };
-    step(count);
+  waitForFrames(count, {
+    requestFrame: (callback) => requestAnimationFrame(callback),
+    cancelFrame: (handle) => cancelAnimationFrame(handle),
+    setTimer: (callback, milliseconds) => setTimeout(callback, milliseconds),
+    clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   });
 
 /**
  * Seeks and resolves once the player reports the time (its seek may go through
- * a postMessage to the iframe), or after about half a second.
+ * a postMessage to the iframe), or with a 1.5-second fallback budget when rendering is suspended.
  */
 export const seekAndSettle = async (timeSec: number): Promise<void> => {
   seekTo(timeSec);

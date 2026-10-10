@@ -9,6 +9,8 @@ import type {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { makeCreatorLedger } from "../../../../desktop/src/preview/creatorSessions";
+
 import {
   CREATOR_PROJECT_REVISION,
   createCreatorBridge,
@@ -54,6 +56,14 @@ const png = (byte: number) => new Uint8Array([byte, byte, byte]);
 
 type Call = { readonly method: string; readonly input: Record<string, unknown> };
 
+const deferred = <A>() => {
+  let resolve!: (value: A) => void;
+  const promise = new Promise<A>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+};
+
 /** Records every RPC; each method answers from `answers` (default: success). */
 function harness(
   options: {
@@ -94,7 +104,7 @@ function harness(
         // Let a concurrently queued event try to overtake this call.
         await Promise.resolve();
         await Promise.resolve();
-        const answer = (options.answers?.[method] ?? defaults[method])(input);
+        const answer = await (options.answers?.[method] ?? defaults[method])(input);
         return answer instanceof Error
           ? { ok: false as const, error: answer }
           : { ok: true as const, value: answer };
@@ -450,6 +460,275 @@ describe("creatorBridge", () => {
     const attached = h.calls.filter((call) => call.method === "attachShot");
     expect(attached).toHaveLength(1);
     expect(attached[0]!.input).toMatchObject({ expectedRevision: 42, png: png(2) });
+  });
+
+  it("shares a pending draft save with a bridge recreated before the response", async () => {
+    const store = new Map<string, CreatorCommentId>();
+    const entered = deferred<void>();
+    const saved = deferred<CreatorComment>();
+    const old = harness({
+      draftKeys: store,
+      answers: {
+        saveDraft: () => {
+          entered.resolve();
+          return saved.promise;
+        },
+      },
+    });
+    await activate(old);
+    const first = old.bridge.handleMainEvent(
+      guest("draft", 1, { requestId: "r1", timeSec: 1, comment: "x", place: null }),
+    );
+    await entered.promise;
+    old.bridge.dispose();
+    const again = harness({ draftKeys: store });
+    await activate(again);
+    const repeated = again.bridge.handleMainEvent(
+      guest("draft", 1, { requestId: "r1", timeSec: 1, comment: "x", place: null }),
+    );
+    await Promise.resolve();
+    saved.resolve(comment(COMMENT_A, 1));
+    await Promise.all([first, repeated]);
+    expect(
+      [...old.calls, ...again.calls].filter((call) => call.method === "saveDraft"),
+    ).toHaveLength(1);
+    expect(store.get("r1")).toBe(COMMENT_A);
+  });
+
+  it("shares the committed save while a real same-document re-registration bumps epoch", async () => {
+    const ledger = makeCreatorLedger();
+    const attachmentId = Symbol();
+    const register: CreatorBridgeMain["registerCreatorSession"] = async (tabId, bindingId) => {
+      const { activated } = ledger.register({ tabId, bindingId, webContentsId: 10, attachmentId });
+      return { ok: true, epoch: activated.epoch, generation: activated.generation };
+    };
+    const store = new Map<string, CreatorCommentId>();
+    const entered = deferred<void>();
+    const saved = deferred<CreatorComment>();
+    const old = harness({
+      draftKeys: store,
+      register,
+      answers: {
+        saveDraft: () => {
+          entered.resolve();
+          return saved.promise;
+        },
+      },
+    });
+    await old.bridge.register();
+    const first = old.bridge.handleMainEvent(
+      guest("draft", 1, {
+        requestId: "r1",
+        timeSec: 1,
+        comment: "text",
+        place: null,
+      }),
+    );
+    await entered.promise;
+    old.bridge.dispose();
+    const again = harness({ draftKeys: store, register });
+    await again.bridge.register();
+    expect(again.views.at(-1)).toMatchObject({ epoch: 2, generation: 1 });
+    const repeated = again.bridge.handleMainEvent(
+      guest("draft", 2, {
+        requestId: "r1",
+        timeSec: 1,
+        comment: "text",
+        place: null,
+      }),
+    );
+    await Promise.resolve();
+    saved.resolve(comment(COMMENT_A, 1));
+    await Promise.all([first, repeated]);
+    expect(
+      [...old.calls, ...again.calls].filter((call) => call.method === "saveDraft"),
+    ).toHaveLength(1);
+    expect(store.get("r1")).toBe(COMMENT_A);
+  });
+
+  it.each(["navigation", "new-guest"] as const)(
+    "separates a pending save when re-registering after %s and ignores its late response",
+    async (change) => {
+      const ledger = makeCreatorLedger();
+      const attachmentId = Symbol();
+      let webContentsId = 10;
+      const register: CreatorBridgeMain["registerCreatorSession"] = async (tabId, bindingId) => {
+        const { activated } = ledger.register({ tabId, bindingId, webContentsId, attachmentId });
+        return { ok: true, epoch: activated.epoch, generation: activated.generation };
+      };
+      const store = new Map<string, CreatorCommentId>();
+      const entered = deferred<void>();
+      const saved = deferred<CreatorComment>();
+      const old = harness({
+        draftKeys: store,
+        register,
+        answers: {
+          saveDraft: () => {
+            entered.resolve();
+            return saved.promise;
+          },
+        },
+      });
+      await old.bridge.register();
+      const first = old.bridge.handleMainEvent(
+        guest("draft", 1, {
+          requestId: "r1",
+          timeSec: 1,
+          comment: "old",
+          place: null,
+        }),
+      );
+      await entered.promise;
+      old.bridge.dispose();
+      if (change === "navigation") {
+        ledger.navigationStarted(webContentsId);
+        ledger.navigationCommitted(webContentsId);
+      } else {
+        ledger.forgetWebContents(webContentsId);
+        webContentsId = 11;
+      }
+      const again = harness({
+        draftKeys: store,
+        register,
+        answers: { saveDraft: () => comment(COMMENT_B, 1) },
+      });
+      await again.bridge.register();
+      const current = again.views.at(-1)!;
+      expect(current.generation).not.toBe(1);
+      await again.bridge.handleMainEvent(
+        guest("draft", current.epoch!, {
+          requestId: "r1",
+          timeSec: 2,
+          comment: "new",
+          place: null,
+        }),
+      );
+      saved.resolve(comment(COMMENT_A, 1));
+      await first;
+      expect(again.calls.filter((call) => call.method === "saveDraft")).toHaveLength(1);
+      expect(store.get("r1")).toBe(COMMENT_B);
+    },
+  );
+
+  it("does not reuse a completed draft key on a new document", async () => {
+    const store = new Map<string, CreatorCommentId>();
+    const old = harness({ draftKeys: store });
+    await activate(old);
+    await old.bridge.handleMainEvent(
+      guest("draft", 1, {
+        requestId: "r1",
+        timeSec: 1,
+        comment: "old",
+        place: null,
+      }),
+    );
+    expect(store.get("r1")).toBe(COMMENT_A);
+    old.bridge.dispose();
+    const again = harness({
+      draftKeys: store,
+      answers: { saveDraft: () => comment(COMMENT_B, 1) },
+    });
+    await activate(again, 2, 2);
+    await again.bridge.handleMainEvent(
+      guest("draft", 2, {
+        requestId: "r1",
+        timeSec: 2,
+        comment: "new",
+        place: null,
+      }),
+    );
+    expect(again.calls.filter((call) => call.method === "saveDraft")).toHaveLength(1);
+    expect(store.get("r1")).toBe(COMMENT_B);
+  });
+
+  it("releases a shared failed save so a recreated bridge can retry it", async () => {
+    const store = new Map<string, CreatorCommentId>();
+    const entered = deferred<void>();
+    const saved = deferred<Error>();
+    const old = harness({
+      draftKeys: store,
+      answers: {
+        saveDraft: () => {
+          entered.resolve();
+          return saved.promise;
+        },
+      },
+    });
+    await activate(old);
+    const first = old.bridge.handleMainEvent(
+      guest("draft", 1, {
+        requestId: "r1",
+        timeSec: 1,
+        comment: "text",
+        place: null,
+      }),
+    );
+    await entered.promise;
+    old.bridge.dispose();
+    const again = harness({ draftKeys: store });
+    await activate(again, 2);
+    const repeated = again.bridge.handleMainEvent(
+      guest("draft", 2, {
+        requestId: "r1",
+        timeSec: 1,
+        comment: "text",
+        place: null,
+      }),
+    );
+    await Promise.resolve();
+    saved.resolve(new Error("refused"));
+    await Promise.all([first, repeated]);
+    expect(
+      [...old.calls, ...again.calls].filter((call) => call.method === "saveDraft"),
+    ).toHaveLength(1);
+    expect(store.has("r1")).toBe(false);
+    await again.bridge.handleMainEvent(
+      guest("draft", 2, {
+        requestId: "r1",
+        timeSec: 1,
+        comment: "text",
+        place: null,
+      }),
+    );
+    expect(again.calls.filter((call) => call.method === "saveDraft")).toHaveLength(1);
+    expect(store.get("r1")).toBe(COMMENT_A);
+  });
+
+  it("does not reuse or publish a pending draft from the previous document epoch", async () => {
+    const store = new Map<string, CreatorCommentId>();
+    const entered = deferred<void>();
+    const saved = deferred<CreatorComment>();
+    const old = harness({
+      draftKeys: store,
+      answers: {
+        saveDraft: () => {
+          entered.resolve();
+          return saved.promise;
+        },
+      },
+    });
+    await activate(old);
+    const first = old.bridge.handleMainEvent(
+      guest("draft", 1, { requestId: "r1", timeSec: 1, comment: "old", place: null }),
+    );
+    await entered.promise;
+    old.bridge.dispose();
+    const again = harness({
+      draftKeys: store,
+      answers: { saveDraft: () => comment(COMMENT_B, 1) },
+    });
+    await activate(again, 2, 2);
+    await again.bridge.handleMainEvent(
+      guest("draft", 2, { requestId: "r1", timeSec: 2, comment: "new", place: null }),
+    );
+    saved.resolve(comment(COMMENT_A, 1));
+    await first;
+    expect(again.calls.find((call) => call.method === "saveDraft")?.input).toMatchObject({
+      bindingId: BINDING,
+      epoch: 2,
+      comment: "new",
+    });
+    expect(store.get("r1")).toBe(COMMENT_B);
   });
 
   it("keeps at most 200 draft keys, shared with a later bridge for the same binding", async () => {

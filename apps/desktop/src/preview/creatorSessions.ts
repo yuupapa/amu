@@ -3,8 +3,9 @@
  * synchronous: every decision happens inside one call, so a decision and a
  * navigation that both run on main's event loop are ordered without locks.
  *
- * - `generation` is the guest's main-frame document: 1 for the first document a
- *   guest shows, +1 on every cross-document main-frame navigation start.
+ * - `generation` identifies a main-frame document. The ledger issues a new,
+ *   never-reused number for a new guest or cross-document navigation start;
+ *   re-registering the same document keeps it, even when the epoch changes.
  * - `epoch` is per tab and only ever grows: +1 on every activation and every
  *   revocation. The renderer passes it to the server, which refuses anything
  *   older than the newest epoch it has heard of.
@@ -152,7 +153,16 @@ export const makeCreatorLedger = () => {
     epochs.set(tabId, next);
     return next;
   };
-  const documentGeneration = (webContentsId: number): number => documents.get(webContentsId) ?? 1;
+  let nextDocumentGeneration = 0;
+  const issueDocumentGeneration = (): number => ++nextDocumentGeneration;
+  const documentGeneration = (webContentsId: number): number => {
+    let generation = documents.get(webContentsId);
+    if (generation === undefined) {
+      generation = issueDocumentGeneration();
+      documents.set(webContentsId, generation);
+    }
+    return generation;
+  };
 
   const revokeActive = (session: CreatorSession): CreatorRevocation => {
     const epoch = bumpEpoch(session.tabId);
@@ -280,7 +290,7 @@ export const makeCreatorLedger = () => {
 
     /** A cross-document main-frame navigation started on this guest. */
     navigationStarted: (webContentsId: number): CreatorRevocation | null => {
-      documents.set(webContentsId, documentGeneration(webContentsId) + 1);
+      documents.set(webContentsId, issueDocumentGeneration());
       navigating.add(webContentsId);
       const session = sessionForGuest(webContentsId);
       return session ? revokeActive(session) : null;

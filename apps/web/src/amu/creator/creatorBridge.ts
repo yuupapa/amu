@@ -160,6 +160,17 @@ interface BufferedShot {
   readonly at: number;
 }
 
+interface SharedDraftSaves {
+  readonly documents: Map<
+    CreatorBindingId,
+    { readonly epoch: number; readonly generation: number | null }
+  >;
+  readonly pending: Map<string, Promise<CreatorCallResult<CreatorComment>>>;
+}
+
+/** The host preserves the keys map across bridge remounts; pending saves follow it. */
+const draftSavesByKeys = new WeakMap<Map<string, CreatorCommentId>, SharedDraftSaves>();
+
 /** Revoke reasons after which the renderer registers the tab again. */
 const RECOVERABLE_REVOCATIONS = new Set(["navigation", "guest-swapped"]);
 
@@ -177,6 +188,18 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
   let registering = false;
 
   const draftKeys = options.draftKeys ?? new Map<string, CreatorCommentId>();
+  let sharedDrafts = draftSavesByKeys.get(draftKeys);
+  if (!sharedDrafts) {
+    sharedDrafts = { documents: new Map(), pending: new Map() };
+    draftSavesByKeys.set(draftKeys, sharedDrafts);
+  }
+  const draftSaves = sharedDrafts;
+  const noteDraftDocument = (epoch: number, documentGeneration: number | null) => {
+    const known = draftSaves.documents.get(bindingId);
+    if (known && epoch < known.epoch) return;
+    if (known && known.generation !== documentGeneration) draftKeys.clear();
+    draftSaves.documents.set(bindingId, { epoch, generation: documentGeneration });
+  };
   /** Newest revision seen per comment, from RPC results and snapshots. */
   const revisions = new Map<CreatorCommentId, number>();
   /** Place requests whose `setPlace` succeeded and whose shot has not arrived yet. */
@@ -268,6 +291,7 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
   const applyActivation = async (epoch: number, nextGeneration: number) => {
     if (epoch <= latestEpoch) return;
     latestEpoch = epoch;
+    noteDraftDocument(epoch, nextGeneration);
     generation = nextGeneration;
     const settled = await rpc.setEpoch({ bindingId, epoch, generation: nextGeneration });
     // Expose the epoch only once the server knows it, so a subscription is never refused.
@@ -277,12 +301,20 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
 
   const applyRevocation = async (epoch: number, reason: string) => {
     latestEpoch = epoch;
+    const recoverable =
+      RECOVERABLE_REVOCATIONS.has(reason) || (reason === "destroyed" && options.tabExists());
+    // A recoverable revoke may finish a save before the next activation. Keep
+    // that document's keys until main supplies its replacement generation.
+    noteDraftDocument(
+      epoch,
+      recoverable ? (draftSaves.documents.get(bindingId)?.generation ?? null) : null,
+    );
     generation = null;
     sheetProposal = null;
     changed();
     await rpc.setEpoch({ bindingId, epoch, generation: null });
     // A destroyed guest of a tab that still exists comes back with the webview.
-    if (RECOVERABLE_REVOCATIONS.has(reason) || (reason === "destroyed" && options.tabExists())) {
+    if (recoverable) {
       await register();
     } else {
       stopped = true;
@@ -311,18 +343,47 @@ export function createCreatorBridge(options: CreatorBridgeOptions) {
       await push();
       return;
     }
-    const created = await call(
-      rpc.saveDraft({
-        ...binding(),
-        timeSec: draft.timeSec,
-        comment: draft.comment as CreatorSaveDraftInput["comment"],
-        place: draft.place,
-        projectRevision: CREATOR_PROJECT_REVISION,
-      }),
-    );
-    if (!created) return;
-    draftKeys.set(draft.requestId, created.id);
-    trim(draftKeys, DRAFT_KEYS_MAX);
+    const ref = binding();
+    const draftGeneration = generation;
+    // Main issues a new epoch for a same-document remount, but preserves generation.
+    const key = `${bindingId}:${draftGeneration}:${draft.requestId}`;
+    let pending = draftSaves.pending.get(key);
+    if (!pending) {
+      pending = rpc
+        .saveDraft({
+          ...ref,
+          timeSec: draft.timeSec,
+          comment: draft.comment as CreatorSaveDraftInput["comment"],
+          place: draft.place,
+          projectRevision: CREATOR_PROJECT_REVISION,
+        })
+        .then((settled) => {
+          // A disposed bridge can complete a shared save, but a newer document owns the keys.
+          if (settled.ok && draftSaves.documents.get(bindingId)?.generation === draftGeneration) {
+            draftKeys.set(draft.requestId, settled.value.id);
+            trim(draftKeys, DRAFT_KEYS_MAX);
+          }
+          return settled;
+        })
+        .finally(() => {
+          if (draftSaves.pending.get(key) === pending) draftSaves.pending.delete(key);
+        });
+      draftSaves.pending.set(key, pending);
+    }
+    const settled = await pending;
+    if (
+      disposed ||
+      stopped ||
+      latestEpoch !== ref.epoch ||
+      generation !== draftGeneration ||
+      draftSaves.documents.get(bindingId)?.epoch !== ref.epoch
+    )
+      return;
+    if (!settled.ok) {
+      await refuse(settled.error);
+      return;
+    }
+    const created = settled.value;
     noteRevision(created);
     const buffered = takeShot(`draft:${draft.requestId}`);
     if (buffered) await attachShot(created.id, buffered.png);
