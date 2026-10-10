@@ -60,6 +60,9 @@ const DESKTOP_APP_ID = "com.t3tools.t3code";
 // Windows keys NSIS install/uninstall registry entries off the appId, so Amu
 // gets its own. Must match the AppUserModelId set at runtime.
 const WINDOWS_AMU_APP_ID = "com.yuupapa.amu";
+// The bundle id every installed Mac Amu already has. In-app updates replace
+// only Resources, so Info.plist keeps what the first install wrote.
+const MAC_AMU_APP_ID = "local.amu.desktop";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2760,6 +2763,28 @@ export function resolveStagePackageName(platform: typeof BuildPlatform.Type): st
   return platform === "win" ? "amu" : "t3code";
 }
 
+/**
+ * Amu's macOS identity on top of upstream's mac config. Amu registers only
+ * amu:// and does not offer itself as a web browser, so it never takes
+ * t3code:// or http(s) links from an upstream T3 Code installed beside it.
+ * Upstream's usage descriptions are kept, with Amu's name. Applied last so
+ * upstream edits to the mac block merge without conflicts;
+ * scripts/amu-release.mjs checks the built Info.plist.
+ */
+export function withAmuMacIdentity(mac: Record<string, unknown>): Record<string, unknown> {
+  const { CFBundleDocumentTypes: _webPages, ...info } = mac.extendInfo as Record<string, unknown>;
+  return {
+    ...mac,
+    extendInfo: Object.fromEntries(
+      Object.entries(info).map(([key, value]) => [
+        key,
+        typeof value === "string" ? value.replaceAll("T3 Code", "Amu") : value,
+      ]),
+    ),
+    protocols: [{ name: "Amu", schemes: ["amu"] }],
+  };
+}
+
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -2780,7 +2805,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   arch?: typeof BuildArch.Type,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: platform === "win" ? WINDOWS_AMU_APP_ID : DESKTOP_APP_ID,
+    appId:
+      platform === "win"
+        ? WINDOWS_AMU_APP_ID
+        : platform === "mac"
+          ? MAC_AMU_APP_ID
+          : DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
     // scripts/amu-release.mjs expects the mac zip under the T3-Code- prefix,
     // so only the Windows installer takes the Amu name.
@@ -2976,6 +3006,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
     }
     buildConfig.win = winConfig;
+  }
+
+  if (platform === "mac") {
+    buildConfig.mac = withAmuMacIdentity(buildConfig.mac as Record<string, unknown>);
   }
 
   return buildConfig;

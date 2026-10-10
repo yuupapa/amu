@@ -74,35 +74,33 @@ function asarHeaderHash(path) {
   return NodeCrypto.createHash("sha256").update(header.toString("utf8")).digest("hex");
 }
 
+// The resource monitor needs Rust 1.95 or newer (sysinfo 0.39.3). Check before
+// the long build; cargo runs from the repo root, so ask rustc from there too.
+const rustc = NodeChildProcess.execFileSync("rustc", ["--version"], { cwd: root })
+  .toString()
+  .trim();
+const [, rustMajor, rustMinor] = rustc.match(/^rustc (\d+)\.(\d+)\./) ?? [];
+if (!rustMajor || Number(rustMajor) * 1000 + Number(rustMinor) < 1095) {
+  throw new Error(
+    `The resource monitor needs Rust 1.95 or newer, but rustc is "${rustc}".\n` +
+      "Run with RUSTUP_TOOLCHAIN=1.95.0 (install it with: rustup toolchain install 1.95.0).",
+  );
+}
+
 NodeFS.rmSync(out, { recursive: true, force: true });
 NodeFS.mkdirSync(out, { recursive: true });
 
-// This Mac's Rust may be too old for the resource monitor; reuse a built copy
-// when one is there.
-const monitor = NodePath.join(
-  root,
-  "native/resource-monitor/target/aarch64-apple-darwin/release/t3-resource-monitor",
-);
-run(
-  "node",
-  [
-    "scripts/build-desktop-artifact.ts",
-    "--platform",
-    "mac",
-    "--target",
-    "zip",
-    "--arch",
-    ARCH,
-    "--output-dir",
-    NodePath.join(out, "build"),
-  ],
-  {
-    env: {
-      ...process.env,
-      ...(NodeFS.existsSync(monitor) ? { T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true" } : {}),
-    },
-  },
-);
+run("node", [
+  "scripts/build-desktop-artifact.ts",
+  "--platform",
+  "mac",
+  "--target",
+  "zip",
+  "--arch",
+  ARCH,
+  "--output-dir",
+  NodePath.join(out, "build"),
+]);
 
 const builtZip = NodePath.join(out, "build", `T3-Code-${version}-${ARCH}.zip`);
 run("/usr/bin/ditto", ["-x", "-k", builtZip, NodePath.join(out, "app")]);
@@ -113,6 +111,34 @@ const builtVersion = plist(
   ":CFBundleShortVersionString",
 );
 if (builtVersion !== version) throw new Error(`Built ${builtVersion}, expected ${version}.`);
+// Amu's identity (withAmuMacIdentity in build-desktop-artifact.ts). A new
+// install keeps this Info.plist for good, since updates replace only Resources.
+const info = JSON.parse(
+  NodeChildProcess.execFileSync("/usr/bin/plutil", [
+    "-convert",
+    "json",
+    "-o",
+    "-",
+    NodePath.join(app, "Contents/Info.plist"),
+  ]).toString(),
+);
+const [urlType, ...otherUrlTypes] = info.CFBundleURLTypes ?? [];
+const identityProblems = [
+  info.CFBundleIdentifier !== "local.amu.desktop" &&
+    `CFBundleIdentifier is ${info.CFBundleIdentifier}, expected local.amu.desktop`,
+  (otherUrlTypes.length > 0 ||
+    urlType?.CFBundleURLName !== "Amu" ||
+    urlType?.CFBundleTypeRole !== "Editor" ||
+    JSON.stringify(urlType?.CFBundleURLSchemes) !== '["amu"]') &&
+    `CFBundleURLTypes is ${JSON.stringify(info.CFBundleURLTypes)}, expected only amu`,
+  info.CFBundleDocumentTypes && "CFBundleDocumentTypes is present",
+  ...Object.entries(info)
+    .filter(([, value]) => /T3 Code|t3code/.test(JSON.stringify(value)))
+    .map(([key]) => `${key} still names T3 Code`),
+].filter(Boolean);
+if (identityProblems.length > 0) {
+  throw new Error(`Amu.app does not have Amu's identity:\n- ${identityProblems.join("\n- ")}`);
+}
 const electronVersion = plist(
   NodePath.join(app, "Contents/Frameworks/Electron Framework.framework/Resources/Info.plist"),
   ":CFBundleVersion",
