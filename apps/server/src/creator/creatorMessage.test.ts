@@ -18,6 +18,7 @@ const item = (overrides: Partial<CreatorMessageItem> = {}): CreatorMessageItem =
   place,
   imageIndex: 2,
   outdated: false,
+  shotStale: false,
   ...overrides,
 });
 
@@ -62,6 +63,27 @@ describe("buildCreatorMessage", () => {
     );
     expect(line).toContain("｜画像なし｜");
     expect(line).not.toContain("枚目");
+  });
+
+  it("says when the image still shows the place before it was moved", () => {
+    const [line] = itemLines(
+      buildCreatorMessage({
+        projectLabel: "p",
+        sourceKind: "hyperframes",
+        items: [item({ shotStale: true })],
+      }),
+    );
+    expect(line).toContain("｜画像 2 枚目（画像は場所を変える前のもの）｜");
+    // Without an image there is nothing to warn about.
+    const [bare] = itemLines(
+      buildCreatorMessage({
+        projectLabel: "p",
+        sourceKind: "hyperframes",
+        items: [item({ shotStale: true, imageIndex: null })],
+      }),
+    );
+    expect(bare).toContain("｜画像なし｜");
+    expect(bare).not.toContain("場所を変える前");
   });
 
   it("marks a comment pinned on an older version of the project", () => {

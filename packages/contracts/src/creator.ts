@@ -173,6 +173,12 @@ export const CreatorComment = Schema.Struct({
   sentMessageId: Schema.NullOr(MessageId),
   sentVersion: Schema.NullOr(CreatorSentVersion),
   resolvedNote: Schema.NullOr(Schema.String.check(Schema.isMaxLength(CREATOR_LIMITS.maxComment))),
+  /**
+   * The place moved after `shot` was taken and no shot of the new place has
+   * arrived yet: the image still shows the previous place. Absent in stores
+   * written before it existed.
+   */
+  shotStale: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 });
 export type CreatorComment = typeof CreatorComment.Type;
 

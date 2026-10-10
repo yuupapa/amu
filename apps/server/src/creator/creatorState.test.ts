@@ -125,6 +125,35 @@ describe("creatorState", () => {
     expect(send(s, p.value, 3_200).ok).toBe(false);
   });
 
+  it("a new place marks the old shot stale until a shot for the new revision arrives", () => {
+    const place = (x: number): CreatorPlace => ({
+      x,
+      y: 0.5,
+      compositionFile: null,
+      elementSelector: null,
+      elementLabel: null,
+    });
+    const d = draft();
+    expect(d.value.shotStale).toBe(false);
+    // No shot yet: nothing is stale (the panel shows 「画像なし」).
+    let s = ok(setPlace(d.state, { id: d.value.id, place: place(0.2) }, ctx(1_000))).state;
+    expect(s.comments[0]!.shotStale).toBe(false);
+    s = ok(attachShot(s, { id: d.value.id, shot: shotFor(d.value.id, 2) }, ctx(1_100))).state;
+    expect(s.comments[0]!.shotStale).toBe(false);
+    // Re-placed, and the matching capture never came (reload, revoke, timeout).
+    s = ok(setPlace(s, { id: d.value.id, place: place(0.8) }, ctx(2_000))).state;
+    expect(s.comments[0]).toMatchObject({ shotStale: true, shot: shotFor(d.value.id, 2) });
+    // Text edits keep the mark; only a new shot clears it.
+    s = ok(updateComment(s, { id: d.value.id, comment: "太く" }, ctx(3_000))).state;
+    expect(s.comments[0]!.shotStale).toBe(true);
+    const revision = s.comments[0]!.revision;
+    s = ok(
+      attachShot(s, { id: d.value.id, shot: shotFor(d.value.id, revision) }, ctx(3_100)),
+    ).state;
+    expect(s.comments[0]!.shotStale).toBe(false);
+    valid(s);
+  });
+
   it("drops a shot taken for an older revision", () => {
     const d = draft();
     const s = ok(updateComment(d.state, { id: d.value.id, comment: "a" }, ctx(600))).state;

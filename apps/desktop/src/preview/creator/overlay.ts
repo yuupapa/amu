@@ -21,7 +21,8 @@
  * - place `{ requestId, commentId, expectedRevision, place }`, then a
  *   capture-request `{ requestId, purpose: "place", commentId, place }` with the
  *   same `requestId` (the renderer pairs the shot with its place by it),
- *   centered on the point
+ *   centered on the point. 「撮り直す」 sends the stored place again the same
+ *   way, for an image left from before the place moved (`shotStale`)
  * - delete `{ commentId }`, confirm-by-user `{ commentId }`
  * - propose `{ commentIds }`, cancel `{ proposalId }`
  */
@@ -54,7 +55,7 @@ import {
   stopPropagation,
   swallow,
 } from "./nativeDom.ts";
-import { layoutPanel, type PanelLayout } from "./panelLayout.ts";
+import { layoutPanel, type PanelLayout, type PlaceStrip } from "./panelLayout.ts";
 import { installPanelShield } from "./panelShield.ts";
 import {
   bindPlaceholders,
@@ -64,7 +65,10 @@ import {
   placeMessages,
   readPanelState,
   reconcileEdit,
+  retakeMessages,
   sendableIds,
+  shotView,
+  type CardCapture,
   type PanelState,
 } from "./panelState.ts";
 import { intersectRect } from "./playerChrome.ts";
@@ -141,6 +145,12 @@ details summary { cursor: pointer; font-size: 12px; color: #9fb0c4; }
 .chips { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; font-size: 12px; color: #9fb0c4; }
 .chip { border: 1px solid #33435c; border-radius: 6px; padding: 2px 8px; background: #18233a; color: #e7edf4; font-size: 12px; }
 .chip.on { border-color: #e2b25a; color: #e2b25a; }
+.placebar { display: none; align-items: center; gap: 8px; padding: 6px 8px 6px 12px;
+  background: #3a2f12; color: #f3cf7a; font-size: 12px; font-weight: 700; }
+.placebar span { flex: 1; }
+.placebar .mini { color: #f3cf7a; border-color: #8a7232; flex: none; }
+.strip .placebar { display: flex; }
+.strip .bar, .strip .body, .strip .foot { display: none !important; }
 [hidden] { display: none !important; }
 `;
 
@@ -160,6 +170,7 @@ type CardView = {
   readonly time: HTMLButtonElement;
   readonly status: HTMLSpanElement;
   readonly shot: HTMLSpanElement;
+  readonly retakeShot: HTMLButtonElement;
   readonly text: HTMLTextAreaElement;
   readonly placeText: HTMLSpanElement;
   readonly placeButton: HTMLButtonElement;
@@ -169,7 +180,7 @@ type CardView = {
   readonly remove: HTMLButtonElement;
   readonly cancel: HTMLButtonElement;
   readonly confirm: HTMLButtonElement;
-  capture: "pending" | "ok" | "failed" | null;
+  capture: CardCapture;
   deleteArmedAt: number;
 };
 
@@ -261,12 +272,13 @@ function createSession(initialGeneration: number) {
   const notice = make("div", "banner info");
   notice.hidden = true;
   const big = make("button", "big", COMMENT_HERE);
-  const placingHint = make(
-    "div",
-    "banner info",
-    "プレビューの直したい場所を 1 回クリックしてください（Esc で取り消し）",
+  // While placing, the panel is only this strip (see `layoutPlaceStrip`).
+  const placeBar = make("div", "placebar");
+  const placeCancel = make("button", "mini", "取り消し");
+  placeBar.append(
+    make("span", undefined, "プレビューの直したい場所を1回クリックしてください（Esc で取り消し）"),
+    placeCancel,
   );
-  placingHint.hidden = true;
   const list = make("div");
   list.style.cssText = "display:flex;flex-direction:column;gap:8px";
   const confirmed = make("details");
@@ -275,7 +287,7 @@ function createSession(initialGeneration: number) {
   confirmedList.style.cssText = "display:flex;flex-direction:column;gap:8px;margin-top:6px";
   confirmed.append(confirmedSummary, confirmedList);
   confirmed.hidden = true;
-  body.append(broken, notice, big, placingHint, list, confirmed);
+  body.append(broken, notice, big, list, confirmed);
   const foot = make("div", "foot");
   const sendAll = make("button", "sendall");
   const confirmNote = make("div", "banner note", CONFIRM_NOTE);
@@ -300,7 +312,7 @@ function createSession(initialGeneration: number) {
   });
   const scenes = make("div", "chips");
   foot.append(sendAll, confirmNote, track, speeds, scenes);
-  panel.append(bar, body, foot);
+  panel.append(bar, placeBar, body, foot);
   shadow.append(style, panel);
 
   const isOurs = (node: Node | null): boolean =>
@@ -540,11 +552,17 @@ function createSession(initialGeneration: number) {
     });
   };
 
+  /** Enters or leaves place mode; the panel shrinks to the place strip meanwhile. */
+  const setPlacing = (next: { commentId: string; timeSec: number } | null) => {
+    placing = next;
+    render();
+    applyLayout();
+  };
+
   const startPlacing = (commentId: string) => {
     if (capture.busy()) return;
     if (placing?.commentId === commentId) {
-      placing = null;
-      render();
+      setPlacing(null);
       return;
     }
     const comment = commentById(commentId);
@@ -552,7 +570,29 @@ function createSession(initialGeneration: number) {
     studio.pausePlayer();
     // The user clicks on the frame the comment is about.
     studio.seekTo(comment.timeSec);
-    placing = { commentId, timeSec: comment.timeSec };
+    setPlacing({ commentId, timeSec: comment.timeSec });
+  };
+
+  /** Sends a place and its paired capture (see `placeMessages`). */
+  const sendPlace = (
+    comment: CreatorComment,
+    messages: { readonly place: Record<string, unknown>; readonly capture: CaptureSpec },
+  ) => {
+    if (!send("place", comment.id, messages.place)) return;
+    placeAwaiting.set(comment.id, { revision: comment.revision, at: Date.now() });
+    const view = views.get(comment.id);
+    if (view !== undefined) view.capture = "pending";
+    capture.request(messages.capture);
+  };
+
+  /** 「撮り直す」: the image is from the previous place; take the stored place again. */
+  const retakeShot = (commentId: string) => {
+    if (capture.busy() || placing !== null || isDirty(commentId)) return;
+    const comment = commentById(commentId);
+    const messages = comment === undefined ? null : retakeMessages(newRequestId(), comment);
+    if (comment === undefined || messages === null) return;
+    studio.pausePlayer();
+    sendPlace(comment, messages);
     render();
   };
 
@@ -565,24 +605,25 @@ function createSession(initialGeneration: number) {
     const target = placing;
     placing = null;
     const comment = commentById(target.commentId);
-    if (comment === undefined) {
-      render();
-      return true;
+    if (comment !== undefined) {
+      const place: CreatorPlace = {
+        x: point.x,
+        y: point.y,
+        ...studio.elementAt(point.x, point.y),
+      };
+      sendPlace(
+        comment,
+        placeMessages({
+          requestId: newRequestId(),
+          comment: { id: comment.id, revision: comment.revision, timeSec: target.timeSec },
+          place,
+          pin: point,
+        }),
+      );
     }
-    const place: CreatorPlace = { x: point.x, y: point.y, ...studio.elementAt(point.x, point.y) };
-    const messages = placeMessages({
-      requestId: newRequestId(),
-      comment: { id: comment.id, revision: comment.revision, timeSec: target.timeSec },
-      place,
-      pin: point,
-    });
-    if (send("place", comment.id, messages.place)) {
-      placeAwaiting.set(comment.id, { revision: comment.revision, at: Date.now() });
-      const view = views.get(comment.id);
-      if (view !== undefined) view.capture = "pending";
-      capture.request(messages.capture);
-    }
+    // The panel comes back as it was before placing.
     render();
+    applyLayout();
     return true;
   };
 
@@ -634,7 +675,9 @@ function createSession(initialGeneration: number) {
     const time = make("button", "time");
     const status = make("span", "status");
     const shot = make("span", "shot");
-    head.append(time, status, shot);
+    const retakeShotButton = make("button", "mini", "撮り直す");
+    retakeShotButton.hidden = true;
+    head.append(time, status, shot, retakeShotButton);
     const text = make("textarea");
     text.rows = 2;
     text.placeholder = "直してほしいことを書く";
@@ -658,6 +701,7 @@ function createSession(initialGeneration: number) {
       time,
       status,
       shot,
+      retakeShot: retakeShotButton,
       text,
       placeText: placeLabel,
       placeButton,
@@ -692,6 +736,11 @@ function createSession(initialGeneration: number) {
       placeButton,
       "click",
       trusted(() => startPlacing(view.key)),
+    );
+    listen(
+      retakeShotButton,
+      "click",
+      trusted(() => retakeShot(view.key)),
     );
     listen(
       retry,
@@ -746,12 +795,9 @@ function createSession(initialGeneration: number) {
     view.root.classList.toggle("editing", placeholder !== undefined || isDirty(view.key));
     const armed = Date.now() - view.deleteArmedAt <= DELETE_CONFIRM_MS;
     view.remove.textContent = armed ? "本当に削除する" : "削除";
-    view.shot.textContent =
-      view.capture === "pending"
-        ? "撮影中…"
-        : view.capture === "failed" || (view.capture === null && comment?.shot === null)
-          ? "画像なし"
-          : "";
+    const shot = shotView(comment, view.capture);
+    view.shot.textContent = shot.label;
+    view.retakeShot.hidden = !shot.retake;
     if (placeholder !== undefined) {
       const checking =
         placeholder.sentText !== null && Date.now() - placeholder.sentAt > DRAFT_CHECK_AFTER_MS;
@@ -797,6 +843,8 @@ function createSession(initialGeneration: number) {
           : "場所を指定し直す";
     view.placeButton.disabled = comment.status === "sending";
     view.placeButton.title = "";
+    view.retakeShot.disabled = dirty || capture.busy();
+    view.retakeShot.title = dirty ? UNSAVED_NOTICE : "前の場所の画像を、いまの場所で撮り直します";
     view.ai.hidden = comment.resolvedNote === null || comment.resolvedNote === "";
     view.ai.textContent = comment.resolvedNote === null ? "" : `AI：${comment.resolvedNote}`;
     view.retry.hidden = true;
@@ -870,7 +918,6 @@ function createSession(initialGeneration: number) {
     big.textContent = capture.busy() ? "撮影中…" : COMMENT_HERE;
     quick.disabled = big.disabled;
     quick.textContent = big.textContent;
-    placingHint.hidden = placing === null;
   };
 
   const refreshSpeeds = () => {
@@ -1046,8 +1093,7 @@ function createSession(initialGeneration: number) {
   const guardKey = (event: KeyboardEvent) => {
     if (fromPanel(event)) return;
     if (placing !== null && event.key === "Escape" && event.type === "keydown") {
-      placing = null;
-      render();
+      setPlacing(null);
       swallow(event);
       return;
     }
@@ -1131,6 +1177,11 @@ function createSession(initialGeneration: number) {
       tabArrow.textContent = collapsed ? "▸" : "▾";
     }),
   );
+  listen(
+    placeCancel,
+    "click",
+    trusted(() => setPlacing(null)),
+  );
   listen(big, "click", trusted(commentHere));
   listen(quick, "click", trusted(commentHere));
   listen(
@@ -1168,13 +1219,25 @@ function createSession(initialGeneration: number) {
     player: null,
     iframe: null,
   };
+  const sameStrip = (a: PlaceStrip | null, b: PlaceStrip | null): boolean =>
+    a === b ||
+    (a !== null &&
+      b !== null &&
+      a.top === b.top &&
+      a.right === b.right &&
+      a.width === b.width &&
+      a.where === b.where);
   const applyLayout = () => {
     const comp = studio.compositionRect();
+    const shownStrip = panel.classList.contains("strip");
     const next = layoutPanel({
       viewport: { width: window.innerWidth, height: window.innerHeight },
       headerBottom: studio.headerBottom(),
       composition: comp === null ? null : studio.clipToPreview(comp),
       userExpanded,
+      placing: placing !== null,
+      // The hint may wrap to more lines than planned in a narrow strip.
+      ...(shownStrip ? { stripHeight: panel.getBoundingClientRect().height } : {}),
     });
     if (
       layout !== null &&
@@ -1182,15 +1245,19 @@ function createSession(initialGeneration: number) {
       layout.width === next.width &&
       layout.maxHeight === next.maxHeight &&
       layout.crowded === next.crowded &&
-      layout.compact === next.compact
+      layout.compact === next.compact &&
+      sameStrip(layout.strip, next.strip)
     ) {
       return;
     }
     layout = next;
-    host.style.top = `${next.top}px`;
-    host.style.right = `${next.right}px`;
-    host.style.width = `${next.width}px`;
+    const place = next.strip ?? next;
+    host.style.top = `${place.top}px`;
+    host.style.right = `${place.right}px`;
+    host.style.width = `${place.width}px`;
     panel.style.maxHeight = `${next.maxHeight}px`;
+    // Compact and collapsed stay as they were under the strip, so leaving place mode restores them.
+    panel.classList.toggle("strip", next.strip !== null);
     panel.classList.toggle("compact", next.compact);
     sizeToggle.hidden = !next.crowded;
     sizeToggle.textContent = next.compact ? "一覧を開く" : "小さくする";
@@ -1293,7 +1360,13 @@ function createSession(initialGeneration: number) {
 
   /** An event the panel shield stopped at the window; text input still reaches its card. */
   const onShielded = (event: Event) => {
-    if (event.type !== "input" || !isTrustedEvent(event)) return;
+    if (!isTrustedEvent(event)) return;
+    // Esc with the focus in the panel (on 「取り消し」, say) leaves place mode too.
+    if (event.type === "keydown" && placing !== null && (event as KeyboardEvent).key === "Escape") {
+      setPlacing(null);
+      return;
+    }
+    if (event.type !== "input") return;
     const active = shadow.activeElement;
     for (const view of views.values()) {
       if (view.text === active) {

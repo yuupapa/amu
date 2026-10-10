@@ -447,6 +447,38 @@ it.layer(NodeServices.layer)("CreatorSender", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("a shot left from before a re-place is labelled as such in the message", () =>
+    Effect.gen(function* () {
+      const { world, start } = yield* harness();
+      const instance = yield* start;
+      const binding = yield* instance.open;
+      const comment = yield* instance.service.saveDraft({
+        ...binding,
+        timeSec: 76.2,
+        comment: "柱を太く",
+        place,
+        projectRevision: "rev-1",
+      });
+      const shot = yield* instance.service.attachShot({
+        ...binding,
+        commentId: comment.id,
+        expectedRevision: comment.revision,
+        png: png(),
+      });
+      // Re-placed; the capture for the new place never arrived.
+      const moved = yield* instance.service.setPlace({
+        ...binding,
+        commentId: comment.id,
+        expectedRevision: shot.revision,
+        place: { ...place, x: 0.1 },
+      });
+      expect(moved.shotStale).toBe(true);
+      const created = yield* instance.service.propose({ ...binding, commentIds: [comment.id] });
+      yield* confirm(instance, binding, created);
+      expect(world.calls[0]!.text).toContain("｜画像 1 枚目（画像は場所を変える前のもの）｜");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("a refused send goes back to draft with the reason kept", () =>
     Effect.gen(function* () {
       const { world, start, storeFile } = yield* harness();

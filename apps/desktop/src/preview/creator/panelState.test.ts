@@ -9,7 +9,9 @@ import {
   placeMessages,
   readPanelState,
   reconcileEdit,
+  retakeMessages,
   sendableIds,
+  shotView,
 } from "./panelState.ts";
 
 const comment = (overrides: Partial<Record<keyof CreatorComment, unknown>> = {}) =>
@@ -342,5 +344,73 @@ describe("placeMessages", () => {
       place,
       pin: { x: 0.7, y: 0.6 },
     });
+  });
+});
+
+describe("shotView", () => {
+  const place = {
+    x: 0.3,
+    y: 0.6,
+    compositionFile: null,
+    elementSelector: null,
+    elementLabel: null,
+  };
+  const shot = { commentId: "c1", revision: 2, sha256: "a".repeat(64), width: 640, height: 360 };
+
+  it("shows a capture in progress first", () => {
+    expect(shotView(comment({ place, shot, shotStale: true }), "pending")).toEqual({
+      label: "撮影中…",
+      retake: false,
+    });
+    expect(shotView(undefined, "pending").label).toBe("撮影中…");
+  });
+
+  it("flags an image left from the previous place and offers a retake", () => {
+    const stale = comment({ place, shot, shotStale: true, revision: 3 });
+    expect(shotView(stale, null)).toEqual({ label: "画像は前の場所のままです", retake: true });
+    // A retake that failed leaves it stale, with the button still there.
+    expect(shotView(stale, "failed")).toEqual({ label: "画像は前の場所のままです", retake: true });
+    // Nothing can be retaken while the comment is being sent.
+    expect(shotView({ ...stale, status: "sending" }, null).retake).toBe(false);
+  });
+
+  it("keeps 「画像なし」 for a place without any image, and says nothing for a current one", () => {
+    expect(shotView(comment({ place, shot: null }), null)).toEqual({
+      label: "画像なし",
+      retake: false,
+    });
+    expect(shotView(comment({ place, shot, shotStale: false }), null)).toEqual({
+      label: "",
+      retake: false,
+    });
+    expect(shotView(comment({ place, shot }), null).label).toBe("");
+    expect(shotView(undefined, "failed").label).toBe("画像なし");
+    expect(shotView(undefined, null).label).toBe("");
+  });
+});
+
+describe("retakeMessages", () => {
+  const place = {
+    x: 0.25,
+    y: 0.75,
+    compositionFile: "compositions/a.html",
+    elementSelector: "#pillar",
+    elementLabel: "柱",
+  };
+
+  it("re-sends the stored place with a capture pinned at its stored point", () => {
+    const messages = retakeMessages("req-9", comment({ place, revision: 5, timeSec: 12 }));
+    expect(messages).toEqual(
+      placeMessages({
+        requestId: "req-9",
+        comment: { id: "c1", revision: 5, timeSec: 12 },
+        place,
+        pin: { x: 0.25, y: 0.75 },
+      }),
+    );
+  });
+
+  it("has nothing to retake without a place", () => {
+    expect(retakeMessages("req-9", comment({ place: null }))).toBeNull();
   });
 });

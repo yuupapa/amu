@@ -77,6 +77,7 @@ const sentComment = (id: CreatorCommentId): CreatorComment => ({
   sentMessageId: null,
   sentVersion: null,
   resolvedNote: null,
+  shotStale: false,
 });
 
 interface Options {

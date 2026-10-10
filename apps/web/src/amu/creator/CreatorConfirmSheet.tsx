@@ -35,6 +35,7 @@ import {
   approveAndSend,
   creatorSendReasonText,
   creatorSheetPhase,
+  creatorShotIsStale,
   formatCreatorTime,
 } from "./creatorSheet";
 import { CREATOR_PAGE_CHANGED, creatorErrorMessage } from "./creatorText";
@@ -254,6 +255,11 @@ export function CreatorConfirmSheet(props: {
                   <span>{placeText(item.place)}</span>
                 </div>
                 <p className="whitespace-pre-wrap break-words text-sm">{item.comment}</p>
+                {creatorShotIsStale(snapshot, item) ? (
+                  <p className="text-xs text-warning">
+                    画像は前の場所のままです。撮り直すときは、プレビューのコメント欄で「撮り直す」を押してください。
+                  </p>
+                ) : null}
                 <ShotImage
                   environmentId={environmentId}
                   bindingId={bindingId}

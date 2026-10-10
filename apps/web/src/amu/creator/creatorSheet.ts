@@ -88,6 +88,19 @@ export function creatorSendReasonText(reason: string | null): string {
   return `理由: ${reason}`;
 }
 
+/**
+ * The item's image still shows the comment's previous place (re-placed, and
+ * the new place's capture never arrived). The proposal is voided by any change
+ * to its comments, so the live comment's mark is the pinned item's.
+ */
+export function creatorShotIsStale(
+  snapshot: CreatorSnapshot | null,
+  item: CreatorProposal["items"][number],
+): boolean {
+  if (item.shot === null) return false;
+  return snapshot?.comments.find((comment) => comment.id === item.commentId)?.shotStale === true;
+}
+
 /** `76.25` -> `1:16.3`, as the guest panel and the sent message show times. */
 export function formatCreatorTime(timeSec: number): string {
   const tenths = Math.round(timeSec * 10);

@@ -5,6 +5,7 @@ import {
   approveAndSend,
   creatorAttentionProposal,
   creatorSheetPhase,
+  creatorShotIsStale,
   formatCreatorTime,
 } from "./creatorSheet";
 import { CREATOR_PAGE_CHANGED } from "./creatorText";
@@ -187,5 +188,22 @@ describe("formatCreatorTime", () => {
     expect(formatCreatorTime(76.25)).toBe("1:16.3");
     expect(formatCreatorTime(5)).toBe("0:05.0");
     expect(formatCreatorTime(59.96)).toBe("1:00.0");
+  });
+});
+
+describe("creatorShotIsStale", () => {
+  const item = (shot: object | null) =>
+    ({ commentId: COMMENT_ID, shot }) as unknown as CreatorProposal["items"][number];
+  const shot = { commentId: COMMENT_ID, revision: 2 };
+
+  it("warns when the pinned image is from before the place was changed", () => {
+    expect(creatorShotIsStale(snapshot([], { shotStale: true }), item(shot))).toBe(true);
+  });
+
+  it("does not warn for a current image, no image, or an unknown comment", () => {
+    expect(creatorShotIsStale(snapshot([], { shotStale: false }), item(shot))).toBe(false);
+    expect(creatorShotIsStale(snapshot([], {}), item(shot))).toBe(false);
+    expect(creatorShotIsStale(snapshot([], { shotStale: true }), item(null))).toBe(false);
+    expect(creatorShotIsStale(null, item(shot))).toBe(false);
   });
 });

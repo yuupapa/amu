@@ -190,6 +190,7 @@ const baseComment = (overrides: Partial<CreatorComment> = {}): CreatorComment =>
   sentMessageId: null,
   sentVersion: null,
   resolvedNote: null,
+  shotStale: false,
   ...overrides,
 });
 

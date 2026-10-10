@@ -297,6 +297,7 @@ export const createDraft = (
     sentMessageId: null,
     sentVersion: null,
     resolvedNote: null,
+    shotStale: false,
   };
   return ok(
     bump({ ...state, nextNumber: state.nextNumber + 1, comments: [...state.comments, created] }),
@@ -358,9 +359,14 @@ export const setPlace = (
   ctx: CreatorStateContext,
 ): StateResult<CreatorComment> => {
   if (input.place !== null && !isPlace(input.place)) return fail("invalid");
-  return editComment(state, input.id, ctx, (comment) => ({ ...comment, place: input.place }), {
-    gated: true,
-  });
+  // An existing shot shows the old place until the new place's shot is attached.
+  return editComment(
+    state,
+    input.id,
+    ctx,
+    (comment) => ({ ...comment, place: input.place, shotStale: comment.shot !== null }),
+    { gated: true },
+  );
 };
 
 /** Accepts the shot only if it was taken for the comment's current revision. */
@@ -374,7 +380,11 @@ export const attachShot = (
   if (input.shot.commentId !== input.id) return fail("invalid");
   if (current.status === "sending") return fail("sending");
   if (input.shot.revision !== current.revision) return fail("stale_shot");
-  return editComment(state, input.id, ctx, (comment) => ({ ...comment, shot: input.shot }));
+  return editComment(state, input.id, ctx, (comment) => ({
+    ...comment,
+    shot: input.shot,
+    shotStale: false,
+  }));
 };
 
 /** Deleting a reserved comment voids its proposal first; refused while sending. */

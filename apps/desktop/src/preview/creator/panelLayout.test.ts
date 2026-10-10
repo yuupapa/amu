@@ -4,9 +4,13 @@ import {
   COMPACT_OVERLAP_RATIO,
   DEFAULT_HEADER_BOTTOM,
   PANEL_EDGE_MARGIN,
+  PANEL_MIN_WIDTH,
+  PLACE_STRIP_HEIGHT,
   layoutPanel,
+  layoutPlaceStrip,
   overlapRatio,
   panelWidth,
+  type PlaceStrip,
 } from "./panelLayout.ts";
 
 const viewport = { width: 1440, height: 900 };
@@ -122,5 +126,111 @@ describe("layoutPanel", () => {
       userExpanded: false,
     });
     expect(layout.crowded).toBe(false);
+  });
+});
+
+describe("layoutPlaceStrip", () => {
+  /** The strip's box on screen, at the height the layout planned for. */
+  const box = (strip: PlaceStrip, viewportWidth: number, height = PLACE_STRIP_HEIGHT) => ({
+    x: viewportWidth - strip.right - strip.width,
+    y: strip.top,
+    width: strip.width,
+    height,
+  });
+
+  it("docks above the video when the letterbox above it has room (narrow guest)", () => {
+    const narrow = { width: 483, height: 900 };
+    const composition = { x: 0, y: 200, width: 483, height: 272 };
+    const strip = layoutPlaceStrip({ viewport: narrow, headerBottom: 40, composition });
+    expect(strip.where).toBe("above");
+    expect(strip.overlaps).toBe(false);
+    expect(strip.top).toBe(48);
+    expect(strip.top + PLACE_STRIP_HEIGHT).toBeLessThanOrEqual(composition.y);
+    expect(strip.width).toBeLessThanOrEqual(narrow.width - 2 * PANEL_EDGE_MARGIN);
+    expect(overlapRatio(box(strip, narrow.width), composition)).toBe(0);
+  });
+
+  it("uses the measured strip height when it is taller than planned", () => {
+    const narrow = { width: 483, height: 900 };
+    const composition = { x: 0, y: 140, width: 483, height: 272 };
+    expect(
+      layoutPlaceStrip({ viewport: narrow, headerBottom: 40, composition, stripHeight: 60 }).where,
+    ).toBe("above");
+    expect(
+      layoutPlaceStrip({ viewport: narrow, headerBottom: 40, composition, stripHeight: 90 }).where,
+    ).not.toBe("above");
+  });
+
+  it("sits beside the video at the top right when there is no room above", () => {
+    const composition = { x: 100, y: 60, width: 1000, height: 562 };
+    const strip = layoutPlaceStrip({ viewport, headerBottom: 40, composition });
+    expect(strip.where).toBe("beside");
+    expect(strip.overlaps).toBe(false);
+    expect(strip.right).toBe(PANEL_EDGE_MARGIN);
+    expect(strip.width).toBeGreaterThanOrEqual(PANEL_MIN_WIDTH);
+    expect(overlapRatio(box(strip, viewport.width, 200), composition)).toBe(0);
+  });
+
+  it("goes below the video when neither above nor beside has room", () => {
+    const narrow = { width: 483, height: 700 };
+    const composition = { x: 0, y: 50, width: 483, height: 400 };
+    const strip = layoutPlaceStrip({ viewport: narrow, headerBottom: 40, composition });
+    expect(strip.where).toBe("below");
+    expect(strip.overlaps).toBe(false);
+    expect(strip.top).toBeGreaterThanOrEqual(composition.y + composition.height);
+    expect(strip.top + PLACE_STRIP_HEIGHT).toBeLessThanOrEqual(narrow.height);
+  });
+
+  it("falls back to a small top-right corner when the video fills the guest", () => {
+    const small = { width: 483, height: 300 };
+    const composition = { x: 0, y: 40, width: 483, height: 260 };
+    const strip = layoutPlaceStrip({ viewport: small, headerBottom: 40, composition });
+    expect(strip.where).toBe("corner");
+    expect(strip.overlaps).toBe(true);
+    expect(strip.top).toBe(48);
+    expect(strip.right).toBe(PANEL_EDGE_MARGIN);
+    // Minimal: no wider than the docked panel, so most of the video stays clickable.
+    expect(strip.width).toBeLessThanOrEqual(panelWidth(small.width));
+  });
+
+  it("docks under the header when the video cannot be measured", () => {
+    const strip = layoutPlaceStrip({ viewport, headerBottom: null, composition: null });
+    expect(strip).toMatchObject({ where: "corner", overlaps: false, right: PANEL_EDGE_MARGIN });
+    expect(strip.top).toBe(DEFAULT_HEADER_BOTTOM + 8);
+  });
+});
+
+describe("layoutPanel while placing", () => {
+  const crowdedComposition = { x: 300, y: 120, width: 1000, height: 562 };
+
+  it("has no strip outside place mode", () => {
+    expect(
+      layoutPanel({ viewport, headerBottom: 40, composition: null, userExpanded: false }).strip,
+    ).toBeNull();
+  });
+
+  it("swaps to the strip and keeps the panel's own mode for when placing ends", () => {
+    for (const userExpanded of [false, true]) {
+      const before = layoutPanel({
+        viewport,
+        headerBottom: 40,
+        composition: crowdedComposition,
+        userExpanded,
+      });
+      const placing = layoutPanel({
+        viewport,
+        headerBottom: 40,
+        composition: crowdedComposition,
+        userExpanded,
+        placing: true,
+      });
+      expect(placing.strip).toEqual(
+        layoutPlaceStrip({ viewport, headerBottom: 40, composition: crowdedComposition }),
+      );
+      expect({ crowded: placing.crowded, compact: placing.compact }).toEqual({
+        crowded: before.crowded,
+        compact: before.compact,
+      });
+    }
   });
 });

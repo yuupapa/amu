@@ -447,7 +447,8 @@ const make = ({ commandGate, pollInterval }: SenderOptions) =>
         projectLabel: path.basename(source),
         sourceKind: binding.sourceKind,
         items: proposal.items.map((item, index) => {
-          const revision = commentById.get(item.commentId)?.projectRevision;
+          const comment = commentById.get(item.commentId);
+          const revision = comment?.projectRevision;
           return {
             number: item.number,
             timeSec: item.timeSec,
@@ -455,6 +456,8 @@ const make = ({ commandGate, pollInterval }: SenderOptions) =>
             place: item.place,
             imageIndex: imageIndexes.get(index) ?? null,
             outdated: newest !== undefined && revision !== undefined && revision !== newest,
+            // Any change to a held comment voids its proposal, so this is the pinned shot's state.
+            shotStale: comment?.shotStale === true,
           };
         }),
       });

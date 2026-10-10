@@ -14,6 +14,8 @@ export interface CreatorMessageItem {
   readonly imageIndex: number | null;
   /** The comment was pinned on an older version of the project than the newest comment. */
   readonly outdated: boolean;
+  /** The image was taken before the place was changed. */
+  readonly shotStale: boolean;
 }
 
 export interface CreatorMessageInput {
@@ -61,7 +63,9 @@ const itemLine = (item: CreatorMessageItem): string =>
     `【#${item.number}】${formatTime(item.timeSec)}`,
     ...(item.outdated ? ["古い版で打ったコメント"] : []),
     ...placeSegments(item.place),
-    item.imageIndex === null ? "画像なし" : `画像 ${item.imageIndex} 枚目`,
+    item.imageIndex === null
+      ? "画像なし"
+      : `画像 ${item.imageIndex} 枚目${item.shotStale ? "（画像は場所を変える前のもの）" : ""}`,
     `指示：${item.comment}`,
   ].join("｜");
 

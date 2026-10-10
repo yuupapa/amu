@@ -279,3 +279,49 @@ export const placeMessages = (input: {
     pin: input.pin,
   },
 });
+
+/** Where a card's capture stands, as the panel tracks it. */
+export type CardCapture = "pending" | "ok" | "failed" | null;
+
+export type ShotView = {
+  /** The line next to the card's time; empty when there is nothing to say. */
+  readonly label: string;
+  /** Show 「撮り直す」: the image is from the previous place and can be taken again. */
+  readonly retake: boolean;
+};
+
+const STALE_SHOT = "画像は前の場所のままです";
+
+/**
+ * What a card says about its image. A capture in progress first; then an image
+ * left from before the place moved (`shotStale`), with a retake; then
+ * 「画像なし」 for a failed capture or a comment without any image.
+ */
+export const shotView = (comment: CreatorComment | undefined, capture: CardCapture): ShotView => {
+  if (capture === "pending") return { label: "撮影中…", retake: false };
+  if (comment !== undefined && comment.shot !== null && comment.shotStale === true) {
+    return {
+      label: STALE_SHOT,
+      retake: comment.place !== null && comment.status !== "sending",
+    };
+  }
+  if (capture === "failed" || (capture === null && comment?.shot === null)) {
+    return { label: "画像なし", retake: false };
+  }
+  return { label: "", retake: false };
+};
+
+/**
+ * 「撮り直す」: the stored place sent again with a capture pinned at its stored
+ * point, through the same place + capture pair as a new place, so the renderer
+ * pairs the shot by `requestId` and the server clears `shotStale` when it lands.
+ */
+export const retakeMessages = (requestId: string, comment: CreatorComment) =>
+  comment.place === null
+    ? null
+    : placeMessages({
+        requestId,
+        comment: { id: comment.id, revision: comment.revision, timeSec: comment.timeSec },
+        place: comment.place,
+        pin: { x: comment.place.x, y: comment.place.y },
+      });

@@ -88,6 +88,11 @@ describe("CreatorComment", () => {
     }
     expect(() => decode({ ...base, status: "failed" })).toThrow();
   });
+  it("reads shotStale, false for comments stored before it existed", () => {
+    expect(decode(base).shotStale).toBe(false);
+    expect(decode({ ...base, shotStale: true }).shotStale).toBe(true);
+    expect(() => decode({ ...base, shotStale: "yes" })).toThrow();
+  });
 });
 
 describe("Creator ids", () => {
