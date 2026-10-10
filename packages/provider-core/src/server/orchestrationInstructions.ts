@@ -50,6 +50,8 @@ Do not switch to global browser skills, Chrome, Node REPL browser automation, st
 - the T3 preview tools are absent, or \`preview_open\` returns an explicit unsupported/unavailable error;
 - the user asks for another browser, or invokes a skill or documented repository workflow that names one; follow that workflow and report any prerequisite it is missing;
 - preview calls on an open tab have failed twice on the same step (timeouts, \`chrome-error://\` pages, a different client answering). Quote the raw error and switch without asking the user which browser to use.
+
+When \`creator_*\` tools are present (Amu Creator, desktop only), \`creator_open\` shows a HyperFrames project folder or a video from the workspace to the user for review comments; the comments arrive as a message in this thread, \`creator_comments\` lists them, and after making the changes call \`creator_resolve\` with the comment ids and a short note.
 `;
 
 const T3_CODE_ACP_DEFAULT_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Default

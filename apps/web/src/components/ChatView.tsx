@@ -274,6 +274,7 @@ import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
 import { usePreviewSession } from "./preview/usePreviewSession";
 import { subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
+import { previewRevealPass, type PreviewRevealBaseline } from "./preview/previewAutoReveal";
 
 import {
   browserMiniPlayerSource,
@@ -584,6 +585,8 @@ import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { Button, InlineButton } from "./ui/button";
 import { useLunaAuto } from "../amu/useLunaAuto";
 import { useSwitchNotice } from "../amu/useSwitchNotice";
+import { CreatorSessionHost } from "../amu/creator/CreatorSessionHost";
+import { useCreatorOpener } from "../amu/creator/useCreatorOpener";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -2355,6 +2358,7 @@ export default function ChatView(props: ChatViewProps) {
     selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
   );
   const activePreviewState = useThreadPreviewState(activeThreadRef);
+  const creatorOpener = useCreatorOpener(activeThreadRef ?? null);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
   const previewSessionsReady = !activeEnvironmentServerBrowser || activePreviewState.listLoaded;
   const resolvePreviewRuntimeTabId = useMemo(
@@ -5567,37 +5571,36 @@ export default function ChatView(props: ChatViewProps) {
     deviceState.sessions,
     deviceState.devices,
   ]);
-  // Baseline loaded tabs so reloads never reopen previews the user dismissed.
-  const previousServerPreviewTabs = useRef(new Map<string, Map<string, string | undefined>>());
+  // Brings forward tabs an agent asked to show, including Amu Creator's desktop
+  // tabs; see `previewAutoReveal.ts`. Loaded tabs are only a baseline, so reloads
+  // never reopen previews the user dismissed.
+  const previousRevealedPreviewTabs = useRef(new Map<string, PreviewRevealBaseline>());
   useEffect(() => {
-    if (!activeThreadRef || !activeEnvironmentServerBrowser || !activePreviewState.listLoaded)
-      return;
+    if (!activeThreadRef || !activePreviewState.listLoaded) return;
     const threadKey = scopedThreadKey(activeThreadRef);
-    const serverSessions = Object.values(activePreviewState.sessions).filter(
-      (session) => session.runtime === "server",
+    const { baseline, actions } = previewRevealPass(
+      previousRevealedPreviewTabs.current.get(threadKey),
+      Object.values(activePreviewState.sessions),
+      {
+        autoShowFloating: autoShowFloatingPreview,
+        surfaces: rightPanelState.surfaces,
+        hosts: { server: activeEnvironmentServerBrowser, desktop: isPreviewSupportedInRuntime() },
+      },
     );
-    const previous = previousServerPreviewTabs.current.get(threadKey);
-    previousServerPreviewTabs.current.set(
-      threadKey,
-      new Map(serverSessions.map((session) => [session.tabId, session.revealRequest?.id])),
-    );
-    if (!previous) return;
-    for (const session of serverSessions) {
-      const requested = session.revealRequest;
-      const fresh = requested
-        ? previous.get(session.tabId) !== requested.id
-        : !previous.has(session.tabId);
-      if (!fresh || session.reveal !== true) continue;
-      if (!autoShowFloatingPreview && requested?.force !== true) continue;
-      const surface = rightPanelState.surfaces.find(
-        (surface) => surface.kind === "preview" && surface.resourceId === session.tabId,
-      );
-      if (surface && requested?.force === true) {
-        useRightPanelStore.getState().activateSurface(activeThreadRef, surface.id);
-      } else if (!surface) {
-        usePreviewMiniPlayerStore
-          .getState()
-          .open(activeThreadRef, browserMiniPlayerSource(session.tabId));
+    previousRevealedPreviewTabs.current.set(threadKey, baseline);
+    for (const action of actions) {
+      switch (action.kind) {
+        case "activate":
+          useRightPanelStore.getState().activateSurface(activeThreadRef, action.surfaceId);
+          break;
+        case "panel":
+          useRightPanelStore.getState().openBrowser(activeThreadRef, action.tabId);
+          break;
+        case "float":
+          usePreviewMiniPlayerStore
+            .getState()
+            .open(activeThreadRef, browserMiniPlayerSource(action.tabId));
+          break;
       }
     }
   }, [
@@ -12117,6 +12120,9 @@ export default function ChatView(props: ChatViewProps) {
             {canOperatePreview && activeThreadRef && activeEnvironmentServerBrowser ? (
               <PreviewSessionSync threadRef={activeThreadRef} />
             ) : null}
+            {canOperatePreview && activeThreadRef ? (
+              <CreatorSessionHost threadRef={activeThreadRef} />
+            ) : null}
             {activeThreadRef &&
             activePreviewMiniPlayer &&
             previewMiniPlayerVisible &&
@@ -12244,6 +12250,7 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestAvailable={pullRequestSurfaceAvailable}
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
           deviceAvailable={activeThreadRef !== null}
+          creatorOpener={creatorOpener}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -12303,6 +12310,7 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestAvailable={pullRequestSurfaceAvailable}
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
             deviceAvailable={activeThreadRef !== null}
+            creatorOpener={creatorOpener}
           >
             {rightPanelContent}
           </RightPanelTabs>

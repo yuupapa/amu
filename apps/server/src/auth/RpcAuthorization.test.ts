@@ -165,6 +165,29 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("declares a scope for every Creator method", () => {
+    const creatorMethods = Object.values(WS_METHODS).filter((method) =>
+      method.startsWith("creator."),
+    );
+    expect(creatorMethods).toHaveLength(16);
+    for (const method of [
+      WS_METHODS.creatorConfirmSend,
+      WS_METHODS.creatorHaltSend,
+      WS_METHODS.creatorAcknowledgeConflict,
+      WS_METHODS.creatorConfirmByUser,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+    for (const method of [
+      WS_METHODS.creatorList,
+      WS_METHODS.creatorReadShot,
+      WS_METHODS.creatorSubscribe,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    expect(requiredScopeForRpcMethod(WS_METHODS.creatorSaveDraft)).toBe(AuthPreviewOperateScope);
+  });
+
   it("separates passive terminal observation from operations that can change a shell", () => {
     for (const method of [
       WS_METHODS.terminalObserve,

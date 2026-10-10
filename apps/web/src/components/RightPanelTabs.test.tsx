@@ -1,4 +1,8 @@
-import { EnvironmentId, type ThreadPullRequestLink } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type CreatorBindingId,
+  type ThreadPullRequestLink,
+} from "@t3tools/contracts";
 import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
@@ -10,6 +14,7 @@ import {
   shouldOpenDefaultBrowserProfileFromMenuClick,
   surfaceShortcutActionForKey,
   surfaceShortcutTargetsTypingContext,
+  surfaceTitle,
   tabMuteMenuItem,
 } from "./RightPanelTabs";
 
@@ -145,6 +150,33 @@ function renderTabs(
     </RightPanelTabs>,
   );
 }
+
+describe("Amu Creator tab title", () => {
+  const creatorSessions = (label: string): Readonly<Record<string, PreviewSessionSnapshot>> => ({
+    "tab-1": {
+      ...sessions["tab-1"]!,
+      navStatus: { _tag: "Success", url: "http://127.0.0.1:3002/", title: "Amu Creator" },
+      creator: { bindingId: "11111111-1111-4111-8111-111111111111" as CreatorBindingId, label },
+    },
+  });
+
+  it("names the folder or video so two Creator tabs can be told apart", () => {
+    expect(surfaceTitle(previewSurface, creatorSessions("東京タワー解説"), new Map())).toBe(
+      "Amu Creator — 東京タワー解説",
+    );
+    expect(surfaceTitle(previewSurface, creatorSessions("earth.mp4"), new Map())).toBe(
+      "Amu Creator — earth.mp4",
+    );
+  });
+
+  it("falls back to the plain name when the label is blank", () => {
+    expect(surfaceTitle(previewSurface, creatorSessions("  "), new Map())).toBe("Amu Creator");
+  });
+
+  it("keeps ordinary browser tabs on the page title", () => {
+    expect(surfaceTitle(previewSurface, sessions, new Map())).toBe("Local site");
+  });
+});
 
 describe("RightPanelTabs preview favicon", () => {
   it("prefers a live capture and never asks Google about a private hostname", () => {

@@ -33,6 +33,8 @@ import {
   RECORDING_CONTROLLER_CHANNEL,
   START_PICK_CHANNEL,
 } from "./GuestProtocol.ts";
+// Amu Creator overlay; idle until main sends `creator:activate`.
+import "./creator/overlay.ts";
 const OVERLAY_ATTRIBUTE = "data-t3code-annotation-ui";
 const Z_INDEX_OVERLAY = 2147483646;
 const PRIMARY = "var(--t3-primary)";

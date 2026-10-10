@@ -1,6 +1,7 @@
 import type {
   DesktopBridge,
   DesktopPreviewOpenLinkEvent,
+  DesktopPreviewCreatorEvent,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewRecordingFrame,
@@ -438,5 +439,27 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       return () =>
         ipcRenderer.removeListener(IpcChannels.PREVIEW_OPEN_LINK_CHANNEL, wrappedListener);
     },
+    onCreatorEvent: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, creatorEvent: unknown) => {
+        if (typeof creatorEvent !== "object" || creatorEvent === null) return;
+        listener(creatorEvent as DesktopPreviewCreatorEvent);
+      };
+      ipcRenderer.on(IpcChannels.PREVIEW_CREATOR_EVENT_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.PREVIEW_CREATOR_EVENT_CHANNEL, wrappedListener);
+    },
+    registerCreatorSession: (tabId, bindingId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_REGISTER_CHANNEL, { tabId, bindingId }),
+    revokeCreatorSession: (tabId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_REVOKE_CHANNEL, { tabId }),
+    revokeAllCreatorSessions: () =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_REVOKE_ALL_CHANNEL),
+    isCreatorSessionCurrent: (tabId, generation) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_IS_CURRENT_CHANNEL, { tabId, generation }),
+    creatorApprove: (input) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_APPROVE_CHANNEL, input),
+    pushCreatorState: (tabId, state) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_PUSH_STATE_CHANNEL, { tabId, state }),
+    pickCreatorVideo: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CREATOR_PICK_VIDEO_CHANNEL),
   },
 } satisfies DesktopBridge);

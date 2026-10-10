@@ -674,6 +674,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "amu-creator",
+    title: "Amu Creator（試験版）",
+    to: "/settings/integrations",
+    targetId: "amu-creator",
+    desktopOnly: true,
+    searchTerms: ["hyperframes 動画 修正コメント レビュー creator 試験版 studio"],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",

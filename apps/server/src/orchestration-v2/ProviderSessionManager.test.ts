@@ -1913,6 +1913,56 @@ it.effect(
     }),
 );
 
+it.effect(
+  "ProviderSessionManagerV2 grants the creator capability only while Amu Creator is on",
+  () =>
+    Effect.gen(function* () {
+      const capabilitiesWith = (amuCreatorEnabled: boolean) =>
+        Effect.gen(function* () {
+          const state = yield* Ref.make(emptyState);
+          const mcpConfigs = yield* Ref.make<
+            ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+          >([]);
+          return yield* Effect.gen(function* () {
+            const eventSink = yield* EventSink.EventSinkV2;
+            const idAllocator = yield* IdAllocator.IdAllocatorV2;
+            const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+            const registry = yield* McpSessionRegistry.McpSessionRegistry;
+            const now = yield* DateTime.now;
+            const threadId = ThreadId.make(
+              `thread-provider-session-manager-creator-${amuCreatorEnabled}`,
+            );
+            const providerSessionId = yield* idAllocator.allocate.providerSession({
+              providerInstanceId: modelSelection.instanceId,
+              threadId,
+            });
+            yield* eventSink.write({
+              events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+            });
+            yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+            const captured = (yield* Ref.get(mcpConfigs))[0];
+            const token = captured?.authorizationHeader.replace(/^Bearer\s+/, "");
+            const resolved = yield* registry.resolve(token!);
+            yield* manager.close(providerSessionId);
+            return resolved?.capabilities;
+          }).pipe(
+            Effect.provide(
+              layerTest({
+                state,
+                idleTimeoutMs: 1_000,
+                mcpConfigs,
+                serverSettingsLayer: ServerSettings.layerTest({ amuCreatorEnabled }).pipe(
+                  Layer.orDie,
+                ),
+              }),
+            ),
+          );
+        });
+      assert.isTrue((yield* capabilitiesWith(true))?.has("creator"));
+      assert.isFalse((yield* capabilitiesWith(false))?.has("creator"));
+    }),
+);
+
 it.effect("ProviderSessionManagerV2 honors a project browser-access opt-out", () =>
   Effect.gen(function* () {
     const captured = yield* runBrowserAccessScenario({

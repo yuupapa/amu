@@ -1,5 +1,11 @@
 import {
   DesktopPreviewAnnotationSendEnabledInputSchema,
+  DesktopPreviewCreatorApproveInputSchema,
+  DesktopPreviewCreatorApproveResultSchema,
+  DesktopPreviewCreatorGenerationInputSchema,
+  DesktopPreviewCreatorPushStateInputSchema,
+  DesktopPreviewCreatorRegisterInputSchema,
+  DesktopPreviewCreatorRegisterResultSchema,
   DesktopPreviewAnnotationThemeInputSchema,
   DesktopPreviewArtifactInputSchema,
   DesktopPreviewConfigInputSchema,
@@ -29,6 +35,7 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as NodeURL from "node:url";
 
+import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
@@ -56,6 +63,9 @@ export const installPreviewEventForwarding = Effect.fn(
   );
   yield* manager.subscribeOpenLinks((event) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_OPEN_LINK_CHANNEL, event),
+  );
+  yield* manager.subscribeCreatorEvents((event) =>
+    electronWindow.sendAll(IpcChannels.PREVIEW_CREATOR_EVENT_CHANNEL, event),
   );
 });
 
@@ -431,6 +441,125 @@ export const saveRecording = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.saveRecording")(function* ({ tabId, mimeType, data }) {
     const manager = yield* PreviewManager.PreviewManager;
     return yield* manager.saveRecording(tabId, mimeType, data);
+  }),
+});
+
+class CreatorIpcUnauthorizedSenderError extends Schema.TaggedError<CreatorIpcUnauthorizedSenderError>()(
+  "CreatorIpcUnauthorizedSenderError",
+  {},
+) {
+  override get message(): string {
+    return "Creator request was rejected.";
+  }
+}
+
+/**
+ * Creator channels are for the app window's renderer only. Preview guests
+ * (webviews) can invoke any ipcMain channel, so every other sender is refused
+ * before the request reaches the session ledger.
+ */
+const ensureCreatorRenderer = Effect.fn("desktop.ipc.preview.ensureCreatorRenderer")(function* (
+  event: DesktopIpc.DesktopIpcInvokeEvent | undefined,
+) {
+  const main = yield* (yield* ElectronWindow.ElectronWindow).main;
+  if (event === undefined || Option.isNone(main) || main.value.webContents.id !== event.sender.id) {
+    return yield* new CreatorIpcUnauthorizedSenderError();
+  }
+});
+
+export const registerCreatorSession = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_REGISTER_CHANNEL,
+  payload: DesktopPreviewCreatorRegisterInputSchema,
+  result: DesktopPreviewCreatorRegisterResultSchema,
+  handler: Effect.fn("desktop.ipc.preview.registerCreatorSession")(function* (
+    { tabId, bindingId },
+    event,
+  ) {
+    yield* ensureCreatorRenderer(event);
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.registerCreatorSession(tabId, bindingId);
+  }),
+});
+
+export const revokeCreatorSession = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_REVOKE_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.revokeCreatorSession")(function* ({ tabId }, event) {
+    yield* ensureCreatorRenderer(event);
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.revokeCreatorSession(tabId);
+  }),
+});
+
+export const revokeAllCreatorSessions = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_REVOKE_ALL_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.revokeAllCreatorSessions")(function* (_input, event) {
+    yield* ensureCreatorRenderer(event);
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.revokeAllCreatorSessions();
+  }),
+});
+
+export const isCreatorSessionCurrent = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_IS_CURRENT_CHANNEL,
+  payload: DesktopPreviewCreatorGenerationInputSchema,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.preview.isCreatorSessionCurrent")(function* (
+    { tabId, generation },
+    event,
+  ) {
+    yield* ensureCreatorRenderer(event);
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.isCreatorSessionCurrent(tabId, generation);
+  }),
+});
+
+export const creatorApprove = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_APPROVE_CHANNEL,
+  payload: DesktopPreviewCreatorApproveInputSchema,
+  result: DesktopPreviewCreatorApproveResultSchema,
+  handler: Effect.fn("desktop.ipc.preview.creatorApprove")(function* (
+    { tabId, generation, proposalId },
+    event,
+  ) {
+    yield* ensureCreatorRenderer(event);
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.creatorApprove(tabId, generation, proposalId);
+  }),
+});
+
+export const pushCreatorState = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_PUSH_STATE_CHANNEL,
+  payload: DesktopPreviewCreatorPushStateInputSchema,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.preview.pushCreatorState")(function* ({ tabId, state }, event) {
+    yield* ensureCreatorRenderer(event);
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.pushCreatorState(tabId, state);
+  }),
+});
+
+/** Video kinds Amu Creator opens for review (the server checks the extension again). */
+const CREATOR_VIDEO_EXTENSIONS = ["mp4", "mov", "webm"];
+
+export const pickCreatorVideo = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_PICK_VIDEO_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.NullOr(Schema.String),
+  handler: Effect.fn("desktop.ipc.preview.pickCreatorVideo")(function* (_input, event) {
+    yield* ensureCreatorRenderer(event);
+    const dialog = yield* ElectronDialog.ElectronDialog;
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const paths = yield* dialog.pickFiles({
+      owner: yield* electronWindow.focusedMainOrFirst,
+      defaultPath: Option.none(),
+      multiple: false,
+      filters: [{ name: "動画", extensions: CREATOR_VIDEO_EXTENSIONS }],
+    });
+    return paths[0] ?? null;
   }),
 });
 

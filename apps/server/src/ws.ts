@@ -181,6 +181,12 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import { isDesktopAppSession } from "./auth/desktopSession.ts";
+import { deriveAuthClientMetadata } from "./auth/utils.ts";
+import * as CreatorOpen from "./creator/CreatorOpen.ts";
+import { makeCreatorWsHandlers } from "./creator/creatorWsHandlers.ts";
+import * as CreatorSender from "./creator/CreatorSender.ts";
+import * as CreatorService from "./creator/CreatorService.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
@@ -1187,6 +1193,11 @@ const layerWsRpc = (
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
+  creator: CreatorService.CreatorService["Service"],
+  creatorSender: CreatorSender.CreatorSender["Service"],
+  creatorOpen: CreatorOpen.CreatorOpen["Service"],
+  /** The desktop app's own session on a loopback socket; the Creator surface needs it. */
+  desktopSession: boolean,
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2912,6 +2923,7 @@ const layerWsRpc = (
         [WS_METHODS.previewReportProfiles]: (input) => serverBrowser.reportProfiles(input),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
+        ...makeCreatorWsHandlers({ desktopSession, creator, creatorSender, creatorOpen }),
         [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
         [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
         [WS_METHODS.deviceList]: (input) =>
@@ -3140,6 +3152,9 @@ export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
+    const creator = yield* CreatorService.CreatorService;
+    const creatorSender = yield* CreatorSender.CreatorSender;
+    const creatorOpen = yield* CreatorOpen.CreatorOpen;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
@@ -3196,6 +3211,10 @@ export const layer = Layer.unwrap(
               clientAnalyticsProps,
               previewAutomationBroker,
               serverBrowser,
+              creator,
+              creatorSender,
+              creatorOpen,
+              isDesktopAppSession(session, deriveAuthClientMetadata({ request }).ipAddress),
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               // Request fibers run in the handlers' context, so this reporter sees

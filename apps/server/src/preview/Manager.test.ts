@@ -1,17 +1,25 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { type PreviewEvent, ThreadId } from "@t3tools/contracts";
+import {
+  type CreatorTabInfo,
+  PreviewOpenInput,
+  type PreviewEvent,
+  type PreviewSessionSnapshot,
+  ThreadId,
+} from "@t3tools/contracts";
 import { PreviewUrlNormalizationError } from "@t3tools/shared/preview";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
 import { expect } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "./Manager.ts";
 
 const DRAIN_LIMIT = 100;
+const decodePreviewOpenInput = Schema.decodeUnknownSync(PreviewOpenInput);
 
 interface EventCollector {
   /** Drain everything published since the last call (or since subscribe). */
@@ -492,6 +500,53 @@ it.layer(layer)("PreviewManager", (it) => {
       expect(events.map((e) => e.type)).toEqual(["opened", "opened"]);
     }),
   );
+
+  it.effect("open with creator puts it on the snapshot before opened publishes", () =>
+    Effect.gen(function* () {
+      const threadId = freshThreadId();
+      const manager = yield* PreviewManager.PreviewManager;
+      const collector = yield* collectEvents;
+      const creator = {
+        bindingId: "0b9e4a52-3f0c-4f43-9d2b-6f2c1d7a8e11",
+        label: "Amu Creator",
+      } as CreatorTabInfo;
+
+      const seen: PreviewSessionSnapshot[] = [];
+      const snapshot = yield* manager.open({
+        threadId,
+        url: "http://localhost:3417/#project/x",
+        creator,
+        beforePublish: (s) => {
+          seen.push(s);
+        },
+      });
+      expect(snapshot.creator).toEqual(creator);
+      expect(seen.map((s) => s.creator)).toEqual([creator]);
+      expect(seen[0]?.tabId).toBe(snapshot.tabId);
+
+      const events = yield* collector.drain;
+      expect(events[0]?.type === "opened" ? events[0].snapshot.creator : null).toEqual(creator);
+
+      // It stays through later updates of the tab.
+      const navigated = yield* manager.navigate({
+        threadId,
+        tabId: snapshot.tabId,
+        url: "http://localhost:3417/#project/y",
+      });
+      expect(navigated.creator).toEqual(creator);
+
+      // A plain open carries none.
+      expect((yield* manager.open({ threadId })).creator).toBeUndefined();
+    }),
+  );
+
+  it("the public preview.open input cannot carry creator", () => {
+    const decoded = decodePreviewOpenInput({
+      threadId: "thread-x",
+      creator: { bindingId: "0b9e4a52-3f0c-4f43-9d2b-6f2c1d7a8e11", label: "x" },
+    });
+    expect("creator" in decoded).toBe(false);
+  });
 
   it.effect("close with mismatching tabId is a no-op", () =>
     Effect.gen(function* () {
