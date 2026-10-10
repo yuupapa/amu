@@ -121,6 +121,7 @@ vi.mock("./ui/toast", () => ({
 }));
 
 import { ThreadNotificationCoordinator } from "./ThreadNotificationCoordinator";
+import { translateOutgoingText } from "../amu/outgoingText";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -244,7 +245,8 @@ describe("thread notifications", () => {
     await render();
     expect(state.add).toHaveBeenCalledTimes(1);
     expect(state.notification).toHaveBeenCalledTimes(1);
-    expect(state.notification).toHaveBeenCalledWith(title, {
+    // Amu: desktop notifications leave the app in Japanese when the dictionary knows the title.
+    expect(state.notification).toHaveBeenCalledWith(translateOutgoingText(title), {
       body: "Fix the login form",
       tag: "env-1:thread-1",
       silent: true,
