@@ -4520,6 +4520,7 @@ describe("PreviewManager Amu Creator", () => {
       getURL: () => url,
       getTitle: () => "Studio",
       isLoading: () => false,
+      isLoadingMainFrame: () => false,
       getZoomFactor: () => 1,
       setZoomFactor: vi.fn(),
       setAudioMuted: vi.fn(),
