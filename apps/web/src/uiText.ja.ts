@@ -30,7 +30,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   Skip: "スキップ",
   "Skip for now": "今はスキップ",
   "Select all": "すべて選択",
-  "Deselect all": "選択を解除",
   Refresh: "更新",
   Install: "インストール",
   "Sign in": "ログイン",
@@ -62,7 +61,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Search projects": "プロジェクトを検索",
   "Search projects...": "プロジェクトを検索…",
   "Search settings": "設定を検索",
-  "Search settings...": "設定を検索…",
   "Command palette": "コマンドパレット",
   "Go to threads": "スレッドへ戻る",
   "Thread title": "スレッド名",
@@ -85,10 +83,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Choose an agent to start coding. You can add more later.":
     "使うエージェントを選びます。後から追加できます。",
   "Ready to code.": "コーディングを始められます。",
-  "Choose your projects": "プロジェクトを選ぶ",
   "Your projects": "プロジェクト一覧",
-  "Import projects and conversations from your selected computers.":
-    "選択したコンピューターから、プロジェクトや会話を取り込めます。",
   "Other folders": "その他のフォルダー",
   "Importing…": "取り込み中…",
   "Pairing link": "ペアリングリンク",
@@ -132,8 +127,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Code with your ChatGPT subscription.": "ChatGPTのサブスクで利用します。",
   "Use your ChatGPT subscription.": "ChatGPTのサブスクを利用します。",
   "Signed in with ChatGPT.": "ChatGPTでログイン済みです。",
-  "Use existing Codex CLI": "既存のCodex CLIを使用",
-  "Use installed Codex CLI": "インストール済みのCodex CLIを使用",
   "ChatGPT account": "ChatGPTアカウント",
   "Preparing sign-in.": "ログインを準備中です。",
   "Finishing sign-in...": "ログインを完了中…",
@@ -163,7 +156,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   Refine: "調整",
   Implement: "実装",
   "Implementation actions": "実装の操作",
-  "Implement in new thread": "新しいスレッドで実装",
   "Attach files": "ファイルを添付",
   "Expand composer": "入力欄を広げる",
   "Runtime mode": "実行モード",
@@ -184,7 +176,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   Advanced: "詳細設定",
   Reset: "リセット",
   "Add provider": "プロバイダーを追加",
-  "Add account": "アカウントを追加",
   "Provider settings": "プロバイダー設定",
   "No results": "結果がありません",
   "No results found.": "結果が見つかりません。",
@@ -290,12 +281,9 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Load balancing": "負荷分散",
   "GitHub sharing": "GitHubの共有",
   "Archived threads": "アーカイブ済みスレッド",
-  "Search settings…": "設定を検索…",
-  "No settings found.": "設定が見つかりません。",
   Active: "作業中",
   Settled: "完了",
-  "Search threads...": "スレッドを検索…",
-  "Select project": "プロジェクトを選択",
+  "Select a project": "プロジェクトを選択",
   "New project": "新しいプロジェクト",
   "Search threads": "スレッドを検索",
   "Clear thread search": "スレッドの検索を解除",
@@ -432,7 +420,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Remote only": "リモートのみ",
   "Stacked diff view": "差分を縦に表示",
   "Split diff view": "差分を左右に表示",
-  "Waiting for Git...": "Gitの処理を待っています…",
   "Git actions": "Git操作",
   "Thread action failed": "スレッドの操作に失敗しました",
   "Thread ID copied": "スレッドIDをコピーしました",
@@ -475,8 +462,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   image: "画像",
   Expanded: "展開済み",
   "Copy message": "メッセージをコピー",
-  "Send now": "今すぐ送信",
-  "Cancel and return to the composer": "取り消して入力欄に戻す",
   "Edit from here": "ここから編集",
   "Annotated preview crop": "注釈付きプレビューの切り抜き",
   "Screenshot unavailable": "スクリーンショットを利用できません",
@@ -616,8 +601,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Could not add WSL project": "WSLのプロジェクトを追加できませんでした",
   "Start the matching WSL backend, then choose the folder again.":
     "対応するWSLバックエンドを起動してから、フォルダーを選び直してください。",
-  "More header actions": "その他のヘッダー操作",
-  "Header actions": "ヘッダー操作",
   Decline: "拒否",
   "Always allow this session": "このセッションでは常に許可",
   "More approval options": "その他の承認方法",
@@ -630,13 +613,10 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Finish later": "後で設定",
   "Provider instance added": "プロバイダーを追加しました",
   "Could not add provider instance": "プロバイダーを追加できませんでした",
-  "Add provider instance": "プロバイダーを追加",
   "Add an account or configure a provider on": "アカウント追加・プロバイダーの設定先：",
   "e.g. Work": "例：仕事用",
-  "Shown in the provider list. Optional.": "プロバイダー一覧に表示します。省略できます。",
+  "Shown in the provider list.": "プロバイダー一覧に表示します。",
   "Instance ID": "インスタンスID",
-  "Routing key used by threads and sessions. Letters, digits, '-', or '_'.":
-    "スレッドとセッションで使う接続先IDです。英数字・「-」・「_」を使えます。",
   "Optional marker shown in the picker.": "選択画面に表示する目印です。省略できます。",
   "This driver has no required configuration. You can add the instance now.":
     "このドライバーに必須の設定はありません。このまま追加できます。",
@@ -668,10 +648,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Loading…": "読み込み中…",
   Loading: "読み込み中",
   New: "新しい",
-  "Enabled by default": "既定で有効",
   "Choose model": "モデルを選択",
   "Choose models": "モデルを選択",
-  "Choose a model": "モデルを選択",
   "Remove from favorites": "お気に入りから削除",
   "Add to favorites": "お気に入りに追加",
   Send: "送信",
@@ -705,7 +683,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Open draft": "下書きを開く",
   "Could not open a fresh composer": "新しい入力欄を開けませんでした",
   "Started in background": "バックグラウンドで開始しました",
-  "Could not start thread": "スレッドを開始できませんでした",
   "The previous request may have started. Open its thread to check before sending again.":
     "前の依頼が開始済みの可能性があります。再送する前にスレッドを開いて確認してください。",
 
@@ -805,14 +782,39 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Draft attachment could not be saved locally and may be lost on navigation.":
     "添付をこのMacに保存できなかったため、画面移動後に失われる場合があります。",
   "View environment": "環境を表示",
-  "Read threads, status, diffs, and configuration.": "スレッド・状態・差分・設定を読み取ります。",
+  "Read threads, status, checkpoints, and configuration.":
+    "スレッド・状態・チェックポイント・設定を読み取ります。",
   "Operate tasks": "作業を操作",
-  "Start tasks and perform changes in the environment.": "環境内の作業を開始し、変更を行います。",
+  "Start, update, and stop tasks.": "作業を開始・更新・停止します。",
+  "Change environment settings": "環境の設定を変更",
+  "Edit environment preferences and keybindings.":
+    "環境の設定とキーボードショートカットを編集します。",
+  "Manage providers": "プロバイダーを管理",
+  "Configure, install, sign in to, and update providers and usage sources.":
+    "プロバイダーと使用量の取得元を設定・インストール・ログイン・更新します。",
+  "Maintain environment": "環境を保守",
+  "Update the server and control environment processes.":
+    "サーバーを更新し、環境のプロセスを制御します。",
+  "Control previews": "プレビューを操作",
+  "Open browser previews and host browser automation.":
+    "ブラウザーのプレビューを開き、ブラウザーの自動操作を動かします。",
+  "View diagnostics and usage": "診断と使用量を表示",
+  "Read process diagnostics, resource history, and usage totals.":
+    "プロセスの診断・リソースの履歴・使用量の合計を読み取ります。",
+  "View terminals": "ターミナルを表示",
+  "Read existing terminal output and status.": "既存のターミナルの出力と状態を読み取ります。",
   "Use terminals": "ターミナルを使用",
   "Create terminals and send input to running shells.":
     "ターミナルを作成し、実行中のシェルに入力を送ります。",
-  "Write reviews": "レビューを作成",
-  "Create comments while reviewing changes.": "変更のレビュー中にコメントを作成します。",
+  "Change source control": "ソース管理を変更",
+  "Commit, push, manage branches and repositories, and change pull requests.":
+    "コミットとプッシュ、ブランチとリポジトリの管理、プルリクエストの変更を行います。",
+  "Read files": "ファイルを閲覧",
+  "Browse host files, search workspaces, and inspect local changes.":
+    "ホストのファイルを閲覧し、ワークスペースの検索やローカルの変更の確認を行います。",
+  "Write files": "ファイルを編集",
+  "Edit workspace files and save plans to disk.":
+    "ワークスペースのファイルを編集し、プランをディスクに保存します。",
   "View access": "アクセス権限を表示",
   "Inspect pairing links and authorized clients.": "ペアリングリンクと許可済み端末を確認します。",
   "Manage access": "アクセス権限を管理",
@@ -894,7 +896,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "HTTPS port": "HTTPSポート",
   "Enter a port from 1 to 65535.": "1〜65535のポート番号を入力してください。",
   "HTTPS endpoint": "HTTPSの接続先",
-  "Administrative access": "管理者権限",
+  "No environment selected": "環境が選ばれていません",
   "Add Environment": "環境を追加",
   "Pair another environment to this client.": "別の環境をこの端末にペアリングします。",
   "Remote link": "リモート接続",
@@ -917,8 +919,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Cancel new keybinding": "ショートカットの追加を取り消す",
   "New keybinding": "新しいショートカット",
   "No keybindings match your search.": "検索に一致するショートカットがありません。",
-  "Some shortcuts may be claimed by the browser before T3 Code sees them. Use the desktop app for better keybinding support.":
-    "一部のショートカットはT3 Codeより先にブラウザーが処理します。より多くのショートカットを使うにはデスクトップアプリを利用してください。",
+  "The browser may claim some shortcuts first. The desktop app receives them all.":
+    "一部のショートカットは、ブラウザーが先に受け取る場合があります。デスクトップアプリならすべて受け取れます。",
   "Unable to open keybindings file": "ショートカットの設定ファイルを開けませんでした",
   "Unable to save keybinding": "ショートカットを保存できませんでした",
   "Unable to remove keybinding": "ショートカットを削除できませんでした",
@@ -973,13 +975,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   Start: "開始",
   Completed: "完了",
   "Idle · resumable": "待機中・再開可能",
-  "Close script": "スクリプトを閉じる",
-  "Could not load the script.": "スクリプトを読み込めませんでした。",
-  "Collapse workflow": "ワークフローを折りたたむ",
-  "No agents yet": "まだエージェントがありません",
-  "When this thread spawns subagents or runs a workflow, they show up here with live status, activity, and token usage.":
-    "このスレッドから開始したエージェントやワークフローの状態・動作・トークン使用量をここに表示します。",
-  "Direct spawns": "直接開始したエージェント",
   "Usage metric": "使用量の指標",
   "Usage period": "集計期間",
   Totals: "合計",
@@ -1006,11 +1001,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Switches the hosted app release channel.": "ホスト型アプリの更新チャンネルを切り替えます。",
   Latest: "最新版",
   "Couldn’t restore theme settings": "テーマ設定を復元できませんでした",
-  "Token by token is a worse experience": "トークン単位の表示は読みづらくなります",
-  "Token streaming repaints the message on every delta. It is slower, harder to read, and costs more CPU on every connected device. This mode stays only for backwards compatibility. Use paragraph streaming instead.":
-    "トークン単位では更新ごとに回答を描き直すため、読みづらくなり、接続中の端末のCPU負荷が増えます。互換性のために残している設定です。段落単位の表示を推奨します。",
-  "Use token by token": "トークン単位で表示",
-  "Use paragraphs": "段落単位で表示",
   "Background Activity": "バックグラウンドの動作",
   "Tune the shared power policy and the background intervals that feed it.":
     "共通の電力設定とバックグラウンドの確認間隔を調整します。",
@@ -1129,8 +1119,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Show diffs stacked or side by side. The toggle in the diff toolbar changes this too.":
     "差分を縦に並べるか左右に並べるかを選びます。差分ツールバーでも切り替えられます。",
   "diff layout": "差分の配置",
-  "Open linked pull requests first. Otherwise, open the working tree diff for changes to at least 3 files or 50 lines.":
-    "関連するプルリクエストを優先して開きます。それがない場合は、3ファイル以上または50行以上の変更で作業ツリーの差分を開きます。",
+  "Open linked pull requests first. Otherwise, open Changes for edits to at least 3 files or 50 lines.":
+    "関連するプルリクエストを優先して開きます。ない場合は、3ファイル以上または50行以上の編集で「変更」を開きます。",
   "proactive panels": "パネルの自動表示",
   "Also include skills in the / command menu. Skills always appear when you type $.":
     "「/」のコマンドメニューにもスキルを表示します。「$」では常にスキルを表示します。",
@@ -1150,8 +1140,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
     "インストール済みのプロバイダーCLIに新しいバージョンがあるかを確認します。",
   "provider update checks": "プロバイダーの更新確認",
   "Check provider versions": "プロバイダーのバージョンを確認",
-  "Automatically resume interrupted threads after an update, crash, or machine restart on the selected environments. Update older servers first.":
-    "選択した環境で、更新・異常終了・端末再起動後に中断したスレッドを自動で再開します。古いサーバーは先に更新してください。",
   "continue threads after restarts": "再起動後にスレッドを継続",
   "This shared policy gates background work such as Git refreshes and provider health probes after their individual intervals elapse.":
     "それぞれの確認間隔が経過したあと、Gitの取得やプロバイダーの状態確認を実行するかを共通設定で決めます。",
@@ -1200,13 +1188,10 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Version pill": "バージョンのラベル",
   "Wait for the full response": "回答が完了してから表示",
   "Show finished paragraphs": "完成した段落ごとに表示",
-  "Token by token (legacy)": "トークン単位で表示（旧設定）",
   "Text appears once the agent finishes its turn.":
     "エージェントのターンが完了すると回答を表示します。",
   "Each paragraph or code block appears as soon as it is complete.":
     "段落・コードブロックが完成した時点で表示します。",
-  "Every token repaints the answer as it arrives. Slower and harder to read. Thinking traces still arrive a paragraph at a time.":
-    "トークンが届くたびに回答を描き直すため、遅く読みづらくなります。思考過程は段落単位で表示します。",
   "System default": "システムの既定値",
   "12-hour": "12時間表示",
   "24-hour": "24時間表示",
@@ -1225,6 +1210,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Also pauses background probes when the host or client is on battery.":
     "接続先・この端末がバッテリー使用中の場合もバックグラウンド確認を停止します。",
   Mixed: "設定が異なります",
+  "Mixed across selected machines": "選択したマシンで設定が異なります",
+  "Mixed across selected environments": "選択した環境で設定が異なります",
   Low: "低",
   Medium: "標準",
   High: "高",
@@ -1270,7 +1257,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Refresh resource history": "リソースの履歴を更新",
   Samples: "サンプル",
   Desktop: "デスクトップ",
-  "Delete inactive worktrees": "使われていないworktreeを削除",
+  "Delete inactive worktrees": "使われていない作業ツリーを削除",
   "Delete old browser artifacts": "古いブラウザの成果物を削除",
   "Delete old rotated logs": "古いローテーションログを削除",
   Sort: "並び替え",
@@ -1355,8 +1342,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   Hours: "時間",
   Days: "日",
   Snooze: "一時休止",
-  "Working tree": "作業ツリー",
-  "Branch changes": "ブランチの変更",
+  Changes: "変更",
+  Uncommitted: "未コミット",
   "Latest turn": "直近のやり取り",
   "No matching refs.": "一致する参照がありません。",
   Automatic: "自動",
@@ -1391,13 +1378,13 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Pick a thread to continue": "続けるスレッドを選択",
   "Select an existing thread or create a new one to get started.":
     "既存のスレッドを選ぶか、新しいスレッドを作成してください。",
-  "Previous worktree": "前のworktree",
+  "Previous worktree": "前の作業ツリー",
   "From t3.json": "t3.jsonから",
   "Add project action…": "プロジェクトのアクションを追加…",
   "Pull request #": "プルリクエスト #",
   "Resolve a": "対象を指定：",
   ", then create the draft thread in the main repo or in a dedicated worktree.":
-    "。元のリポジトリまたは専用worktreeに下書きスレッドを作成します。",
+    "。元のリポジトリまたは専用作業ツリーに下書きスレッドを作成します。",
   to: "→",
   Resolving: "解決中",
   "Update the desktop app on that machine to update this server.":
@@ -1437,7 +1424,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   Thought: "思考",
   "Compacting…": "圧縮中…",
   "more selected elements": "追加で選択された要素",
-  "Open Agents panel ›": "エージェントのパネルを開く ›",
   "No SSH route to": "SSH接続経路がありません：",
   "No installed editors found": "インストール済みのエディターが見つかりません",
   "Opens over SSH. Needs your key on": "SSH経由で開きます。鍵が必要な接続先：",
@@ -1552,8 +1538,9 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "No preview for this file": "このファイルはプレビューできません",
   "Save it to open in an app that supports": "保存して対応アプリで開いてください。形式：",
   "files.": "ファイル。",
-  "byte file. Save the file to read it in full.":
-    "バイトのファイルです。全体を読むにはファイルを保存してください。",
+  "Preview limited to the first 1 MB": "プレビューは先頭1 MBに制限されます",
+  " of a {0} byte file": "（{0} バイトのファイル）",
+  ". Save the file to read it in full.": "。全体を読むにはファイルを保存してください。",
   "Table limited to the first 100 rows and 30 columns. Switch to source for the rest.":
     "最初の100行と30列だけを表示しています。残りはソース表示で確認してください。",
   "Back to": "戻る先：",
@@ -1620,14 +1607,14 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Preview URL (optional)": "プレビューのURL（任意）",
   "Open this URL in the in-app preview when this action runs.":
     "このアクションの実行時に、アプリ内プレビューで指定URLを開きます。",
-  "Run automatically on worktree creation": "worktree作成時に自動で実行",
+  "Run automatically on worktree creation": "作業ツリー作成時に自動で実行",
   "Wait for it to finish before the agent starts": "完了してからエージェントを開始",
   "Open preview automatically when this action runs": "アクションの実行時にプレビューを自動で開く",
   'Delete action "': "アクションを削除「",
   "This action cannot be undone.": "この操作は元に戻せません。",
   "Delete action": "アクションを削除",
-  "Attach a pull request to this thread. A full URL can point at any repository on a host this environment has a project for.":
-    "このスレッドへプルリクエストを連携します。完全なURLなら、この環境のプロジェクトと同じホストにある任意のリポジトリを指定できます。",
+  "Attach a pull request to this thread by its URL, or by its number for this thread's repository.":
+    "URLか、このスレッドのリポジトリでの番号で、プルリクエストをこのスレッドに連携します。",
   "Could not load pull request activity": "プルリクエストの活動を読み込めませんでした",
   "No checks reported": "検証結果は報告されていません",
   "Check details are out of date. Refresh the pull request to update them.":
@@ -1652,7 +1639,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   Line: "行",
   "Changes can be cleanly merged.": "競合せずにマージできます。",
   "Check out this pull request": "このプルリクエストをチェックアウト",
-  "In a separate worktree": "別のworktree",
+  "In a separate worktree": "別の作業ツリー",
   "Its own folder and thread. Nothing you have open moves.":
     "専用フォルダーとスレッドを使います。現在開いている作業は移動しません。",
   "In this repository": "このリポジトリ",
@@ -1699,7 +1686,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Merge stack through #": "指定レイヤーまでマージ #",
   into: "→",
   Outdated: "古い内容",
-  "· Latest": "· 最新",
   "older comment": "前のコメント",
   "Check details are out of date.": "検証結果の詳細が古くなっています。",
   "No checks reported.": "検証結果は報告されていません。",
@@ -1708,8 +1694,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "are here; open it on the host to read the rest.": "。残りはホストの画面で開いてください。",
   "No comments yet.": "コメントはまだありません。",
   "recent comments": "直近のコメント",
-  "older bot comment": "前のbotコメント",
-  "recent bot comments": "直近のbotコメント",
+  "Bot comments": "botのコメント",
+  "Resolved or dismissed": "解決済みまたは非表示",
   ". Search in the command palette.": "。コマンドパレットで検索してください。",
   "Link pull request to a thread": "プルリクエストをスレッドに連携",
   "No active threads found.": "有効なスレッドが見つかりません。",
@@ -1822,8 +1808,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Clear cookies and cache": "Cookieとキャッシュを削除",
   "Remove profile and data": "プロファイルとデータを削除",
   "Remove “": "削除する項目：「",
-  "Its cookies and logins are deleted. Tabs already open in this profile stay open until you close them.":
-    "このプロファイルのCookieとログイン情報を削除します。既に開いているタブは、閉じるまで維持します。",
+  "Its cookies and logins are deleted. Desktop tabs already open in this profile stay open until you close them; server browser tabs close now.":
+    "このプロファイルのCookieとログイン情報を削除します。デスクトップで開いているタブは閉じるまで残り、サーバーのブラウザーのタブはすぐに閉じます。",
   "Connect to an environment to remove this profile and its data.":
     "プロファイルとデータを削除するには環境へ接続してください。",
   "New threads in shared projects start on the machine with the most free CPU and memory, weighted by each machine's preference.":
@@ -1882,11 +1868,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
     "自動インストールは利用できません。実行ファイルのパスを指定するか、別の環境を使ってください。",
   "Cancel installation": "インストールを取り消す",
   "Cancel sign-in": "ログインを取り消す",
-  "Link expires at": "リンクの有効期限：",
   "If the final localhost page does not load, paste its full URL here.":
     "最後のlocalhostページを読み込めない場合は、完全なURLをここへ貼り付けてください。",
-  "Sign-in is open in another client. Complete or cancel it there.":
-    "別のクライアントでログイン中です。そこで完了するか取り消してください。",
   "Retry setup status": "設定状況の確認を再試行",
   Updated: "更新済み",
   "CPU average": "CPU平均",
@@ -1967,7 +1950,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
     "変更説明を書くモデルを選ぶには、環境へ接続してください。",
   days: "日",
   "Update the selected machines to configure project worktree cleanup.":
-    "プロジェクトのworktree整理を設定するには、選択したマシンを更新してください。",
+    "プロジェクトの作業ツリー整理を設定するには、選択したマシンを更新してください。",
   "Update the selected environments to use storage cleanup, or choose a machine that supports it.":
     "ストレージの整理を使うには、選択した環境を更新するか、対応するマシンを選んでください。",
   Inherit: "引き継ぐ",
@@ -2019,13 +2002,12 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "could not report usage.": "の使用量を取得できませんでした。",
   "Counted once across environments sharing a transcript directory:":
     "同じ会話履歴フォルダーを共有する環境は、一度だけ集計します：",
-  "still scanning": "集計中",
   "No environments connected.": "接続した環境はありません。",
   "Totals are partial while selected environments scan.":
     "選択した環境の集計が終わるまでは、一部の合計を表示します。",
   "Model prices": "モデルの価格",
-  "Prices apply to all past and future usage on the environments you select.":
-    "価格は選択した環境の過去と今後のすべての使用量に適用します。",
+  "Prices and mappings apply to all past and future usage on the environments you select.":
+    "価格と対応付けは、選択した環境の過去と今後のすべての使用量に適用します。",
   "Apply to": "適用先",
   "USD / million tokens": "米ドル / 100万トークン",
   "Automatic pricing after saving": "保存後は自動の価格を適用",
@@ -2048,7 +2030,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Toggle task": "タスクの状態を切り替え",
   "Hide this server's threads. Switch it on again in Connections.":
     "このサーバーのスレッドを非表示にします。「接続」で再び表示できます。",
-  "View agents": "エージェントを表示",
   "Schedule type": "予定の種類",
   "Choose snooze date": "休止の終了日を選択",
   "Decrease duration": "期間を短くする",
@@ -2090,7 +2071,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Plan actions": "計画の操作",
   "Captured terminal output": "取得したターミナルの出力",
   "Dismiss error": "エラーを閉じる",
-  "Worktree setup": "worktreeの準備",
+  "Worktree setup": "作業ツリーの準備",
   "Push notifications": "プッシュ通知",
   "Live Activities": "ライブアクティビティ",
   "Loading mobile clients": "モバイル端末を読み込み中",
@@ -2240,8 +2221,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
     "選択したWSLディストリビューションをWindowsと並行して実行します。プロジェクトのファイルシステムは維持します。",
   "Run only the WSL backend. T3 Code restarts when this changes.":
     "WSLバックエンドだけを実行します。変更するとT3 Codeを再起動します。",
-  "Pairing links and client-session management require the access:write scope for this backend.":
-    "ペアリングリンクとクライアントのセッションを管理するには、このバックエンドのaccess:write権限が必要です。",
+  "Connect an environment to view its settings and access.":
+    "設定とアクセス権限を見るには、環境に接続してください。",
   "Choice value": "選択肢の値",
   "Choice label": "選択肢の表示名",
   "Default choice": "既定の選択肢",
@@ -2311,7 +2292,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Third-party notices": "第三者のライセンス表記",
   "Replay panel animation preview": "パネルの動きを再表示",
   "Commands that run in this project's checkout or its worktree, with optional shortcuts.":
-    "プロジェクトの作業コピーやworktreeで実行するコマンドです。ショートカットも設定できます。",
+    "プロジェクトの作業コピーや作業ツリーで実行するコマンドです。ショートカットも設定できます。",
   "Different actions across environments": "環境ごとに異なるアクション",
   "Choose one environment to edit its list. Adding an action here adds it on every selected environment.":
     "一覧を編集する環境を1つ選んでください。ここで追加するアクションは、選択したすべての環境へ追加します。",
@@ -2323,8 +2304,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Default workspace": "既定の作業場所",
   "default permissions": "既定の権限",
   "Default permissions": "既定の権限",
-  "worktree submodules": "worktreeのサブモジュール",
-  "Worktree submodules": "worktreeのサブモジュール",
+  "worktree submodules": "作業ツリーのサブモジュール",
+  "Worktree submodules": "作業ツリーのサブモジュール",
   "default automatic pull": "既定の自動pull",
   "Reset automatic pull to off": "自動pullを無効に戻す",
   "Default automatic pull": "既定の自動pull",
@@ -2431,15 +2412,15 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Model for source control text and branch or bookmark names. Off uses the environment's text generation model.":
     "変更説明とブランチ・ブックマーク名を作成するモデルです。無効の場合は環境の文章生成モデルを使います。",
   "Use a separate source control writer model": "変更説明用のモデルを個別に指定",
-  Worktrees: "worktree",
+  Worktrees: "作業ツリー",
   "Remove unused worktrees when active or archived threads are deleted. Worktrees with local changes are kept.":
-    "有効またはアーカイブ済みのスレッドを削除したとき、未使用のworktreeを削除します。ローカル変更がある場合は保持します。",
+    "有効またはアーカイブ済みのスレッドを削除したとき、未使用の作業ツリーを削除します。ローカル変更がある場合は保持します。",
   "Remove worktrees after their threads have been inactive for this many days. Branches and thread history are kept.":
-    "スレッドが指定日数使われていないworktreeを削除します。ブランチと会話履歴は保持します。",
+    "スレッドが指定日数使われていない作業ツリーを削除します。ブランチと会話履歴は保持します。",
   "Remove worktrees whose pull request is merged and whose commits are included in the default branch.":
-    "プルリクエストがマージ済みで、コミットが既定ブランチに含まれるworktreeを削除します。",
+    "プルリクエストがマージ済みで、コミットが既定ブランチに含まれる作業ツリーを削除します。",
   "Remove worktrees with no commits beyond the default branch.":
-    "既定ブランチにないコミットを持たないworktreeを削除します。",
+    "既定ブランチにないコミットを持たない作業ツリーを削除します。",
   "Delete saved browser captures after this many days. Older capture links will no longer open.":
     "指定日数を超えたブラウザのキャプチャを削除します。古いキャプチャのリンクは開けなくなります。",
   "Delete inactive rotated log files after this many days. Current logs are kept.":
@@ -2497,10 +2478,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Failed to switch checkout": "作業コピーを切り替えられませんでした",
   "Checkout switched, but the thread could not be updated":
     "作業コピーは切り替えましたが、スレッドを更新できませんでした",
-  "Thread woke from snooze": "スレッドの休止が終了しました",
-  "Send a message to continue": "メッセージを送信して続ける",
-  "Resume with less context": "コンテキストを減らして再開",
-  "Some attachments stayed queued": "一部の添付は送信待ちのままです",
+  "Woke from snooze": "休止が終了しました",
   "Annotation attached to draft": "注釈を下書きへ添付しました",
   "Sending is unavailable right now. Finish the current action, then send.":
     "今は送信できません。現在の操作を完了してから送信してください。",
@@ -2520,9 +2498,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Only invited people": "招待したユーザーのみ",
   Public: "公開",
   "Anyone on the web": "Web上のすべてのユーザー",
-  "No open pull request found.": "オープンなプルリクエストが見つかりません。",
   "Action failed": "操作に失敗しました",
-  "Pulling...": "pull中…",
+  "Pulling latest changes...": "最新の変更をpull中…",
   "Pull failed": "pullに失敗しました",
   "Editor opening is unavailable.": "エディターを開く機能を利用できません。",
   "Git initialization failed": "Gitの初期化に失敗しました",
@@ -2642,7 +2619,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "The reaction could not be saved": "リアクションを保存できませんでした",
   "Request changes": "変更を依頼",
   "The review could not be submitted": "レビューを提出できませんでした",
-  "Stack operation did not complete": "スタックの操作を完了できませんでした",
   "Could not save the description": "説明を保存できませんでした",
   "Pull request opened": "プルリクエストを作成しました",
   "Pull request merged": "プルリクエストをマージしました",
@@ -2831,7 +2807,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
 
   "{0}. Use arrow keys to resize.": "{0}。矢印キーでサイズを変更できます。",
   "{0} done": "{0}件完了",
-  "{0} active · {1} done": "{0}件実行中・{1}件完了",
   "{0} template": "{0}テンプレート",
   "Language: {0}": "言語：{0}",
   "Failed to copy {0}": "{0}をコピーできませんでした",
@@ -2847,9 +2822,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "{0} {1} working": "{0} {1}が作業中",
   "This thread is {0}": "このスレッドは{0}です",
   "Send a message to {0}": "{0}にメッセージを送信",
-  "{0} tokens from earlier": "以前のトークン数：{0}",
-  "A message holds at most {0} attachments. Use Send now on the queued row when you want the rest to go.":
-    "1件のメッセージに添付できるのは最大{0}件です。残りは待機行の「今すぐ送信」で送信できます。",
   "Could not start {0}": "{0}を開始できませんでした",
   "Started {0} {1} in background": "{0} {1}をバックグラウンドで開始しました",
   "Appearance: {0}": "外観：{0}",
@@ -2979,7 +2951,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Terminal context expired. Remove and re-add {0} to include it in your message.":
     "ターミナルのコンテキストが期限切れです。メッセージに含めるには{0}を追加し直してください。",
   "{0}, zoomable image": "{0}、拡大可能な画像",
-  'Queued message not sent in "{0}"': "「{0}」の待機中メッセージは送信されていません",
   "{0}. View machines": "{0}。マシンを表示",
   "Ready to update to {0}": "{0}に更新できます",
   "{0} {1} a manual update": "{0} {1}は手動更新が必要です",
@@ -3018,13 +2989,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Stacked on {0}": "{0}をベースにスタック",
   "{0} changed {1}": "{0}が{1}を変更しました",
   "This merges #{0} using {1}.": "{1}で #{0}をマージします。",
-  "This merges #{0} using {1} as soon as the host considers it ready, which may be immediately.":
-    "ホストで準備が整い次第、{1}で #{0}をマージします。直ちに実行される場合があります。",
-  "This opens a new pull request that reverses the changes merged by #{0}.":
-    "#{0}でマージした変更を取り消す新しいプルリクエストを作成します。",
-  "This allows {0} {1} from #{2} to run. Review the code and workflow changes first.":
-    "#{2}の{0} {1}の実行を許可します。先にコードとワークフローの変更を確認してください。",
-  "This closes #{0} without merging it.": "#{0}をマージせずに閉じます。",
   "Could not take {0} off": "{0}を外せませんでした",
   "Could not put {0} on": "{0}を追加できませんでした",
   "{0} selected": "{0}件選択中",
@@ -3041,7 +3005,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
     "リモートブランチを下から順に{0}へリベースします。ブランチの履歴が書き換わり、チェックが再実行される場合があります。途中で失敗しても、それ以前の更新は残ります。",
   "Comments ({0})": "コメント（{0}件）",
   "{0} bot comment{1}": "Botのコメント{0}件{1}",
-  "{0} resolved or dismissed comment{1}": "解決済みまたは非表示のコメント{0}件{1}",
   "View commit {0}": "コミット{0}を表示",
   "GitHub stack of {0}: merging a layer lands the ones below it.":
     "GitHubの{0}件のスタック：1つの層をマージすると、その下の層もマージされます。",
@@ -3107,7 +3070,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Remove checkout {0}": "チェックアウト{0}を削除",
   "Deletes all {0} checkout entries and their threads on every machine. Files on disk are not touched.":
     "すべてのマシンで{0}のチェックアウトとスレッドを削除します。ディスク上のファイルは保持します。",
-  "Choose accent color for {0}": "{0}のアクセントカラーを選択",
+  "Change accent color for {0}": "{0}のアクセントカラーを変更",
+  "Add accent color for {0}": "{0}にアクセントカラーを追加",
   "Environment variable name {0}": "環境変数{0}の名前",
   "Environment variable value {0}": "環境変数{0}の値",
   "Mark environment variable {0} as sensitive": "環境変数{0}を機密扱いにする",
@@ -3134,10 +3098,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "{0} family": "{0}系列",
   "{0} + Enter for multiline prompts": "複数行の指示では{0} + Enter",
   "{0} + Enter always": "常に{0} + Enter",
-  "Press {0} + Enter for single-line prompts or {1} + Shift + Enter for multiline prompts to do the opposite for one message.":
-    "1件のメッセージだけ逆の操作にするには、1行の指示では{0} + Enter、複数行では{1} + Shift + Enterを押してください。",
-  "Press {0}{1} + Enter to do the opposite for one message.":
-    "1件のメッセージだけ逆の操作にするには{0}{1} + Enterを押してください。",
   "{0} (one environment)": "{0}（1つの環境）",
   "Set up snapshots for {0}": "{0}のスナップショットを設定",
   "Toggle {0} details": "{0}の詳細表示を切り替え",
@@ -3217,7 +3177,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Lock aspect ratio": "縦横比を固定",
   "Unlock aspect ratio": "縦横比の固定を解除",
   pending: "待機中",
-  "Each model starts in its own worktree.": "各モデルは個別のワークツリーで開始します。",
+  "Each model starts in its own worktree.": "各モデルは個別の作業ツリーで開始します。",
   "An error occurred.": "エラーが発生しました。",
   "The file could not be loaded. It may have been moved or deleted.":
     "ファイルを読み込めませんでした。移動または削除された可能性があります。",
@@ -3251,8 +3211,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
     "利用可能なリソースを持つマシンがありません。入力欄でマシンを選ぶと上書きできます。",
   "An error occurred while creating the new thread.":
     "新しいスレッドの作成中にエラーが発生しました。",
-  " Files stay as they are because this thread shares the project directory.":
-    " このスレッドはプロジェクトのディレクトリを共有するため、ファイルは保持されます。",
   "Linked thread": "リンク済みのスレッド",
   "Archived thread": "アーカイブ済みのスレッド",
   "Recent Threads": "最近のスレッド",
@@ -3274,8 +3232,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Show file tree": "ファイルツリーを表示",
   " Totals include all changes.": " 合計にはすべての変更を含みます。",
   "Loading checkpoint diff...": "チェックポイントの差分を読み込み中…",
-  "Loading working tree diff...": "作業ツリーの差分を読み込み中…",
-  "Loading branch diff...": "ブランチの差分を読み込み中…",
   "No net changes in this selection.": "選択範囲に変更はありません。",
   "No patch available for this selection.": "選択範囲のパッチはありません。",
   "Expand diff": "差分を展開",
@@ -3311,8 +3267,8 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Provider updated": "プロバイダーを更新しました",
   "Provider updates finished": "プロバイダーの更新が完了しました",
   "Preparing local...": "ローカル環境を準備中…",
-  "Preparing worktree...": "ワークツリーを準備中…",
-  Worktree: "ワークツリー",
+  "Preparing worktree...": "作業ツリーを準備中…",
+  Worktree: "作業ツリー",
   "Unmute tab": "タブのミュートを解除",
   "Mute tab": "タブをミュート",
   "Pending Approval": "承認待ち",
@@ -3374,8 +3330,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "No accessibility data": "アクセシビリティ情報がありません",
   "Link to thread": "スレッドにリンク",
   "Unlink from thread": "スレッドのリンクを解除",
-  "Queued message not sent": "待機中のメッセージは送信されていません",
-  "Use Send now to try again.": "「今すぐ送信」で再試行してください。",
   "Reconnect this machine to update": "更新するにはこのマシンに再接続してください",
   "Update all": "すべて更新",
   "Deregistering…": "登録を解除中…",
@@ -3402,7 +3356,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Attach Magic Keyboard": "Magic Keyboardを取り付ける",
   "Fold shape": "折りたたみ形状",
   "Device stance": "デバイスの姿勢",
-  " / bookshelf": " / 本棚",
   available: "利用可能",
   unavailable: "利用不可",
   "Retrying…": "再試行中…",
@@ -3518,7 +3471,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "This repository is on the pull request's branch, with a thread open on it.":
     "このリポジトリはプルリクエストのブランチにあり、スレッドが開かれています。",
   "The pull request is in its own worktree, with a thread open on it.":
-    "プルリクエストは個別のワークツリーにあり、スレッドが開かれています。",
+    "プルリクエストは個別の作業ツリーにあり、スレッドが開かれています。",
   "Checking out...": "チェックアウト中…",
   "Check out": "チェックアウト",
   "Preparing...": "準備中…",
@@ -3546,12 +3499,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Newest first": "新しい順",
   "Oldest first": "古い順",
   "Merge pull request?": "プルリクエストをマージしますか？",
-  "Enable auto-merge?": "自動マージを有効にしますか？",
-  "Revert these changes?": "変更を取り消しますか？",
-  "Approve workflows to run?": "ワークフローの実行を承認しますか？",
-  "Close pull request?": "プルリクエストを閉じますか？",
-  "Create revert PR": "変更を取り消すPRを作成",
-  "Approve and run": "承認して実行",
   "Nothing under these filters": "条件に一致する項目がありません",
   "No pull requests": "プルリクエストがありません",
   "Widen the state, involvement or project filter to see more.":
@@ -3795,9 +3742,9 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Default permissions for new threads. Projects can override them.":
     "新しいスレッドの既定の権限。プロジェクトで上書きできます。",
   "How new worktrees in this project populate git submodules.":
-    "このプロジェクトの新しいワークツリーでのGitサブモジュールの取り込み方法。",
+    "このプロジェクトの新しい作業ツリーでのGitサブモジュールの取り込み方法。",
   "How new worktrees populate git submodules. Projects and their t3.json can override it.":
-    "新しいワークツリーでのGitサブモジュールの取り込み方法。プロジェクトやt3.jsonで上書きできます。",
+    "新しい作業ツリーでのGitサブモジュールの取り込み方法。プロジェクトやt3.jsonで上書きできます。",
   "Keeps this project's default branch current when the checkout has no local changes or commits.":
     "チェックアウトにローカルの変更やコミットがない場合、このプロジェクトの既定ブランチを最新に保ちます。",
   "Keeps the default branch current when the checkout has no local changes or commits. Projects can override it.":
@@ -3844,13 +3791,9 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Retry installation": "インストールを再試行",
   "Install managed runtime": "管理対象の実行環境をインストール",
   "Install Antigravity": "Antigravityをインストール",
-  "Connect your Google account.": "Googleアカウントに接続してください。",
-  "Connect with the credentials below.": "以下の認証情報で接続してください。",
-  "Link copied": "リンクをコピーしました",
+  "Enter your credentials below.": "下に認証情報を入力してください。",
   "Copy sign-in link": "ログインのリンクをコピー",
-  "Retry Google sign-in": "Googleへのログインを再試行",
   "Sign in with Google": "Googleでログイン",
-  "Sign out of Google": "Googleからログアウト",
   process: "プロセス",
   processes: "プロセス",
   "Available when this page runs inside the desktop app.":
@@ -3864,8 +3807,10 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Red & green": "赤と緑",
   "The selected targets use different streaming modes.":
     "選択した対象は異なるストリーミング方式を使用しています。",
-  "Queue follow-ups while the agent runs or steer the current run. ":
-    "エージェントの実行中に追加の指示を待機列に入れるか、現在の実行に反映します。",
+  "Queue follow-ups while the agent runs or steer the current run. Press {0} + Enter for single-line prompts or {1} + Shift + Enter for multiline prompts to do the opposite for one message.":
+    "エージェントの実行中は、追加の指示を待機列に入れるか、今の実行に割り込ませます。1件だけ逆にするには、1行の指示では{0} + Enter、複数行では{1} + Shift + Enterを押します。",
+  "Queue follow-ups while the agent runs or steer the current run. Press {0} + Enter to do the opposite for one message.":
+    "エージェントの実行中は、追加の指示を待機列に入れるか、今の実行に割り込ませます。1件だけ逆にするには{0} + Enterを押します。",
   "Inspect processes, resource use, and logs on this environment.":
     "この環境のプロセス・リソース使用量・ログを確認します。",
   "Inspect processes, resource use, and logs on one environment at a time.":
@@ -3874,7 +3819,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Could not load archived threads": "アーカイブ済みのスレッドを読み込めませんでした",
   "No archived threads": "アーカイブ済みのスレッドがありません",
   "Checking connected environments.": "接続済みの環境を確認中です。",
-  " · Created ": "・作成日時：",
   across: "対象：",
   "Environment scope": "環境の範囲",
   "Unavailable environment": "利用できない環境",
@@ -3909,9 +3853,9 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Install Git on the server, add optional hosting integrations or credentials your workspace needs, then rescan.":
     "サーバーにGitをインストールし、必要なホスティング連携や認証情報を追加してから再検出してください。",
   "Keep this project's worktrees until you delete them manually.":
-    "手動で削除するまで、このプロジェクトのワークツリーを保持します。",
+    "手動で削除するまで、このプロジェクトの作業ツリーを保持します。",
   "Use these rules for this project.": "このプロジェクトにこれらのルールを適用します。",
-  "Use each machine's worktree cleanup settings.": "各マシンのワークツリー整理設定を使用します。",
+  "Use each machine's worktree cleanup settings.": "各マシンの作業ツリー整理設定を使用します。",
   "Your changes are now active.": "変更を適用しました。",
   "Your changes are saved.": "変更を保存しました。",
   "e.g. Aurora": "例：Aurora",
@@ -3975,14 +3919,13 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   Day: "日",
   environment: "環境",
   environments: "環境",
-  "; totals are partial": "。合計は一部の値です",
   "Connect an environment to set model prices.":
     "モデルの価格を設定するには環境に接続してください。",
   "Select an environment to see and change its model prices.":
     "モデルの価格を確認・変更する環境を選んでください。",
   "Some environment prices are unavailable.": "一部の環境の価格を取得できません。",
-  "No custom prices. Add a row to override automatic pricing.":
-    "独自の価格設定がありません。自動価格を上書きするには行を追加してください。",
+  "No custom prices or mappings. Add a row to set one.":
+    "独自の価格や対応付けはありません。設定するには行を追加してください。",
   "Input rate": "入力単価",
   "Remove new model": "新しいモデルを削除",
   "Undo reset": "リセットを取り消す",
@@ -3995,9 +3938,9 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Discard changes": "変更を破棄",
   "Retry failed saves": "失敗した保存を再試行",
   "Could not open file": "ファイルを開けませんでした",
-  "Failed to delete worktree": "ワークツリーを削除できませんでした",
+  "Failed to delete worktree": "作業ツリーを削除できませんでした",
   "Worktree deleted, but Git status refresh failed":
-    "ワークツリーを削除しましたが、Gitの状態を更新できませんでした",
+    "作業ツリーを削除しましたが、Gitの状態を更新できませんでした",
   Unpinned: "ピン留めを解除しました",
   "Copy error": "エラーをコピー",
   "Unknown error opening file.": "ファイルを開く際に不明なエラーが発生しました。",
@@ -4017,7 +3960,6 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
     "一致するコマンド・プロジェクト・スレッドがありません。",
   "No description is available for this skill.": "このスキルの説明はありません。",
   "This action requires your confirmation.": "この操作には確認が必要です。",
-  "Running git action...": "Git操作を実行中…",
   "(detached HEAD)": "（切り離されたHEAD）",
   "Run action on default branch?": "既定のブランチで実行しますか？",
   "The backend didn't respond.": "バックエンドから応答がありません。",
@@ -4070,9 +4012,7 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "Drop T3 Code or VS Code .json files": "T3 CodeまたはVS Codeの.jsonファイルをドロップ",
   "A community color theme for your editor.": "コミュニティが公開したエディターのカラーテーマ。",
   "this thread": "このスレッド",
-  "\n… (truncated)": "\n…（省略）",
   "{0} folders": "{0}個のフォルダー",
-  "Reset it": "リセット",
   "Copied error": "エラーをコピーしました",
   "Preparing feature ref...": "機能用の参照を準備中…",
   "Pushing to {0}...": "{0}にプッシュ中…",
@@ -4116,30 +4056,10 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
     "書いた条件を満たすまで、作業を続けます（/goal）。",
   "Drop on the chat area to open it": "会話エリアに落とすと開きます",
   "Split right with {0}, down with {1}": "{0} で右に、{1} で下に分割できます",
-  "Handing the conversation over to {0}": "{0} に引き継いでいます",
-  "Cancelling the switch and returning to the previous model":
-    "乗り換えを取り消して、元のモデルに戻しています",
-  "Cancelling the model switch": "乗り換えを取り消しています",
-  "Could not switch to {0}": "{0} に切り替えられませんでした",
-  "Cancel this message": "送信をやめる",
-  "Cancel and go back to {0}": "送信をやめて {0} に戻す",
-  "Could not confirm that the message reached {0}": "{0} に送信が届いたか確認できません",
   "Send again": "もう一度送る",
-  "Close without sending": "送らずに閉じる",
-  "The next message hands over from {0} to {1}": "次の送信で {0} → {1} に引き継ぎます",
-  "The next message hands the conversation to {0} again":
-    "次の送信で、会話を {0} に引き継ぎ直します",
-  "Cancel the switch": "乗り換えを取り消す",
   "Switching models": "モデルの乗り換え中です",
-  "This model cannot take over the conversation yet":
-    "このモデルへの乗り換えはまだ対応していません",
-  "From here: {0} ({1})": "ここから {0}（{1}）",
-  "See what was handed over": "引き継ぎ内容を見る",
   Handoff: "引き継ぎ内容",
   "What {0} received": "{0} に渡した引き継ぎ内容",
-  "{0} characters · {1} messages included · {2} left out":
-    "{0} 文字・含めた発言 {1} 件・省いた発言 {2} 件",
-  "Could not load what was handed over": "引き継ぎ内容を読み込めませんでした",
   "Amu {0} is available. Click to download.": "Amu {0} が出ました。クリックでダウンロードします",
   "Downloading update ({0}%)": "更新をダウンロード中（{0}%）",
   "Downloading update": "更新をダウンロード中",

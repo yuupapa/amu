@@ -58,6 +58,23 @@ describe("translateUiCopy", () => {
     expect(translateUiCopy("2 removed, 5 kept, 1 failed")).toBe("削除 2・保持 5・失敗 1");
   });
 
+  it("translates copy upstream reworded", () => {
+    expect(
+      translateUiCopy(
+        "Open linked pull requests first. Otherwise, open Changes for edits to at least 3 files or 50 lines.",
+      ),
+    ).not.toBeNull();
+    // One concatenated description, with or without Shift.
+    for (const shortcut of ["⌘", "Ctrl + Shift"]) {
+      expect(
+        translateUiCopy(
+          `Queue follow-ups while the agent runs or steer the current run. Press ${shortcut} + Enter to do the opposite for one message.`,
+        ),
+      ).toContain(`${shortcut} + Enter`);
+    }
+    expect(translateUiCopy("Change accent color for Codex")).toBe("Codexのアクセントカラーを変更");
+  });
+
   it("leaves unknown text alone", () => {
     expect(translateUiCopy("refactor the parser")).toBeNull();
   });
