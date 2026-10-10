@@ -4280,4 +4280,15 @@ export const japaneseUiText: Readonly<Record<string, string>> = {
   "These permissions apply to your active route. Other routes may have different permissions.":
     "この権限は、今使っている経路に適用されます。ほかの経路では権限が異なる場合があります。",
   "Starting update": "更新を開始しています",
+  "t3 command": "t3 コマンド",
+  "Could not install t3": "t3 コマンドを入れられませんでした",
+  "Could not remove t3": "t3 コマンドを外せませんでした",
+  "Run T3 Code's CLI as `t3` from any terminal.":
+    "Amu の CLI を、どのターミナルからでも `t3` で使えるようにします。",
+  "Another t3 at {0} runs first in a new terminal. Remove it to use T3 Code's.":
+    "{0} にある別の t3 が、新しいターミナルで先に動きます。Amu の t3 を使うには、そちらを外してください。",
+  "Installed at {0}. Open a new terminal to use it.":
+    "{0} に入れました。使うには新しいターミナルを開いてください。",
+  "Installed at {0}, which is not on your PATH yet. Add its folder to your PATH to run `t3`.":
+    "{0} に入れましたが、まだ PATH に入っていません。`t3` を使うには、このフォルダーを PATH に足してください。",
 };
