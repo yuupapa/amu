@@ -39,6 +39,25 @@ describe("translateUiCopy", () => {
     expect(translateUiCopy("5m ago")).toBe("5分前");
   });
 
+  it("translates copy added by the 2026-10-10 upstream sync", () => {
+    expect(translateUiCopy("Open on this computer")).toBe("このコンピューターで開く");
+    expect(translateUiCopy("Open in Studio Mac's browser")).toBe("Studio Mac のブラウザーで開く");
+    expect(translateUiCopy("Open in the environment's browser")).toBe("環境のブラウザーで開く");
+    expect(
+      translateUiCopy("This connection lacks permission to change settings on Laptop, Server."),
+    ).toBe("この接続には、Laptop, Server の設定を変える権限がありません。");
+    expect(
+      translateUiCopy(
+        "This connection lacks permission to change settings on the selected environment.",
+      ),
+    ).toBe("この接続には、選んだ環境 の設定を変える権限がありません。");
+    expect(translateUiCopy("Find in thread")).toBe("スレッド内を検索");
+    expect(translateUiCopy("Keep worktrees with local changes")).toBe(
+      "ローカルの変更がある作業ツリーを残す",
+    );
+    expect(translateUiCopy("2 removed, 5 kept, 1 failed")).toBe("削除 2・保持 5・失敗 1");
+  });
+
   it("leaves unknown text alone", () => {
     expect(translateUiCopy("refactor the parser")).toBeNull();
   });
