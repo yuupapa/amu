@@ -371,3 +371,25 @@ export const removeReviewCopy = async (
   await NodeFSP.rm(servingRoot, { recursive: true });
   return true;
 };
+
+/** At service startup no review copy has a live owner. Only remove our strict-id folders. */
+export const removeStaleReviewCopies = async (stateDir: string): Promise<void> => {
+  const rootPath = NodePath.join(stateDir, "creator");
+  if (!(await plainDir(rootPath))) return;
+  const stats = await NodeFSP.lstat(rootPath, { bigint: true });
+  const root: CreatorRoot = { path: rootPath, dev: stats.dev, ino: stats.ino };
+  const review = NodePath.join(rootPath, "review");
+  await verifyDir(root);
+  if (!(await plainDir(review))) return;
+  for (const projectId of await NodeFSP.readdir(review)) {
+    if (!PROJECT_ID.test(projectId)) continue;
+    await verifyDir(root);
+    if (!(await plainDir(review))) return;
+    const project = NodePath.join(review, projectId);
+    if (!(await plainDir(project))) continue;
+    for (const openId of await NodeFSP.readdir(project)) {
+      if (!OPEN_ID.test(openId)) continue;
+      await removeReviewCopy(root, projectId, openId);
+    }
+  }
+};

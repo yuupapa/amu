@@ -48,6 +48,7 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -66,7 +67,13 @@ import { CreatorFileError, openCreatorRoot } from "./creatorFiles.ts";
 import { realPathInside, scanForOutwardLinks } from "./creatorPaths.ts";
 import * as CreatorPreviewSupervisor from "./CreatorPreviewSupervisor.ts";
 import { CreatorService, creatorProjectIdFor, isLocalCreatorHost } from "./CreatorService.ts";
-import { FfprobeError, makeReviewProject, removeReviewCopy, runFfprobe } from "./reviewProject.ts";
+import {
+  FfprobeError,
+  makeReviewProject,
+  removeReviewCopy,
+  removeStaleReviewCopies,
+  runFfprobe,
+} from "./reviewProject.ts";
 
 export interface CreatorOpenInput {
   /** Agent: inside the thread's workspace, relative to it or absolute. User: absolute. */
@@ -88,6 +95,8 @@ export interface CreatorOpenOptions {
   readonly ffprobe?: (file: string) => Promise<number>;
   /** Test seam: runs after an open was released (tab closed, setting off, reopened). */
   readonly afterRelease?: (bindingId: CreatorBindingId) => Effect.Effect<void>;
+  /** Test seam: shutdown refused new requests, before waiting for admitted opens. */
+  readonly afterShutdownStarted?: Effect.Effect<void>;
 }
 
 const VIDEO_EXTENSIONS: ReadonlySet<string> = new Set(["mp4", "mov", "webm"]);
@@ -206,7 +215,29 @@ export const make = (options: CreatorOpenOptions = {}) =>
     const ffprobe = options.ffprobe ?? ((file: string) => runFfprobe(file));
     const afterRelease = options.afterRelease ?? (() => Effect.void);
 
+    // Finish startup cleanup before any request can own a copy. Never follows links.
+    yield* tryFile("cleanup_review_copies", () => removeStaleReviewCopies(config.stateDir)).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Amu Creator review-copy cleanup failed", { cause }),
+      ),
+      Effect.uninterruptible,
+    );
+
     const opens = new Map<CreatorBindingId, LiveOpen>();
+    let closing = false;
+    let activeOpens = 0;
+    let drained = Deferred.makeUnsafe<void>();
+    const admitOpen = Effect.suspend(() => {
+      if (closing) return Effect.fail(operationError("unavailable", "creator_stopped"));
+      if (activeOpens++ === 0) drained = Deferred.makeUnsafe<void>();
+      return Effect.void;
+    });
+    const finishOpen = Effect.suspend(() => {
+      activeOpens -= 1;
+      return activeOpens === 0
+        ? Deferred.succeed(drained, undefined).pipe(Effect.asVoid)
+        : Effect.void;
+    });
     const lockMap = <K>() => {
       const locks = new Map<K, Semaphore.Semaphore>();
       return (key: K) => {
@@ -367,9 +398,12 @@ export const make = (options: CreatorOpenOptions = {}) =>
               const known = reviewCopyError(error.cause);
               return known !== null ? Effect.fail(known) : unavailableAfterLog(error);
             }),
+            // The Promise cannot abort: wait for it and register its undo before
+            // honouring interruption, otherwise the copy loses its owner.
+            Effect.tap(() => Effect.sync(() => undo.push(removeCopy(projectId, id)))),
+            Effect.uninterruptible,
           );
           openId = id;
-          undo.push(removeCopy(projectId, id));
           // The state folder may sit under a symlink (macOS /var); serve and key by the real path.
           servingRoot = yield* filePromise("review_copy", () =>
             NodeFSP.realpath(review.servingRoot),
@@ -461,7 +495,7 @@ export const make = (options: CreatorOpenOptions = {}) =>
       );
     };
 
-    const open: CreatorOpen["Service"]["open"] = Effect.fn("CreatorOpen.open")(function* (input) {
+    const openOperation = Effect.fn("CreatorOpen.open")(function* (input: CreatorOpenInput) {
       yield* requireLocal;
       const { destination, workspace } = yield* threadContext(input);
       const located = yield* filePromise("locate", () => locate(input, workspace));
@@ -475,6 +509,22 @@ export const make = (options: CreatorOpenOptions = {}) =>
       );
     });
 
+    // Registered after subscriptions: release resources while dependencies are
+    // still live. An admitted request must finish (including its undo) first.
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        closing = true;
+        if (options.afterShutdownStarted) yield* options.afterShutdownStarted;
+        if (activeOpens > 0) yield* Deferred.await(drained);
+        yield* Effect.forEach([...opens.values()], releaseLocked, { discard: true });
+      }),
+    );
+    const open: CreatorOpen["Service"]["open"] = (input) =>
+      Effect.acquireUseRelease(
+        admitOpen,
+        () => openOperation(input),
+        () => finishOpen,
+      );
     return CreatorOpen.of({ open });
   });
 

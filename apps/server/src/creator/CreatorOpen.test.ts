@@ -13,11 +13,15 @@ import {
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
@@ -40,6 +44,9 @@ interface HarnessOptions {
   readonly enabled?: boolean;
   readonly mode?: "web" | "desktop";
   readonly available?: boolean;
+  readonly ffprobe?: (file: string) => Promise<number>;
+  readonly beforeBuild?: (stateDir: string) => Promise<void>;
+  readonly afterShutdownStarted?: Effect.Effect<void>;
 }
 
 type EnsureBehaviour = "ok" | "bad_url" | "limit";
@@ -125,10 +132,18 @@ const harness = (options: HarnessOptions = {}) =>
         available: options.available ?? true,
       }),
     );
-    const context = yield* Layer.build(
+    if (options.beforeBuild) {
+      yield* Effect.promise(() => options.beforeBuild!(config.stateDir));
+    }
+    const serviceScope = yield* Scope.make();
+    yield* Effect.addFinalizer(() => Scope.close(serviceScope, Exit.void));
+    const context = yield* Layer.buildWithScope(
       CreatorOpen.layerWith({
-        ffprobe: async () => 2,
+        ffprobe: options.ffprobe ?? (async () => 2),
         afterRelease: (bindingId) => Queue.offer(released, bindingId).pipe(Effect.asVoid),
+        ...(options.afterShutdownStarted
+          ? { afterShutdownStarted: options.afterShutdownStarted }
+          : {}),
       }).pipe(
         Layer.provideMerge(CreatorService.layer),
         Layer.provideMerge(PreviewManager.layer),
@@ -143,6 +158,7 @@ const harness = (options: HarnessOptions = {}) =>
         ),
         Layer.provideMerge(deps),
       ),
+      serviceScope,
     );
     const opener = Context.get(context, CreatorOpen.CreatorOpen);
     const creator = Context.get(context, CreatorService.CreatorService);
@@ -179,6 +195,7 @@ const harness = (options: HarnessOptions = {}) =>
       outside,
       config,
       opener,
+      closeService: Scope.close(serviceScope, Exit.void),
       creator,
       previews,
       ensured,
@@ -198,6 +215,109 @@ const harness = (options: HarnessOptions = {}) =>
   });
 
 it.layer(NodeServices.layer)("CreatorOpen", (it) => {
+  it.effect("an interrupted video open waits for its copy and removes it", () =>
+    Effect.gen(function* () {
+      const entered = Promise.withResolvers<void>();
+      const probe = Promise.withResolvers<number>();
+      let copiedFile = "";
+      const h = yield* harness({
+        ffprobe: (file) => {
+          copiedFile = file;
+          entered.resolve();
+          return probe.promise;
+        },
+      });
+      const clip = yield* h.video(NodePath.join(h.work, "clip.mp4"));
+      const opening = yield* h.opener
+        .open({ path: clip, threadId, openedBy: "user" })
+        .pipe(Effect.forkScoped);
+      yield* Effect.promise(() => entered.promise);
+      const interrupted = yield* Fiber.interrupt(opening).pipe(Effect.forkScoped);
+      probe.resolve(2);
+      yield* Fiber.join(interrupted);
+      expect(yield* h.exists(NodePath.dirname(copiedFile))).toBe(false);
+      expect(h.ensured).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("closing the service releases live tabs, previews and review copies", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const clip = yield* h.video(NodePath.join(h.work, "clip.mp4"));
+      const project = yield* h.hyperframes(NodePath.join(h.work, "promo"));
+      const mp4 = yield* h.opener.open({ path: clip, threadId, openedBy: "user" });
+      const hf = yield* h.opener.open({ path: project, threadId, openedBy: "user" });
+      const copy = h.ensured[0]!;
+      yield* h.closeService;
+      expect(h.stopped.toSorted()).toEqual([copy, project].toSorted());
+      expect(yield* h.exists(copy)).toBe(false);
+      expect((yield* h.previews.list({ threadId })).sessions).toEqual([]);
+      for (const binding of [mp4, hf]) {
+        expect(yield* Effect.flip(h.creator.requireBinding(binding.bindingId))).toMatchObject(
+          opError("unauthorized"),
+        );
+      }
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("shutdown waits for concurrent opens and refuses new requests", () =>
+    Effect.gen(function* () {
+      const shutdown = yield* Deferred.make<void>();
+      const entered = Promise.withResolvers<void>();
+      const probe = Promise.withResolvers<number>();
+      const copies: string[] = [];
+      const h = yield* harness({
+        afterShutdownStarted: Deferred.succeed(shutdown, undefined).pipe(Effect.asVoid),
+        ffprobe: async (file) => {
+          copies.push(await NodeFSP.realpath(NodePath.dirname(file)));
+          if (copies.length === 2) entered.resolve();
+          return probe.promise;
+        },
+      });
+      const clips = yield* Effect.forEach(["a.mp4", "b.mp4"], (name) =>
+        h.video(NodePath.join(h.work, name)),
+      );
+      const openings = yield* Effect.forEach(clips, (path) =>
+        h.opener.open({ path, threadId, openedBy: "user" }).pipe(Effect.forkScoped),
+      );
+      yield* Effect.promise(() => entered.promise);
+      const closing = yield* h.closeService.pipe(Effect.forkScoped);
+      yield* Deferred.await(shutdown);
+      const refused = yield* Effect.flip(
+        h.opener.open({ path: clips[0]!, threadId, openedBy: "user" }),
+      );
+      expect(refused).toMatchObject({ ...opError("unavailable"), detail: "creator_stopped" });
+      probe.resolve(2);
+      yield* Effect.forEach(openings, Fiber.join);
+      yield* Fiber.join(closing);
+      expect(h.stopped.toSorted()).toEqual(copies.toSorted());
+      for (const copy of copies) expect(yield* h.exists(copy)).toBe(false);
+      expect((yield* h.previews.list({ threadId })).sessions).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("startup removes abandoned review copies and preserves unrelated names", () =>
+    Effect.gen(function* () {
+      const id = "0123456789abcdef0123456789abcdef";
+      const openId = "11111111-1111-4111-8111-111111111111";
+      let copy = "";
+      let unrelated = "";
+      const h = yield* harness({
+        beforeBuild: async (stateDir) => {
+          const project = NodePath.join(stateDir, "creator", "review", id);
+          copy = NodePath.join(project, openId);
+          unrelated = NodePath.join(project, "keep-me");
+          await NodeFSP.mkdir(copy, { recursive: true });
+          await NodeFSP.writeFile(NodePath.join(copy, "video.mp4"), "abandoned");
+          await NodeFSP.mkdir(unrelated);
+          await NodeFSP.writeFile(NodePath.join(unrelated, "sentinel"), "keep");
+        },
+      });
+      expect(yield* h.exists(copy)).toBe(false);
+      expect(yield* h.exists(NodePath.join(unrelated, "sentinel"))).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("an agent opens a HyperFrames folder inside its workspace", () =>
     Effect.gen(function* () {
       const h = yield* harness();

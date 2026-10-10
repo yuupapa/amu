@@ -7,7 +7,13 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { CreatorFileError, openCreatorRoot } from "./creatorFiles.ts";
-import { FfprobeError, makeReviewProject, removeReviewCopy, runFfprobe } from "./reviewProject.ts";
+import {
+  FfprobeError,
+  makeReviewProject,
+  removeReviewCopy,
+  removeStaleReviewCopies,
+  runFfprobe,
+} from "./reviewProject.ts";
 
 const FAKE = NodePath.join(import.meta.dirname, "fixtures", "fake-ffprobe.mjs");
 const PID = "0123456789abcdef0123456789abcdef";
@@ -312,5 +318,40 @@ describe("runFfprobe", () => {
   it("fails on a non-zero exit and on output it cannot read", async () => {
     await expect((await fake("fail")).result).rejects.toMatchObject({ reason: "failed" });
     await expect((await fake("garbage")).result).rejects.toMatchObject({ reason: "bad_output" });
+  });
+});
+
+describe("removeStaleReviewCopies", () => {
+  it("refuses links at every directory level without touching their targets", async () => {
+    const openId = "11111111-1111-4111-8111-111111111111";
+    for (const level of ["creator", "review", "project", "copy"]) {
+      const { base, root } = await setup();
+      const outside = NodePath.join(base, "outside");
+      await NodeFSP.mkdir(outside);
+      const sentinel = NodePath.join(outside, "sentinel");
+      await NodeFSP.writeFile(sentinel, "keep");
+      const path =
+        level === "creator"
+          ? root.path
+          : level === "review"
+            ? NodePath.join(root.path, "review")
+            : level === "project"
+              ? NodePath.join(root.path, "review", PID)
+              : NodePath.join(root.path, "review", PID, openId);
+      if (level === "creator") await NodeFSP.rm(path, { recursive: true });
+      else await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true });
+      await NodeFSP.symlink(outside, path);
+      await expect(removeStaleReviewCopies(NodePath.dirname(root.path))).rejects.toMatchObject({
+        reason: "unsafe_path",
+      });
+      expect((await NodeFSP.lstat(path)).isSymbolicLink()).toBe(true);
+      expect(await NodeFSP.readFile(sentinel, "utf8")).toBe("keep");
+    }
+  });
+
+  it("does not create a Creator root in a state directory without review copies", async () => {
+    const base = await temp();
+    await removeStaleReviewCopies(base);
+    expect(await NodeFSP.readdir(base)).toEqual([]);
   });
 });
