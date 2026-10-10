@@ -30,6 +30,7 @@ const makeHarness = (options: { measure?: CaptureDeps["measure"] } = {}) => {
   const frames: Deferred[] = [];
   const ready: unknown[] = [];
   const settled: Array<{ requestId: string; ok: boolean }> = [];
+  const began: boolean[] = [];
   const deps: CaptureDeps = {
     setTimer: (fn, ms) => {
       const id = nextTimer;
@@ -66,7 +67,10 @@ const makeHarness = (options: { measure?: CaptureDeps["measure"] } = {}) => {
         log.push(`measure ${spec.requestId}`);
         return { rect: { x: 10, y: 20, width: 960, height: 540 } };
       }),
-    onSettled: (spec, ok) => settled.push({ requestId: spec.requestId, ok }),
+    onSettled: (spec, ok, wasBegun) => {
+      settled.push({ requestId: spec.requestId, ok });
+      began.push(wasBegun);
+    },
   };
   const advance = (ms: number) => {
     now += ms;
@@ -77,7 +81,7 @@ const makeHarness = (options: { measure?: CaptureDeps["measure"] } = {}) => {
       }
     }
   };
-  return { deps, log, seeks, frames, ready, settled, advance, timers };
+  return { deps, log, seeks, frames, ready, settled, began, advance, timers };
 };
 
 const spec = (overrides: Partial<CaptureSpec> = {}): CaptureSpec => ({
@@ -253,5 +257,16 @@ describe("createCaptureClient", () => {
     expect(harness.log.at(-1)).toBe("show");
     expect(client.busy()).toBe(false);
     expect(harness.timers.size).toBe(0);
+  });
+
+  it("tells whether main began the capture, so a refused request can ask the user to wait", async () => {
+    const harness = makeHarness();
+    const client = createCaptureClient(harness.deps);
+    client.request(spec());
+    client.done("r1", false);
+    client.request(spec({ requestId: "r2" }));
+    await runBegin(harness, client, "r2");
+    client.done("r2", true);
+    expect(harness.began).toEqual([false, true]);
   });
 });

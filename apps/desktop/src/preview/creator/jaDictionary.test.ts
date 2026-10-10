@@ -59,4 +59,18 @@ describe("translate", () => {
     expect(translate("constructor")).toBeNull();
     expect(translate("toString")).toBeNull();
   });
+
+  it("applies name-carrying patterns only to Studio chrome, not to content", () => {
+    expect(translate("Render final", "chrome")).toBe("「final」を書き出す");
+    expect(translate("Render final", "content")).toBeNull();
+    expect(translate("Close the door", "content")).toBeNull();
+    expect(translate("Intro, 1.5 to 3 seconds", "content")).toBeNull();
+    expect(translate("Play preview of intro.mp4", "content")).toBeNull();
+  });
+
+  it("still translates exact labels and counted patterns in content", () => {
+    expect(translate("Timeline", "content")).toBe("タイムライン");
+    expect(translate("Renders (3)", "content")).toBe("書き出し履歴（3）");
+    expect(translate("4 clips", "content")).toBe("4 個のクリップ");
+  });
 });

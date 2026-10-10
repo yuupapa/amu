@@ -318,20 +318,32 @@ const word = (key: string): string => entry(key) ?? key;
 
 type Pattern = readonly [RegExp, (groups: ReadonlyArray<string>) => string];
 
-/** Labels carrying numbers or names. Each receives the match groups, `groups[0]` unused. */
-const JA_PATTERNS: ReadonlyArray<Pattern> = [
+/** Labels whose variable part is a number. Safe on any Studio text. */
+const COUNTED_PATTERNS: ReadonlyArray<Pattern> = [
   [/^Renders \((\d+)\)$/, ([, a]) => `書き出し履歴（${a}）`],
   [/^Render progress: (\d+)%$/, ([, a]) => `書き出しの進み具合：${a}%`],
+  [/^Hide track (\d+)$/, ([, a]) => `トラック ${a} を隠す`],
+  [/^Show track (\d+)$/, ([, a]) => `トラック ${a} を表示`],
+  [/^(\d+) clips?$/, ([, a]) => `${a} 個のクリップ`],
+  [/^Track (\d+)$/, ([, a]) => `トラック ${a}`],
+  [/^Preview volume: (\d+)%$/, ([, a]) => `プレビューの音量：${a}%`],
+  [/^(\d+) lint findings, including errors$/, ([, a]) => `指摘 ${a} 件（エラーを含む）`],
+  [/^(\d+) lint findings$/, ([, a]) => `指摘 ${a} 件`],
+  [/^(\d+) effects$/, ([, a]) => `エフェクト ${a} 個`],
+];
+
+/**
+ * Labels carrying a name (a file, a layer, a property). They would also match
+ * user content such as a caption "Render final", so they apply only to Studio
+ * chrome: buttons, menus, tabs, labels and tooltip attributes.
+ */
+const NAMED_PATTERNS: ReadonlyArray<Pattern> = [
   [/^Close (.+)$/, ([, a = ""]) => `「${word(a)}」を閉じる`],
   [/^Open composition (.+)$/, ([, a]) => `コンポジション「${a}」を開く`],
   [/^Add (.+) to timeline at playhead$/, ([, a]) => `「${a}」を再生位置でタイムラインに追加`],
   [/^Render (.+)$/, ([, a]) => `「${a}」を書き出す`],
-  [/^Hide track (\d+)$/, ([, a]) => `トラック ${a} を隠す`],
-  [/^Show track (\d+)$/, ([, a]) => `トラック ${a} を表示`],
   [/^Hide (.+) lanes$/, ([, a]) => `「${a}」のレーンを隠す`],
   [/^Show (.+) lanes$/, ([, a]) => `「${a}」のレーンを表示`],
-  [/^(\d+) clips?$/, ([, a]) => `${a} 個のクリップ`],
-  [/^Track (\d+)$/, ([, a]) => `トラック ${a}`],
   [/^Previous (.+) keyframe$/, ([, a = ""]) => `前の「${word(a)}」キーフレームへ`],
   [/^Next (.+) keyframe$/, ([, a = ""]) => `次の「${word(a)}」キーフレームへ`],
   [/^Add (.+) keyframe$/, ([, a = ""]) => `「${word(a)}」のキーフレームを追加`],
@@ -345,9 +357,6 @@ const JA_PATTERNS: ReadonlyArray<Pattern> = [
   [/^Edit (\S+) easing$/, ([, e]) => `動きの緩急（${e}）を編集`],
   [/^(.+), ([\d.]+) to ([\d.]+) seconds$/, ([, a, s, e]) => `${a}（${s}〜${e} 秒）`],
   [/^(.+) • ([\d.]+)s – ([\d.]+)s$/, ([, a, s, e]) => `${a} • ${s}〜${e} 秒`],
-  [/^Preview volume: (\d+)%$/, ([, a]) => `プレビューの音量：${a}%`],
-  [/^(\d+) lint findings, including errors$/, ([, a]) => `指摘 ${a} 件（エラーを含む）`],
-  [/^(\d+) lint findings$/, ([, a]) => `指摘 ${a} 件`],
   [/^Play preview of (.+)$/, ([, a]) => `「${a}」を試し再生`],
   [
     /^(.+) — open, drag to timeline, right-click for actions$/,
@@ -360,23 +369,28 @@ const JA_PATTERNS: ReadonlyArray<Pattern> = [
   [/^Select off-canvas element (.+)$/, ([, a]) => `画面外の要素を選ぶ：${a}`],
   [/^Off-canvas: (.+) — click to select$/, ([, a]) => `画面外の要素：${a}（クリックで選択）`],
   [/^Auto · (.+)$/, ([, a]) => `自動 · ${a}`],
-  [/^(\d+) effects$/, ([, a]) => `エフェクト ${a} 個`],
   [/^fill set · (.+)$/, ([, a]) => `塗り設定 · ${a}`],
 ];
 
+/** Where a text sits: Studio chrome (controls, tooltips) or anything else, including user content. */
+export type TranslationContext = "chrome" | "content";
+
 /**
  * Japanese for one Studio label, keeping its surrounding whitespace, or `null`
- * when the text has no Latin letters or no known translation. Its own output
- * never translates again, so a MutationObserver applying it does not loop.
+ * when the text has no Latin letters or no known translation. Name-carrying
+ * patterns apply only in `chrome`. Its own output never translates again, so a
+ * MutationObserver applying it does not loop.
  */
-export const translate = (raw: string): string | null => {
+export const translate = (raw: string, context: TranslationContext = "chrome"): string | null => {
   const text = raw.trim();
   if (text === "" || !/[A-Za-z]/.test(text)) return null;
   const lead = raw.slice(0, raw.length - raw.trimStart().length);
   const trail = raw.slice(raw.trimEnd().length);
   const exact = entry(text);
   if (exact !== undefined) return lead + exact + trail;
-  for (const [pattern, render] of JA_PATTERNS) {
+  const patterns =
+    context === "chrome" ? [...COUNTED_PATTERNS, ...NAMED_PATTERNS] : COUNTED_PATTERNS;
+  for (const [pattern, render] of patterns) {
     const match = pattern.exec(text);
     if (match) return lead + render(match.map((group) => group ?? "")) + trail;
   }

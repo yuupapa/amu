@@ -14,7 +14,8 @@
  * Messages to main (all `{ generation, payload }`, see `CreatorProtocol.ts`):
  * - draft `{ requestId, timeSec, comment, place: null }`, where `requestId` is
  *   the id of the capture-request sent when the placeholder card was made: the
- *   renderer attaches that request's shot to the comment the draft creates
+ *   renderer attaches that request's shot to the comment the draft creates,
+ *   dedupes drafts by it and reports `draftKeys` back
  * - update `{ commentId, expectedRevision, comment }`
  * - place `{ commentId, expectedRevision, place }`, then a capture-request
  *   `{ purpose: "place", commentId, place }` centered on the point
@@ -41,11 +42,20 @@ import {
 import { normalizePoint, pinCropRect } from "../creatorGeometry.ts";
 import { createCaptureClient, type CaptureClient, type CaptureSpec } from "./captureClient.ts";
 import {
+  attachClosedShadow,
+  composedPath,
+  isTrustedEvent,
+  listen,
+  stopPropagation,
+  swallow,
+} from "./nativeDom.ts";
+import {
   bindPlaceholders,
   commentActions,
   commentStatusLabel,
   formatTime,
   readPanelState,
+  reconcileEdit,
   sendableIds,
   type PanelState,
 } from "./panelState.ts";
@@ -55,12 +65,15 @@ import * as studio from "./studioDom.ts";
 
 const BRAND = "Amu Creator";
 const WAIT_NOTICE = "少し間をあけてください";
+const REFUSED_NOTICE = "送れませんでした（内容が大きすぎるか、形式が正しくありません）";
+const UNSAVED_NOTICE = "保存が終わるまでお待ちください";
 const BROKEN_NOTICE = "Amu Creator の一部が動いていません（HyperFrames の更新の影響）";
 const CONFIRM_NOTE = "Amu の画面で送信を確定してください";
 const TICK_MS = 1_000;
 const SCENE_REFRESH_TICKS = 3;
 const BROKEN_AFTER_MS = 5_000;
-const DRAFT_SAVE_TIMEOUT_MS = 8_000;
+/** After this, an unbound draft shows 「保存を確認中…」 and a manual 「もう一度保存」. */
+const DRAFT_CHECK_AFTER_MS = 8_000;
 const AWAIT_REVISION_MS = 3_000;
 const REFUSAL_MATCH_MS = 2_000;
 const DELETE_CONFIRM_MS = 3_000;
@@ -115,6 +128,8 @@ type Placeholder = {
   /** Text sent with `creator:draft`; `null` while not sent. */
   sentText: string | null;
   sentAt: number;
+  /** Deleted while its draft was in flight: delete the comment once it binds. */
+  deleted: boolean;
 };
 
 type CardView = {
@@ -127,6 +142,7 @@ type CardView = {
   readonly placeText: HTMLSpanElement;
   readonly placeButton: HTMLButtonElement;
   readonly ai: HTMLDivElement;
+  readonly retry: HTMLButtonElement;
   readonly sendOne: HTMLButtonElement;
   readonly remove: HTMLButtonElement;
   readonly cancel: HTMLButtonElement;
@@ -152,7 +168,7 @@ const make = <K extends keyof HTMLElementTagNameMap>(
 const trusted =
   <E extends Event>(handler: (event: E) => void) =>
   (event: E) => {
-    if (event.isTrusted) handler(event);
+    if (isTrustedEvent(event)) handler(event);
   };
 
 const newRequestId = (): string =>
@@ -172,8 +188,17 @@ function createSession(initialGeneration: number) {
   const knownIds = new Set<string>();
   const placeholders: Placeholder[] = [];
   const views = new Map<string, CardView>();
-  /** commentId -> the revision an update or place was sent against, until a newer one arrives. */
+  /**
+   * commentId -> the user's text the server does not show yet. Kept until a
+   * state shows exactly that text; the textarea is never overwritten meanwhile.
+   */
+  const localText = new Map<string, string>();
+  /** commentId -> the revision the in-flight update was sent against. */
   const awaiting = new Map<string, { revision: number; at: number }>();
+  /** commentId -> the revision a place was sent against (shows 「保存中…」). */
+  const placeAwaiting = new Map<string, { revision: number; at: number }>();
+  /** Comments to delete: placeholders deleted while their draft was in flight. */
+  const pendingDeletes = new Set<string>();
   const lastSent = new Map<DesktopPreviewCreatorGuestKind, { key: string; at: number }>();
   let placing: { commentId: string; timeSec: number } | null = null;
   let justProposed = false;
@@ -182,18 +207,18 @@ function createSession(initialGeneration: number) {
   let lastFillAt = 0;
   let sceneSignature = "";
   let markerSignature = "";
-  let observedPlayer: HTMLElement | null = null;
+  let observedPlayer: { player: HTMLElement; remove: () => void } | null = null;
+  let hooked: { doc: Document; remove: () => void } | null = null;
   let ticks = 0;
   const startedAt = Date.now();
   const cleanups: Array<() => void> = [];
-  const hookedDocs = new WeakSet<Document>();
   const budget = createRateBudget();
 
   // ---- DOM ----
   const host = make("div");
   host.setAttribute("data-amu-creator", "");
   host.style.cssText = "position:fixed;top:56px;right:12px;z-index:2147483647";
-  const shadow = host.attachShadow({ mode: "closed" });
+  const shadow = attachClosedShadow(host);
   const style = make("style");
   style.textContent = PANEL_CSS;
   const panel = make("div", "panel");
@@ -232,7 +257,8 @@ function createSession(initialGeneration: number) {
   const speeds = make("div", "chips", "倍速 ");
   const speedButtons = SPEEDS.map((rate) => {
     const button = make("button", "chip", `${rate}x`);
-    button.addEventListener(
+    listen(
+      button,
       "click",
       trusted(() => {
         if (capture.frozen()) return;
@@ -250,8 +276,19 @@ function createSession(initialGeneration: number) {
 
   const isOurs = (node: Node | null): boolean =>
     node !== null && (node === host || host.contains(node));
-  const fromPanel = (event: Event): boolean => event.composedPath().includes(host);
+  const fromPanel = (event: Event): boolean => composedPath(event).includes(host);
   const focusedInPanel = (): Element | null => shadow.activeElement;
+
+  // ---- notices ----
+  const showNotice = (text: string) => {
+    notice.textContent = text;
+    notice.hidden = false;
+    if (noticeTimer !== null) clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => {
+      notice.hidden = true;
+      noticeTimer = null;
+    }, 3_000);
+  };
 
   // ---- sending ----
   const send = (
@@ -275,40 +312,60 @@ function createSession(initialGeneration: number) {
   const placeholderOf = (key: string) =>
     placeholders.find((entry) => placeholderKey(entry.requestId) === key);
 
+  const sendDraft = (placeholder: Placeholder, text: string, quiet: boolean): boolean => {
+    const ok = send(
+      "draft",
+      placeholderKey(placeholder.requestId),
+      {
+        requestId: placeholder.requestId,
+        timeSec: placeholder.timeSec,
+        comment: text,
+        place: null,
+      },
+      { quiet },
+    );
+    if (ok) {
+      placeholder.sentText = text;
+      placeholder.sentAt = Date.now();
+    }
+    return ok;
+  };
+
   const scheduler: UpdateScheduler = createUpdateScheduler({
     now: () => Date.now(),
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     send: (key, value) => {
-      const text = value.trim();
       const placeholder = placeholderOf(key);
       if (placeholder !== undefined) {
+        const text = value.trim();
         // Saving: further typing waits until the card is bound to its comment.
-        if (placeholder.sentText !== null) return false;
+        if (placeholder.sentText !== null || placeholder.deleted) return placeholder.deleted;
         if (text === "") return true;
-        const ok = send(
-          "draft",
-          key,
-          {
-            requestId: placeholder.requestId,
-            timeSec: placeholder.timeSec,
-            comment: text,
-            place: null,
-          },
-          { quiet: true },
-        );
-        if (ok) {
-          placeholder.sentText = text;
-          placeholder.sentAt = Date.now();
-          renderCards();
-        }
+        const ok = sendDraft(placeholder, text, true);
+        if (ok) renderCards();
         return ok;
       }
       const comment = commentById(key);
-      if (comment === undefined || text === "" || text === comment.comment) return true;
+      if (comment === undefined) {
+        localText.delete(key);
+        return true;
+      }
+      const text = (localText.get(key) ?? value).trim();
+      if (text === "") return true;
+      if (text === comment.comment) {
+        localText.delete(key);
+        return true;
+      }
       if (comment.status === "sending") return false;
       const waiting = awaiting.get(key);
-      if (waiting !== undefined && Date.now() - waiting.at < AWAIT_REVISION_MS) return false;
+      if (
+        waiting !== undefined &&
+        waiting.revision === comment.revision &&
+        Date.now() - waiting.at < AWAIT_REVISION_MS
+      ) {
+        return false;
+      }
       const ok = send(
         "update",
         key,
@@ -321,7 +378,32 @@ function createSession(initialGeneration: number) {
   });
 
   const isDirty = (key: string): boolean =>
-    scheduler.pending(key) || awaiting.has(key) || placeholderOf(key) !== undefined;
+    scheduler.pending(key) ||
+    localText.has(key) ||
+    awaiting.has(key) ||
+    placeAwaiting.has(key) ||
+    placeholderOf(key) !== undefined;
+
+  /** Some card holds text the server does not have yet. */
+  const hasUnsentText = (): boolean =>
+    placeholders.some((entry) => {
+      if (entry.deleted) return false;
+      const view = views.get(placeholderKey(entry.requestId));
+      return (view?.text.value.trim() ?? "") !== "";
+    }) ||
+    localText.size > 0 ||
+    awaiting.size > 0 ||
+    [...views.keys()].some((key) => scheduler.pending(key));
+
+  const flushDeletes = () => {
+    for (const id of pendingDeletes) {
+      if (commentById(id) === undefined) {
+        pendingDeletes.delete(id);
+        continue;
+      }
+      if (send("delete", id, { commentId: id }, { quiet: true })) pendingDeletes.delete(id);
+    }
+  };
 
   // ---- capture ----
   const measure = (spec: CaptureSpec) => {
@@ -337,6 +419,10 @@ function createSession(initialGeneration: number) {
       pin: { x: comp.x + spec.pin.x * comp.width, y: comp.y + spec.pin.y * comp.height },
     };
   };
+  /** Placeholder key, or the comment the placeholder became. */
+  const boundRequests = new Map<string, string>();
+  const viewKeyForRequest = (requestId: string): string =>
+    boundRequests.get(requestId) ?? placeholderKey(requestId);
   let restoreFocus: Element | null = null;
   const capture: CaptureClient = createCaptureClient({
     setTimer: (fn, ms) => setTimeout(fn, ms),
@@ -373,28 +459,15 @@ function createSession(initialGeneration: number) {
       restoreFocus = null;
     },
     measure,
-    onSettled: (spec, ok) => {
+    onSettled: (spec, ok, began) => {
       const key = spec.purpose === "draft" ? viewKeyForRequest(spec.requestId) : spec.commentId;
       const view = key === null ? undefined : views.get(key);
       if (view !== undefined) view.capture = ok ? "ok" : "failed";
+      // Main refused without a begin: another capture or its 1-per-second gate.
+      if (!ok && !began) showNotice(WAIT_NOTICE);
       render();
     },
   });
-  /** Placeholder key, or the comment the placeholder became. */
-  const boundRequests = new Map<string, string>();
-  const viewKeyForRequest = (requestId: string): string =>
-    boundRequests.get(requestId) ?? placeholderKey(requestId);
-
-  // ---- notices ----
-  const showNotice = (text: string) => {
-    notice.textContent = text;
-    notice.hidden = false;
-    if (noticeTimer !== null) clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(() => {
-      notice.hidden = true;
-      noticeTimer = null;
-    }, 3_000);
-  };
 
   // ---- actions ----
   const commentHere = () => {
@@ -406,7 +479,7 @@ function createSession(initialGeneration: number) {
     studio.pausePlayer();
     const timeSec = studio.currentTime() ?? 0;
     const requestId = newRequestId();
-    placeholders.unshift({ requestId, timeSec, sentText: null, sentAt: 0 });
+    placeholders.unshift({ requestId, timeSec, sentText: null, sentAt: 0, deleted: false });
     render();
     const view = views.get(placeholderKey(requestId));
     if (view !== undefined) {
@@ -442,7 +515,7 @@ function createSession(initialGeneration: number) {
 
   /** Handles the one placing click; true when it was taken. */
   const placeAt = (event: MouseEvent, x: number, y: number): boolean => {
-    if (placing === null || !event.isTrusted || capture.busy()) return false;
+    if (placing === null || !isTrustedEvent(event) || capture.busy()) return false;
     const comp = studio.compositionRect();
     const point = comp === null ? null : normalizePoint(comp, x, y);
     if (point === null) return false;
@@ -461,7 +534,7 @@ function createSession(initialGeneration: number) {
         place,
       })
     ) {
-      awaiting.set(comment.id, { revision: comment.revision, at: Date.now() });
+      placeAwaiting.set(comment.id, { revision: comment.revision, at: Date.now() });
       const view = views.get(comment.id);
       if (view !== undefined) view.capture = "pending";
       capture.request({
@@ -488,16 +561,30 @@ function createSession(initialGeneration: number) {
     view.deleteArmedAt = 0;
     const placeholder = placeholderOf(view.key);
     if (placeholder !== undefined) {
-      placeholders.splice(placeholders.indexOf(placeholder), 1);
       scheduler.cancel(view.key);
+      // Its draft may already be saved: delete that comment once it binds.
+      if (placeholder.sentText === null) placeholders.splice(placeholders.indexOf(placeholder), 1);
+      else placeholder.deleted = true;
       render();
       return;
     }
-    if (send("delete", view.key, { commentId: view.key })) scheduler.cancel(view.key);
+    if (send("delete", view.key, { commentId: view.key })) {
+      scheduler.cancel(view.key);
+      localText.delete(view.key);
+      awaiting.delete(view.key);
+    }
   };
 
   const propose = (commentIds: string[]) => {
     if (commentIds.length === 0) return;
+    if (hasUnsentText() && commentIds.length > 1) {
+      showNotice(UNSAVED_NOTICE);
+      return;
+    }
+    if (commentIds.some(isDirty)) {
+      showNotice(UNSAVED_NOTICE);
+      return;
+    }
     if (send("propose", commentIds.join(","), { commentIds })) {
       justProposed = true;
       render();
@@ -522,11 +609,12 @@ function createSession(initialGeneration: number) {
     row.append(placeLabel, placeButton);
     const ai = make("div", "ai");
     const actions = make("div", "actions");
+    const retry = make("button", "mini", "もう一度保存");
     const sendOne = make("button", "mini", "これだけ送る");
     const remove = make("button", "mini", "削除");
     const cancel = make("button", "mini", "取り消し");
     const confirm = make("button", "mini", "確認済みにする");
-    actions.append(cancel, confirm, sendOne, remove);
+    actions.append(retry, cancel, confirm, sendOne, remove);
     root.append(head, text, row, ai, actions);
     const view: CardView = {
       key,
@@ -538,6 +626,7 @@ function createSession(initialGeneration: number) {
       placeText: placeLabel,
       placeButton,
       ai,
+      retry,
       sendOne,
       remove,
       cancel,
@@ -545,7 +634,8 @@ function createSession(initialGeneration: number) {
       capture: null,
       deleteArmedAt: 0,
     };
-    time.addEventListener(
+    listen(
+      time,
       "click",
       trusted(() => {
         if (capture.frozen()) return;
@@ -555,27 +645,45 @@ function createSession(initialGeneration: number) {
         studio.seekTo(timeSec);
       }),
     );
-    text.addEventListener(
+    listen(
+      text,
       "input",
       trusted(() => {
+        if (placeholderOf(view.key) === undefined) localText.set(view.key, text.value);
         scheduler.change(view.key, text.value);
         updateCard(view);
+        renderFooter();
       }),
     );
-    text.addEventListener("blur", () => scheduler.flush(view.key));
-    placeButton.addEventListener(
+    listen(text, "blur", () => scheduler.flush(view.key));
+    listen(
+      placeButton,
       "click",
       trusted(() => startPlacing(view.key)),
     );
-    sendOne.addEventListener(
+    listen(
+      retry,
+      "click",
+      trusted(() => {
+        // Same requestId: the renderer dedupes drafts by it.
+        const placeholder = placeholderOf(view.key);
+        const value = text.value.trim();
+        if (placeholder === undefined || placeholder.sentText === null || value === "") return;
+        if (sendDraft(placeholder, value, false)) updateCard(view);
+      }),
+    );
+    listen(
+      sendOne,
       "click",
       trusted(() => propose([view.key])),
     );
-    remove.addEventListener(
+    listen(
+      remove,
       "click",
       trusted(() => removeCard(view)),
     );
-    cancel.addEventListener(
+    listen(
+      cancel,
       "click",
       trusted(() => {
         const comment = commentById(view.key);
@@ -584,7 +692,8 @@ function createSession(initialGeneration: number) {
         if (proposalId !== null) send("cancel", proposalId, { proposalId });
       }),
     );
-    confirm.addEventListener(
+    listen(
+      confirm,
       "click",
       trusted(() => send("confirm-by-user", view.key, { commentId: view.key })),
     );
@@ -603,13 +712,17 @@ function createSession(initialGeneration: number) {
           ? "画像なし"
           : "";
     if (placeholder !== undefined) {
+      const checking =
+        placeholder.sentText !== null && Date.now() - placeholder.sentAt > DRAFT_CHECK_AFTER_MS;
       view.time.textContent = formatTime(placeholder.timeSec);
-      view.status.textContent = placeholder.sentText === null ? "未保存" : "保存中…";
+      view.status.textContent =
+        placeholder.sentText === null ? "未保存" : checking ? "保存を確認中…" : "保存中…";
       view.placeText.textContent = "";
       view.placeButton.textContent = "＋ 場所も指定する（任意）";
       view.placeButton.disabled = true;
       view.placeButton.title = "先に指示を書いてください";
       view.ai.hidden = true;
+      view.retry.hidden = !checking;
       view.sendOne.hidden = false;
       view.sendOne.disabled = true;
       view.remove.hidden = false;
@@ -625,7 +738,13 @@ function createSession(initialGeneration: number) {
       ? "保存中…"
       : commentStatusLabel(comment, state.proposals, state.projectRevision);
     view.text.disabled = comment.status === "sending";
-    if (!dirty && focusedInPanel() !== view.text && view.text.value !== comment.comment) {
+    // Never overwrite the user's unsent text or the textarea they are typing in.
+    if (
+      !localText.has(view.key) &&
+      !scheduler.pending(view.key) &&
+      focusedInPanel() !== view.text &&
+      view.text.value !== comment.comment
+    ) {
       view.text.value = comment.comment;
     }
     view.placeText.textContent = comment.place === null ? "" : `場所：${placeText(comment.place)}`;
@@ -639,9 +758,10 @@ function createSession(initialGeneration: number) {
     view.placeButton.title = "";
     view.ai.hidden = comment.resolvedNote === null || comment.resolvedNote === "";
     view.ai.textContent = comment.resolvedNote === null ? "" : `AI：${comment.resolvedNote}`;
+    view.retry.hidden = true;
     view.sendOne.hidden = !actions.sendOne;
     view.sendOne.disabled = dirty;
-    view.sendOne.title = dirty ? "保存が終わるまでお待ちください" : "";
+    view.sendOne.title = dirty ? UNSAVED_NOTICE : "";
     view.remove.hidden = !actions.remove;
     view.cancel.hidden = actions.cancelProposalId === null;
     view.confirm.hidden = !actions.confirm;
@@ -670,9 +790,12 @@ function createSession(initialGeneration: number) {
       updateCard(view);
       return view;
     };
-    for (const placeholder of placeholders)
-      open.push(viewFor(placeholderKey(placeholder.requestId)));
-    const comments = [...(state?.comments ?? [])].toSorted((a, b) => b.number - a.number);
+    for (const placeholder of placeholders) {
+      if (!placeholder.deleted) open.push(viewFor(placeholderKey(placeholder.requestId)));
+    }
+    const comments = [...(state?.comments ?? [])]
+      .filter((comment) => !pendingDeletes.has(comment.id))
+      .toSorted((a, b) => b.number - a.number);
     for (const comment of comments) {
       (comment.status === "confirmed" ? done : open).push(viewFor(comment.id));
     }
@@ -697,9 +820,9 @@ function createSession(initialGeneration: number) {
 
   const renderFooter = () => {
     const ids = state === null ? [] : sendableIds(state.comments);
-    const dirty = ids.some(isDirty);
-    sendAll.textContent = dirty ? "保存中…" : `まとめて送る（${ids.length} 件）`;
-    sendAll.disabled = ids.length === 0 || dirty;
+    const unsent = hasUnsentText();
+    sendAll.textContent = unsent ? "保存中…" : `まとめて送る（${ids.length} 件）`;
+    sendAll.disabled = ids.length === 0 || unsent;
     const proposed = state?.comments.some((comment) => comment.status === "proposed") ?? false;
     confirmNote.hidden = !(justProposed || proposed);
     big.disabled = capture.busy();
@@ -732,10 +855,11 @@ function createSession(initialGeneration: number) {
       const mark = make("button", "mark");
       mark.style.left = `${Math.min(100, (comment.timeSec / total) * 100)}%`;
       mark.title = `#${comment.number} ${formatTime(comment.timeSec)}`;
-      mark.addEventListener(
+      listen(
+        mark,
         "click",
         trusted((event) => {
-          event.stopPropagation();
+          stopPropagation(event);
           if (capture.frozen()) return;
           studio.pausePlayer();
           studio.seekTo(comment.timeSec);
@@ -753,7 +877,8 @@ function createSession(initialGeneration: number) {
     scenes.replaceChildren(make("span", undefined, buttons.length === 0 ? "" : "場面へ移動 "));
     for (const scene of buttons) {
       const button = make("button", "chip", scene.label);
-      button.addEventListener(
+      listen(
+        button,
         "click",
         trusted(() => {
           if (capture.frozen()) return;
@@ -781,52 +906,85 @@ function createSession(initialGeneration: number) {
       const placeholder = placeholders[index];
       if (index >= 0) placeholders.splice(index, 1);
       boundRequests.set(requestId, commentId);
+      if (placeholder?.deleted === true) {
+        pendingDeletes.add(commentId);
+        continue;
+      }
       scheduler.rekey(key, commentId);
       if (view !== undefined) {
         views.delete(key);
         view.key = commentId;
         views.set(commentId, view);
-        // Typed after the draft went out: send the rest as an update.
-        if (placeholder?.sentText !== view.text.value.trim() && !scheduler.pending(commentId)) {
-          scheduler.change(commentId, view.text.value);
+        // Typed after the draft went out: that text becomes the comment's local edit.
+        const current = view.text.value;
+        if (current.trim() !== placeholder?.sentText) {
+          localText.set(commentId, current);
+          if (!scheduler.pending(commentId)) scheduler.change(commentId, current);
         }
       }
     }
-    for (const [id, waiting] of awaiting) {
-      const comment = next.comments.find((entry) => entry.id === id);
-      if (comment === undefined || comment.revision > waiting.revision) awaiting.delete(id);
-    }
     state = next;
     for (const comment of next.comments) knownIds.add(comment.id);
+    for (const [id, local] of localText) {
+      const comment = commentById(id);
+      if (comment === undefined) {
+        localText.delete(id);
+        awaiting.delete(id);
+        scheduler.cancel(id);
+        continue;
+      }
+      const decision = reconcileEdit({
+        local,
+        serverText: comment.comment,
+        serverRevision: comment.revision,
+        sentAgainst: awaiting.get(id)?.revision ?? null,
+      });
+      if (decision === "clear") {
+        localText.delete(id);
+        awaiting.delete(id);
+      } else if (decision === "resend") {
+        // Another change got in first; the user's text goes again against the new revision.
+        awaiting.delete(id);
+        if (!scheduler.pending(id)) scheduler.change(id, local);
+      }
+    }
+    for (const id of awaiting.keys()) if (!localText.has(id)) awaiting.delete(id);
+    for (const [id, waiting] of placeAwaiting) {
+      const comment = commentById(id);
+      if (comment === undefined || comment.revision > waiting.revision) placeAwaiting.delete(id);
+    }
     justProposed = false;
     if (next.notice !== null) showNotice(next.notice);
+    flushDeletes();
     render();
   };
 
-  const onRefused = (kind: string) => {
-    showNotice(WAIT_NOTICE);
+  const onRefused = (kind: string, reason: string) => {
+    const rateLimited = reason === "rate_limited";
+    showNotice(rateLimited ? WAIT_NOTICE : REFUSED_NOTICE);
     const sent = lastSent.get(kind as DesktopPreviewCreatorGuestKind);
     if (sent === undefined || Date.now() - sent.at > REFUSAL_MATCH_MS) return;
     if (kind === "draft") {
       const placeholder = placeholderOf(sent.key);
       const view = views.get(sent.key);
-      if (placeholder !== undefined && view !== undefined) {
+      if (placeholder !== undefined) {
         placeholder.sentText = null;
-        scheduler.change(sent.key, view.text.value);
+        // Only a rate refusal is retried; a too-large or malformed one waits for new typing.
+        if (rateLimited && view !== undefined) scheduler.change(sent.key, view.text.value);
       }
-    } else if (kind === "update" || kind === "place") {
+    } else if (kind === "update") {
       awaiting.delete(sent.key);
-      const view = views.get(sent.key);
-      if (kind === "update" && view !== undefined) scheduler.change(sent.key, view.text.value);
+      const local = localText.get(sent.key);
+      if (rateLimited && local !== undefined) scheduler.change(sent.key, local);
+    } else if (kind === "place") {
+      placeAwaiting.delete(sent.key);
+    } else if (kind === "delete" && rateLimited && commentById(sent.key) !== undefined) {
+      pendingDeletes.add(sent.key);
     }
     render();
   };
 
   // ---- input guards ----
-  const swallow = (event: Event) => {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  };
   /** While capturing or placing, Studio must not see presses on the preview or keys. */
   const guardPointer = (event: MouseEvent, x: number, y: number) => {
     if (fromPanel(event)) return;
@@ -855,45 +1013,74 @@ function createSession(initialGeneration: number) {
   const POINTER_EVENTS = ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick"];
   const FROZEN_EVENTS = ["wheel", "contextmenu"];
   const KEY_EVENTS = ["keydown", "keyup", "keypress"];
-  const listen = (target: EventTarget, type: string, handler: (event: Event) => void) => {
-    target.addEventListener(type, handler, { capture: true, passive: false });
-    cleanups.push(() => target.removeEventListener(type, handler, { capture: true }));
-  };
+  const CAPTURING = { capture: true, passive: false } as const;
   for (const type of POINTER_EVENTS) {
-    listen(window, type, (event) => {
-      const mouse = event as MouseEvent;
-      guardPointer(mouse, mouse.clientX, mouse.clientY);
-    });
+    cleanups.push(
+      listen<MouseEvent>(
+        window,
+        type,
+        (event) => guardPointer(event, event.clientX, event.clientY),
+        CAPTURING,
+      ),
+    );
   }
   for (const type of FROZEN_EVENTS) {
-    listen(window, type, (event) => {
-      if (capture.frozen() && !fromPanel(event)) swallow(event);
-    });
+    cleanups.push(
+      listen(
+        window,
+        type,
+        (event) => {
+          if (capture.frozen() && !fromPanel(event)) swallow(event);
+        },
+        CAPTURING,
+      ),
+    );
   }
-  for (const type of KEY_EVENTS) listen(window, type, (event) => guardKey(event as KeyboardEvent));
-  /** The preview iframe gets its own listeners; its events never reach this window. */
+  for (const type of KEY_EVENTS) cleanups.push(listen(window, type, guardKey, CAPTURING));
+  /**
+   * The preview iframe gets its own listeners; its events never reach this
+   * window. Only the current composition document is held: a reload drops the
+   * old one.
+   */
   const hookComposition = () => {
     const doc = studio.compositionDocument();
-    if (doc === null || hookedDocs.has(doc)) return;
-    hookedDocs.add(doc);
-    for (const type of POINTER_EVENTS) {
-      listen(doc, type, (event) => {
-        const mouse = event as MouseEvent;
-        const point = studio.iframePointToViewport(mouse.clientX, mouse.clientY);
-        if (point !== null) guardPointer(mouse, point.x, point.y);
-      });
-    }
-    for (const type of [...FROZEN_EVENTS, ...KEY_EVENTS]) {
-      listen(doc, type, (event) => {
-        if (capture.frozen()) swallow(event);
-      });
-    }
+    if (doc === hooked?.doc) return;
+    hooked?.remove();
+    hooked = null;
+    if (doc === null) return;
+    const removers = [
+      ...POINTER_EVENTS.map((type) =>
+        listen<MouseEvent>(
+          doc,
+          type,
+          (event) => {
+            const point = studio.iframePointToViewport(event.clientX, event.clientY);
+            if (point !== null) guardPointer(event, point.x, point.y);
+          },
+          CAPTURING,
+        ),
+      ),
+      ...FROZEN_EVENTS.map((type) =>
+        listen(
+          doc,
+          type,
+          (event) => {
+            if (capture.frozen()) swallow(event);
+          },
+          CAPTURING,
+        ),
+      ),
+      // Esc cancels placing here too, and keys freeze during a capture.
+      ...KEY_EVENTS.map((type) => listen(doc, type, guardKey, CAPTURING)),
+    ];
+    hooked = { doc, remove: () => removers.forEach((remove) => remove()) };
   };
   // Keys typed in the panel stay out of Studio's shortcuts; clicks do not deselect in Studio.
   for (const type of [...KEY_EVENTS, "pointerdown", "mousedown", "click"]) {
-    panel.addEventListener(type, (event) => event.stopPropagation());
+    listen(panel, type, stopPropagation);
   }
-  tab.addEventListener(
+  listen(
+    tab,
     "click",
     trusted(() => {
       collapsed = !collapsed;
@@ -901,12 +1088,14 @@ function createSession(initialGeneration: number) {
       tabArrow.textContent = collapsed ? "▸" : "▾";
     }),
   );
-  big.addEventListener("click", trusted(commentHere));
-  sendAll.addEventListener(
+  listen(big, "click", trusted(commentHere));
+  listen(
+    sendAll,
     "click",
     trusted(() => propose(state === null ? [] : sendableIds(state.comments))),
   );
-  track.addEventListener(
+  listen<MouseEvent>(
+    track,
     "click",
     trusted((event) => {
       if (capture.frozen()) return;
@@ -930,10 +1119,10 @@ function createSession(initialGeneration: number) {
   const tick = () => {
     const logoFound = branding.refresh();
     const player = studio.findPlayer();
-    if (player !== observedPlayer) {
-      observedPlayer?.removeEventListener("timeupdate", onTimeUpdate);
-      player?.addEventListener("timeupdate", onTimeUpdate);
-      observedPlayer = player;
+    if (player !== (observedPlayer?.player ?? null)) {
+      observedPlayer?.remove();
+      observedPlayer =
+        player === null ? null : { player, remove: listen(player, "timeupdate", onTimeUpdate) };
     }
     broken.hidden = (logoFound && player !== null) || Date.now() - startedAt < BROKEN_AFTER_MS;
     hookComposition();
@@ -943,29 +1132,21 @@ function createSession(initialGeneration: number) {
     refreshMarkers();
     refreshSpeeds();
     refreshFill();
-    // An edit the server never applied (refused, or the state never came) is sent again.
+    // An update whose state never came: send the local text again against the current revision.
     for (const [id, waiting] of awaiting) {
       if (Date.now() - waiting.at <= AWAIT_REVISION_MS) continue;
       awaiting.delete(id);
-      const view = views.get(id);
-      const comment = commentById(id);
-      const text = view?.text.value.trim() ?? "";
-      if (view !== undefined && comment !== undefined && text !== "" && text !== comment.comment) {
-        scheduler.change(id, view.text.value);
-      }
+      const local = localText.get(id);
+      if (local !== undefined && !scheduler.pending(id)) scheduler.change(id, local);
     }
-    // A draft that never came back from the server is sent again.
+    for (const [id, waiting] of placeAwaiting) {
+      if (Date.now() - waiting.at > AWAIT_REVISION_MS) placeAwaiting.delete(id);
+    }
+    flushDeletes();
+    // Unbound drafts switch to 「保存を確認中…」 with a manual retry; nothing is resent on its own.
     for (const placeholder of placeholders) {
-      if (
-        placeholder.sentText !== null &&
-        Date.now() - placeholder.sentAt > DRAFT_SAVE_TIMEOUT_MS
-      ) {
-        const key = placeholderKey(placeholder.requestId);
-        placeholder.sentText = null;
-        const view = views.get(key);
-        if (view !== undefined) scheduler.change(key, view.text.value);
-        showNotice("保存できませんでした。もう一度試します");
-      }
+      const view = views.get(placeholderKey(placeholder.requestId));
+      if (view !== undefined) updateCard(view);
     }
     renderFooter();
   };
@@ -984,7 +1165,10 @@ function createSession(initialGeneration: number) {
     capture.cancel();
     scheduler.clear();
     if (noticeTimer !== null) clearTimeout(noticeTimer);
-    observedPlayer?.removeEventListener("timeupdate", onTimeUpdate);
+    observedPlayer?.remove();
+    observedPlayer = null;
+    hooked?.remove();
+    hooked = null;
     for (const cleanup of cleanups.splice(0)) cleanup();
     translator.stop();
     branding.stop();
@@ -1024,7 +1208,7 @@ const activate = (generation: number) => {
   const waiting = pendingGeneration !== null;
   pendingGeneration = generation;
   if (document.body) startPending();
-  else if (!waiting) document.addEventListener("DOMContentLoaded", startPending, { once: true });
+  else if (!waiting) listen(document, "DOMContentLoaded", startPending, { once: true });
 };
 
 const deactivate = () => {
@@ -1063,5 +1247,8 @@ ipcRenderer.on(CREATOR_CAPTURE_DONE_CHANNEL, (_event, payload: unknown) => {
 });
 ipcRenderer.on(CREATOR_REFUSED_CHANNEL, (_event, payload: unknown) => {
   const kind = field(payload, "kind");
-  if (session !== null && typeof kind === "string") session.onRefused(kind);
+  const reason = field(payload, "reason");
+  if (session !== null && typeof kind === "string") {
+    session.onRefused(kind, typeof reason === "string" ? reason : "");
+  }
 });

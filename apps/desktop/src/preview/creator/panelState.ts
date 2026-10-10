@@ -25,19 +25,62 @@ const STATUSES = new Set(["draft", "proposed", "sending", "sent", "resolved", "c
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const isNullableString = (value: unknown): boolean => value === null || typeof value === "string";
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+const isUnit = (value: unknown): boolean => isFiniteNumber(value) && value >= 0 && value <= 1;
+
+const isPlace = (value: unknown): boolean =>
+  value === null ||
+  (isRecord(value) &&
+    isUnit(value["x"]) &&
+    isUnit(value["y"]) &&
+    isNullableString(value["compositionFile"]) &&
+    isNullableString(value["elementSelector"]) &&
+    isNullableString(value["elementLabel"]));
+
+const isShot = (value: unknown): boolean =>
+  value === null ||
+  (isRecord(value) && typeof value["commentId"] === "string" && isFiniteNumber(value["revision"]));
+
+const isSentVersion = (value: unknown): boolean =>
+  value === null ||
+  (isRecord(value) &&
+    typeof value["comment"] === "string" &&
+    isFiniteNumber(value["revision"]) &&
+    isPlace(value["place"] ?? null) &&
+    isShot(value["shot"] ?? null));
+
 const isComment = (value: unknown): value is CreatorComment =>
   isRecord(value) &&
   typeof value["id"] === "string" &&
-  typeof value["number"] === "number" &&
-  typeof value["timeSec"] === "number" &&
-  Number.isFinite(value["timeSec"]) &&
+  isFiniteNumber(value["number"]) &&
+  isFiniteNumber(value["timeSec"]) &&
   typeof value["comment"] === "string" &&
-  typeof value["revision"] === "number" &&
+  isFiniteNumber(value["revision"]) &&
   typeof value["status"] === "string" &&
-  STATUSES.has(value["status"]);
+  STATUSES.has(value["status"]) &&
+  typeof value["projectRevision"] === "string" &&
+  isPlace(value["place"]) &&
+  isShot(value["shot"]) &&
+  isSentVersion(value["sentVersion"]) &&
+  isNullableString(value["resolvedNote"] ?? null);
+
+const SEND_STATES = new Set(["sending", "accepted", "rejected", "conflict", "stuck", "halted"]);
+
+const isSendRecord = (value: unknown): boolean =>
+  value === null ||
+  (isRecord(value) &&
+    typeof value["state"] === "string" &&
+    SEND_STATES.has(value["state"]) &&
+    isFiniteNumber(value["attempts"]));
 
 const isProposal = (value: unknown): value is CreatorProposal =>
-  isRecord(value) && typeof value["id"] === "string" && Array.isArray(value["items"]);
+  isRecord(value) &&
+  typeof value["id"] === "string" &&
+  Array.isArray(value["items"]) &&
+  value["items"].every((item) => isRecord(item) && typeof item["commentId"] === "string") &&
+  isSendRecord(value["send"] ?? null);
 
 /** The pushed state, or `null` when it is not one. Malformed entries are skipped. */
 export const readPanelState = (raw: unknown): PanelState | null => {
@@ -183,4 +226,27 @@ export const bindPlaceholders = (
     }
   }
   return bound;
+};
+
+export type EditDecision = "clear" | "resend" | "wait";
+
+/**
+ * What to do with a comment's unsent local text when a state arrives:
+ * `clear` once the server shows that exact text; `resend` when it is not in
+ * flight, or a newer revision arrived without it (another change got in first
+ * and the update was refused); otherwise `wait`. Empty text is never sent.
+ */
+export const reconcileEdit = (input: {
+  readonly local: string;
+  readonly serverText: string;
+  /** The revision the server shows now. */
+  readonly serverRevision: number;
+  /** The revision the in-flight update was sent against, or `null` when none is in flight. */
+  readonly sentAgainst: number | null;
+}): EditDecision => {
+  const text = input.local.trim();
+  if (text === input.serverText) return "clear";
+  if (text === "") return "wait";
+  if (input.sentAgainst === null || input.serverRevision > input.sentAgainst) return "resend";
+  return "wait";
 };

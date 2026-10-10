@@ -39,7 +39,8 @@ export type CaptureDeps = {
   readonly show: () => void;
   /** The crop (and pin) in viewport CSS px, or `null` when the composition is not on screen. */
   readonly measure: (spec: CaptureSpec) => CaptureMeasure | null;
-  readonly onSettled: (spec: CaptureSpec, ok: boolean) => void;
+  /** `began` is false when main refused the request without a begin (busy or the 1 s gate). */
+  readonly onSettled: (spec: CaptureSpec, ok: boolean, began: boolean) => void;
 };
 
 export const CAPTURE_SELF_TIMEOUT_MS = 6_000;
@@ -60,7 +61,7 @@ export const createCaptureClient = (deps: CaptureDeps) => {
     current = null;
     deps.clearTimer(settled.timer);
     if (settled.hidden) deps.show();
-    deps.onSettled(settled.spec, ok);
+    deps.onSettled(settled.spec, ok, settled.phase !== "requested");
   };
   const arm = (entry: Current) => {
     deps.clearTimer(entry.timer);

@@ -7,6 +7,7 @@ import {
   commentStatusLabel,
   formatTime,
   readPanelState,
+  reconcileEdit,
   sendableIds,
 } from "./panelState.ts";
 
@@ -223,5 +224,90 @@ describe("bindPlaceholders", () => {
         { comments, draftKeys: {} },
       ),
     ).toEqual(new Map([["r1", "new"]]));
+  });
+});
+
+describe("reconcileEdit", () => {
+  it("clears the local edit once the server shows that exact text", () => {
+    expect(
+      reconcileEdit({
+        local: " 文字を大きく ",
+        serverText: "文字を大きく",
+        serverRevision: 3,
+        sentAgainst: 2,
+      }),
+    ).toBe("clear");
+  });
+
+  it("waits while the update is in flight against the current revision", () => {
+    expect(
+      reconcileEdit({ local: "新しい", serverText: "古い", serverRevision: 2, sentAgainst: 2 }),
+    ).toBe("wait");
+  });
+
+  it("re-sends when a newer revision arrives without the user's text", () => {
+    // attachShot, setPlace or the AI's resolve got in first and the update was refused.
+    expect(
+      reconcileEdit({ local: "新しい", serverText: "古い", serverRevision: 3, sentAgainst: 2 }),
+    ).toBe("resend");
+  });
+
+  it("re-sends an edit that is not in flight", () => {
+    expect(
+      reconcileEdit({ local: "新しい", serverText: "古い", serverRevision: 3, sentAgainst: null }),
+    ).toBe("resend");
+  });
+
+  it("keeps an emptied textarea without sending it", () => {
+    expect(
+      reconcileEdit({ local: "  ", serverText: "古い", serverRevision: 3, sentAgainst: null }),
+    ).toBe("wait");
+  });
+});
+
+describe("readPanelState nested fields", () => {
+  it("skips comments with malformed place, shot, sent version or note", () => {
+    const state = readPanelState({
+      comments: [
+        comment({
+          id: "ok",
+          place: {
+            x: 0.5,
+            y: 0.5,
+            compositionFile: null,
+            elementSelector: "#a",
+            elementLabel: null,
+          },
+        }),
+        comment({
+          id: "bad-place",
+          place: { x: 2, y: 0.5, compositionFile: null, elementSelector: null, elementLabel: null },
+        }),
+        comment({
+          id: "bad-label",
+          place: { x: 0.5, y: 0.5, compositionFile: 3, elementSelector: null, elementLabel: null },
+        }),
+        comment({ id: "bad-sent", sentVersion: { revision: "1" } }),
+        comment({ id: "bad-shot", shot: "x.png" }),
+        comment({ id: "bad-note", resolvedNote: 5 }),
+        comment({ id: "bad-revision", projectRevision: null }),
+      ],
+      proposals: [],
+    });
+    expect(state?.comments.map((entry) => entry.id)).toEqual(["ok"]);
+  });
+
+  it("skips proposals with malformed items or send records", () => {
+    const good = proposal(["c1"], sendRecord());
+    const state = readPanelState({
+      comments: [],
+      proposals: [
+        good,
+        { ...good, id: "bad-items", items: [{ commentId: 1 }] },
+        { ...good, id: "bad-send", send: { state: "lost", attempts: 0 } },
+        { ...good, id: "bad-attempts", send: { ...sendRecord(), attempts: "2" } },
+      ],
+    });
+    expect(state?.proposals.map((entry) => entry.id)).toEqual(["p1"]);
   });
 });

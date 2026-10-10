@@ -13,6 +13,7 @@
  */
 import { toPageRect, type Rect } from "../creatorGeometry.ts";
 import { translate } from "./jaDictionary.ts";
+import { NativeMutationObserver } from "./nativeDom.ts";
 import type { SceneSource } from "./sceneNames.ts";
 
 type PlayerElement = HTMLElement & {
@@ -31,6 +32,13 @@ const SEEK_MAX_FRAMES = 30;
 const SCENE_SCAN_NODES = 400;
 const TRANSLATED_ATTRIBUTES = ["title", "aria-label", "placeholder"] as const;
 const SKIP_TRANSLATION = ".cm-editor, .cm-content, textarea, input, [contenteditable='true']";
+/**
+ * Studio chrome: controls, menus and tooltips. Name-carrying patterns
+ * ("Render <name>") apply only here, so user content such as a caption or a
+ * file name that happens to read "Render final" is left alone.
+ */
+const CHROME_SELECTOR =
+  "button, a, label, summary, option, select, [role=button], [role=menu], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=tab], [role=tooltip], [role=option], [role=slider]";
 /** Translated nodes remembered for teardown before disconnected ones are dropped. */
 const MAX_RECORDED = 5_000;
 
@@ -260,7 +268,7 @@ export const createTranslator = (isOurs: (node: Node) => boolean) => {
     const parent = node.parentElement;
     if (!parent || parent.closest(SKIP_TRANSLATION) || isOurs(parent)) return;
     const value = node.nodeValue ?? "";
-    const next = translate(value);
+    const next = translate(value, parent.closest(CHROME_SELECTOR) ? "chrome" : "content");
     if (next === null || next === value) return;
     const before = texts.get(node);
     texts.set(node, { original: before?.original ?? value, translated: next });
@@ -271,7 +279,8 @@ export const createTranslator = (isOurs: (node: Node) => boolean) => {
     for (const name of TRANSLATED_ATTRIBUTES) {
       const value = element.getAttribute(name);
       if (!value) continue;
-      const next = translate(value);
+      // title, aria-label and placeholder describe controls: always chrome.
+      const next = translate(value, "chrome");
       if (next !== null && next !== value) setAttribute(element, name, next);
     }
     // Icon-only buttons get the Japanese label as a tooltip too.
@@ -293,7 +302,7 @@ export const createTranslator = (isOurs: (node: Node) => boolean) => {
       else doElement(node as Element);
     }
   };
-  const observer = new MutationObserver((mutations) => {
+  const observer = new NativeMutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === "characterData") doText(mutation.target as Text);
       else if (mutation.type === "attributes") doElement(mutation.target as Element);
@@ -343,7 +352,7 @@ export const createBranding = (brand: string) => {
   const applyTitle = () => {
     if (document.title !== brand) document.title = brand;
   };
-  const titleObserver = new MutationObserver(applyTitle);
+  const titleObserver = new NativeMutationObserver(applyTitle);
   const applyLogo = (): boolean => {
     const logo = findLogo();
     if (!(logo instanceof HTMLElement || logo instanceof SVGElement)) return false;
