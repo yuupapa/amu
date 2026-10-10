@@ -4538,36 +4538,52 @@ describe("PreviewManager Amu Creator", () => {
 
           // No session yet: nothing is forwarded.
           draft(guest.ipcHandlers.get("creator:draft"))(guest.fromMainFrame, 1, "before");
-          yield* manager.registerCreatorSession("tab_creator", BINDING);
+          const first = yield* manager.registerCreatorSession("tab_creator", BINDING);
+          if (!first.ok) throw new Error("registration refused");
+          // Generations are positive integers issued by main; never assume a value.
+          expect(Number.isInteger(first.generation) && first.generation > 0).toBe(true);
           const firstDraft = guest.ipcHandlers.get("creator:draft");
-          draft(firstDraft)(guest.fromChildFrame, 1, "child");
-          draft(firstDraft)(guest.fromMainFrame, 1, "main");
+          draft(firstDraft)(guest.fromChildFrame, first.generation, "child");
+          draft(firstDraft)(guest.fromMainFrame, first.generation, "main");
           yield* settle(() => events.some((event) => event["kind"] === "draft"));
           expect(events.filter((event) => event["kind"] === "draft")).toEqual([
             {
               kind: "draft",
               tabId: "tab_creator",
               bindingId: BINDING,
-              epoch: 1,
-              generation: 1,
+              epoch: first.epoch,
+              generation: first.generation,
               payload: { comment: "main" },
             },
           ]);
 
-          // Swap the guest out and back: the first attachment's handler is stale.
+          // Swap the guest out and back: the first attachment's handler is stale,
+          // and the re-attached document gets a new, larger generation (never reused).
           yield* manager.registerWebview("tab_creator", 43);
           yield* settle(() => events.some((event) => event["reason"] === "guest-swapped"));
           yield* manager.registerWebview("tab_creator", 42);
           const registered = yield* manager.registerCreatorSession("tab_creator", BINDING);
-          expect(registered).toMatchObject({ ok: true, generation: 1 });
-          draft(firstDraft)(guest.fromMainFrame, 1, "stale attachment");
-          draft(guest.ipcHandlers.get("creator:draft"))(guest.fromMainFrame, 1, "current");
+          if (!registered.ok) throw new Error("registration refused");
+          expect(registered.generation).toBeGreaterThan(first.generation);
+          expect(guest.sent("creator:activate").at(-1)).toEqual({
+            generation: registered.generation,
+          });
+          // Registering again on the same document keeps its generation.
+          const again = yield* manager.registerCreatorSession("tab_creator", BINDING);
+          if (!again.ok) throw new Error("registration refused");
+          expect(again.generation).toBe(registered.generation);
+
+          const current = guest.ipcHandlers.get("creator:draft");
+          draft(firstDraft)(guest.fromMainFrame, registered.generation, "stale attachment");
+          draft(current)(guest.fromMainFrame, first.generation, "stale generation");
+          draft(current)(guest.fromMainFrame, registered.generation, "current");
           yield* settle(() => events.filter((event) => event["kind"] === "draft").length === 2);
-          expect(
-            events
-              .filter((event) => event["kind"] === "draft")
-              .map((event) => (event["payload"] as { comment: string }).comment),
-          ).toEqual(["main", "current"]);
+          const drafts = events.filter((event) => event["kind"] === "draft");
+          expect(drafts.map((event) => (event["payload"] as { comment: string }).comment)).toEqual([
+            "main",
+            "current",
+          ]);
+          expect(drafts[1]).toMatchObject({ generation: registered.generation });
         }),
       ),
   );
