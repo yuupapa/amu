@@ -74,6 +74,7 @@ import {
   retakeMessages,
   sendableIds,
   shotView,
+  unsavedLabels,
   type CardCapture,
   type PanelState,
 } from "./panelState.ts";
@@ -84,7 +85,6 @@ import * as studio from "./studioDom.ts";
 const BRAND = "Amu Creator";
 const WAIT_NOTICE = "少し間をあけてください";
 const REFUSED_NOTICE = "送れませんでした（内容が大きすぎるか、形式が正しくありません）";
-const UNSAVED_NOTICE = "保存が終わるまでお待ちください";
 const BROKEN_NOTICE = "Amu Creator の一部が動いていません（HyperFrames の更新の影響）";
 const CONFIRM_NOTE = "Amu の画面で送信を確定してください";
 const TICK_MS = 1_000;
@@ -430,6 +430,12 @@ function createSession(initialGeneration: number) {
     placeAwaiting.has(key) ||
     placeholderOf(key) !== undefined;
 
+  /** The card's unsent text, for `unsavedLabels`. */
+  const cardEdits = (key: string): string[] => {
+    const local = localText.get(key);
+    return local === undefined ? [] : [local];
+  };
+
   /** Some card holds text the server does not have yet. */
   const hasUnsentText = (): boolean =>
     placeholders.some((entry) => {
@@ -478,6 +484,10 @@ function createSession(initialGeneration: number) {
         place: spec.place,
       }),
     sendReady: (input) => ipcRenderer.send(CREATOR_CAPTURE_READY_CHANNEL, { generation, ...input }),
+    // A ready without a rect: main finds nothing to capture, answers done
+    // (ignored here, as the client already settled) and frees its slot.
+    abort: (requestId) =>
+      ipcRenderer.send(CREATOR_CAPTURE_READY_CHANNEL, { generation, requestId }),
     pause: studio.pausePlayer,
     seek: studio.seekAndSettle,
     waitFrames: studio.waitFrames,
@@ -652,11 +662,11 @@ function createSession(initialGeneration: number) {
   const propose = (commentIds: string[]) => {
     if (commentIds.length === 0) return;
     if (hasUnsentText() && commentIds.length > 1) {
-      showNotice(UNSAVED_NOTICE);
+      showNotice(unsavedLabels(localText.values()).notice);
       return;
     }
     if (commentIds.some(isDirty)) {
-      showNotice(UNSAVED_NOTICE);
+      showNotice(unsavedLabels(commentIds.flatMap(cardEdits)).notice);
       return;
     }
     if (send("propose", commentIds.join(","), { commentIds })) {
@@ -817,9 +827,10 @@ function createSession(initialGeneration: number) {
     if (comment === undefined || state === null) return;
     const actions = commentActions(comment, state.proposals);
     const dirty = isDirty(view.key);
+    const unsaved = unsavedLabels(cardEdits(view.key));
     view.time.textContent = formatTime(comment.timeSec);
     view.status.textContent = dirty
-      ? "保存中…"
+      ? unsaved.card
       : commentStatusLabel(comment, state.proposals, state.projectRevision);
     view.text.disabled = comment.status === "sending";
     // Never overwrite the user's unsent text or the textarea they are typing in.
@@ -841,13 +852,13 @@ function createSession(initialGeneration: number) {
     view.placeButton.disabled = comment.status === "sending";
     view.placeButton.title = "";
     view.retakeShot.disabled = dirty || capture.busy();
-    view.retakeShot.title = dirty ? UNSAVED_NOTICE : "前の場所の画像を、いまの場所で撮り直します";
+    view.retakeShot.title = dirty ? unsaved.notice : "前の場所の画像を、いまの場所で撮り直します";
     view.ai.hidden = comment.resolvedNote === null || comment.resolvedNote === "";
     view.ai.textContent = comment.resolvedNote === null ? "" : `AI：${comment.resolvedNote}`;
     view.retry.hidden = true;
     view.sendOne.hidden = !actions.sendOne;
     view.sendOne.disabled = dirty;
-    view.sendOne.title = dirty ? UNSAVED_NOTICE : "";
+    view.sendOne.title = dirty ? unsaved.notice : "";
     view.remove.hidden = !actions.remove;
     view.cancel.hidden = actions.cancelProposalId === null;
     view.confirm.hidden = !actions.confirm;
@@ -907,7 +918,9 @@ function createSession(initialGeneration: number) {
   const renderFooter = () => {
     const ids = state === null ? [] : sendableIds(state.comments);
     const unsent = hasUnsentText();
-    sendAll.textContent = unsent ? "保存中…" : `まとめて送る（${ids.length} 件）`;
+    sendAll.textContent = unsent
+      ? unsavedLabels(localText.values()).sendAll
+      : `まとめて送る（${ids.length} 件）`;
     sendAll.disabled = ids.length === 0 || unsent;
     const proposed = state?.comments.some((comment) => comment.status === "proposed") ?? false;
     confirmNote.hidden = !(justProposed || proposed);

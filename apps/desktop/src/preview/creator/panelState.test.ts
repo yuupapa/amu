@@ -13,6 +13,7 @@ import {
   retakeMessages,
   sendableIds,
   shotView,
+  unsavedLabels,
 } from "./panelState.ts";
 
 const comment = (overrides: Partial<Record<keyof CreatorComment, unknown>> = {}) =>
@@ -422,5 +423,26 @@ describe("canKeepPlacing", () => {
     expect(canKeepPlacing(comment({ status: "sent" }))).toBe(true);
     expect(canKeepPlacing(undefined)).toBe(false);
     expect(canKeepPlacing(comment({ status: "sending" }))).toBe(false);
+  });
+});
+
+describe("unsavedLabels", () => {
+  it("says 「保存中…」 while edits are on their way", () => {
+    expect(unsavedLabels([])).toEqual({
+      card: "保存中…",
+      sendAll: "保存中…",
+      notice: "保存が終わるまでお待ちください",
+    });
+    expect(unsavedLabels(["文字を大きく"])).toEqual(unsavedLabels([]));
+  });
+
+  it("asks for a rewrite or a delete when a card was emptied, as its old text is never sent", () => {
+    for (const edits of [[""], ["  \n"], ["文字を大きく", ""]]) {
+      expect(unsavedLabels(edits)).toEqual({
+        card: "指示が空です。書き直すか、カードを削除してください",
+        sendAll: "空のカードがあります",
+        notice: "指示が空のカードは送れません。書き直すか、削除してください",
+      });
+    }
   });
 });

@@ -7,7 +7,9 @@
  * `capture-ready` -> main captures and answers `capture-done` -> show the
  * overlay again. When no frame was rendered after hiding (rendering suspended,
  * e.g. an occluded window), the capture is given up: main would copy the last
- * frame shown, which still has the panel over the video. Controls stay frozen from request to done. The client gives up
+ * frame shown, which still has the panel over the video. A capture given up
+ * after begin is reported to main with `abort`, so main frees its slot at once
+ * instead of refusing a retry as busy. Controls stay frozen from request to done. The client gives up
  * on its own after `CAPTURE_SELF_TIMEOUT_MS` (main gives up after 5 s), and a
  * begin or done for another request id is ignored.
  */
@@ -58,6 +60,8 @@ export type CaptureDeps = {
   readonly clearTimer: (handle: unknown) => void;
   readonly sendRequest: (spec: CaptureSpec) => void;
   readonly sendReady: (input: { requestId: string; rect: Rect; pin?: Point }) => void;
+  /** Tells main a begun capture was given up, so it frees the guest's capture slot. */
+  readonly abort: (requestId: string) => void;
   readonly pause: () => void;
   /** Resolves once the player shows `timeSec` (or gave up waiting). */
   readonly seek: (timeSec: number) => Promise<void>;
@@ -124,18 +128,28 @@ export const createCaptureClient = (deps: CaptureDeps) => {
       if (current !== entry) return;
       await deps.waitFrames(2);
       if (current !== entry) return;
-      deps.hide();
+      const giveUp = () => {
+        deps.abort(requestId);
+        finish(false);
+      };
+      // Marked first, so a hide that throws halfway is still shown again.
       entry.hidden = true;
+      try {
+        deps.hide();
+      } catch {
+        giveUp();
+        return;
+      }
       // Let the hidden overlay reach the screen before main captures.
       const rendered = await deps.waitFrames(1);
       if (current !== entry) return;
       if (!rendered) {
-        finish(false);
+        giveUp();
         return;
       }
       const measured = deps.measure(entry.spec);
       if (measured === null) {
-        finish(false);
+        giveUp();
         return;
       }
       entry.phase = "ready";

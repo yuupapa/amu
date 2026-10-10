@@ -4364,6 +4364,7 @@ describe("PreviewManager Amu Creator", () => {
       makeCreatorImage(2400, 1350),
     );
     const executeJavaScriptInIsolatedWorld = vi.fn(async () => [1000, 600]);
+    const setBackgroundThrottling = vi.fn<(enabled: boolean) => void>();
     const webContents = {
       id,
       mainFrame,
@@ -4375,7 +4376,7 @@ describe("PreviewManager Amu Creator", () => {
       getZoomFactor: () => 1,
       setZoomFactor: vi.fn(),
       setAudioMuted: vi.fn(),
-      setBackgroundThrottling: vi.fn(),
+      setBackgroundThrottling,
       isCurrentlyAudible: () => false,
       on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
         listeners.set(event, [...(listeners.get(event) ?? []), listener]);
@@ -4407,6 +4408,7 @@ describe("PreviewManager Amu Creator", () => {
       webContents: webContents as unknown as Electron.WebContents,
       capturePage,
       executeJavaScriptInIsolatedWorld,
+      setBackgroundThrottling,
       send,
       ipcHandlers,
       fromMainFrame: { senderFrame: mainFrame },
@@ -4706,6 +4708,102 @@ describe("PreviewManager Amu Creator", () => {
         yield* settle(() => false);
         expect(guest.capturePage).not.toHaveBeenCalled();
         expect(events.some((event) => event["kind"] === "shot")).toBe(false);
+      }),
+    ),
+  );
+
+  effectIt.effect("keeps the guest rendering from a capture request until it settles", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        yield* openCreatorTab(manager, [guest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        const request = guest.ipcHandlers.get("creator:capture-request")!;
+        const throttling = () => guest.setBackgroundThrottling.mock.calls.map(([on]) => on);
+        guest.setBackgroundThrottling.mockClear();
+
+        request(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          purpose: "draft",
+          timeSec: 1,
+        });
+        yield* settle(() => guest.sent("creator:capture-begin").length === 1);
+        expect(throttling()).toEqual([false]);
+        guest.ipcHandlers.get("creator:capture-ready")!(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          rect: { x: 0, y: 0, width: 200, height: 100 },
+        });
+        yield* settle(() => guest.sent("creator:capture-done").length === 1);
+        yield* settle(() => throttling().length === 2);
+        expect(guest.sent("creator:capture-done")).toEqual([{ requestId: "r1", ok: true }]);
+        expect(throttling()).toEqual([false, true]);
+
+        // A request the guest never answers releases rendering when it expires.
+        yield* TestClock.adjust(1_000);
+        request(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r2",
+          purpose: "draft",
+          timeSec: 2,
+        });
+        yield* settle(() => throttling().length === 3);
+        expect(throttling()).toEqual([false, true, false]);
+        yield* TestClock.adjust(5_000);
+        yield* settle(() => throttling().length === 4);
+        expect(guest.sent("creator:capture-done").at(-1)).toEqual({ requestId: "r2", ok: false });
+        expect(throttling()).toEqual([false, true, false, true]);
+      }),
+    ),
+  );
+
+  effectIt.effect("frees the guest at once when it gives a capture up with a rect-less ready", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const guest = makeCreatorGuest();
+        const events = yield* collectCreatorEvents(manager);
+        yield* openCreatorTab(manager, [guest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        const request = guest.ipcHandlers.get("creator:capture-request")!;
+        const throttling = () => guest.setBackgroundThrottling.mock.calls.map(([on]) => on);
+        guest.setBackgroundThrottling.mockClear();
+        // A stalled viewport read must not hold the slot for an abort.
+        guest.executeJavaScriptInIsolatedWorld.mockImplementation(() => new Promise(() => {}));
+
+        request(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+          purpose: "draft",
+          timeSec: 1,
+        });
+        yield* settle(() => guest.sent("creator:capture-begin").length === 1);
+        // The guest's abort: no frame reached the screen, so no rect.
+        guest.ipcHandlers.get("creator:capture-ready")!(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r1",
+        });
+        yield* settle(() => guest.sent("creator:capture-done").length === 1);
+        yield* settle(() => throttling().length === 2);
+        expect(guest.sent("creator:capture-done")).toEqual([{ requestId: "r1", ok: false }]);
+        expect(guest.capturePage).not.toHaveBeenCalled();
+        expect(events.some((event) => event["kind"] === "shot")).toBe(false);
+        expect(throttling()).toEqual([false, true]);
+
+        // A retry past the 1 s gate begins instead of being refused as busy.
+        yield* TestClock.adjust(1_000);
+        request(guest.fromMainFrame, {
+          generation: 1,
+          requestId: "r2",
+          purpose: "draft",
+          timeSec: 1,
+        });
+        yield* settle(() => guest.sent("creator:capture-begin").length === 2);
+        expect(guest.sent("creator:capture-begin")).toEqual([
+          { requestId: "r1" },
+          { requestId: "r2" },
+        ]);
+        expect(guest.sent("creator:capture-done")).toEqual([{ requestId: "r1", ok: false }]);
       }),
     ),
   );

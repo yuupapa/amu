@@ -1719,7 +1719,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           else void started.then(settled, settled);
         }).pipe(Effect.andThen(releaseCreatorShotRendering(requestId))),
       );
-      const viewport = yield* readCreatorViewport;
+      // A ready without a rect is the guest giving the capture up: free the
+      // slot at once, without waiting on a viewport read that may stall.
+      const viewport = rect === undefined ? null : yield* readCreatorViewport;
       const zoomFactor =
         (yield* SynchronizedRef.get(tabsRef)).get(tabId)?.zoomFactor ?? DEFAULT_ZOOM_FACTOR;
       const plan =

@@ -329,3 +329,22 @@ export const retakeMessages = (requestId: string, comment: CreatorComment) =>
 /** Place mode for a comment ends by itself once the comment is gone or being sent. */
 export const canKeepPlacing = (comment: CreatorComment | undefined): boolean =>
   comment !== undefined && comment.status !== "sending";
+
+/**
+ * What the panel says while edits are unsaved, given the unsent texts in
+ * question (one card's, or every card's). An emptied card is never sent, as
+ * that would keep the text the user deleted, so it asks for a rewrite or a
+ * delete instead of a 「保存中…」 that never ends.
+ */
+export const unsavedLabels = (edits: Iterable<string>) => {
+  for (const edit of edits) {
+    if (edit.trim() === "") {
+      return {
+        card: "指示が空です。書き直すか、カードを削除してください",
+        sendAll: "空のカードがあります",
+        notice: "指示が空のカードは送れません。書き直すか、削除してください",
+      };
+    }
+  }
+  return { card: "保存中…", sendAll: "保存中…", notice: "保存が終わるまでお待ちください" };
+};

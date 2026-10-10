@@ -13,7 +13,7 @@
  * propagation but never `preventDefault()`: the browser still inserts the text,
  * and Studio never sees the event. Page code cannot remove them, as it never
  * gets the listener references. The panel's own `input` handling cannot rely on
- * propagation after this, so each stopped event is first handed to `deliver`.
+ * propagation after this, so each stopped event is then handed to `deliver`.
  */
 export const PANEL_SHIELD_EVENTS = [
   "paste",
@@ -47,9 +47,12 @@ export type PanelShieldDeps<E> = {
 export const installPanelShield = <E>(deps: PanelShieldDeps<E>): void => {
   for (const type of PANEL_SHIELD_EVENTS) {
     deps.listen(type, (event) => {
-      if (!shieldsEvent(deps.composedPath(event), deps.host() ?? null)) return;
-      deps.deliver(event);
+      const host = deps.host() ?? null;
+      if (host === null || !shieldsEvent(deps.composedPath(event), host)) return;
+      // Stopped first: a panel handler that throws must not let the event reach
+      // Studio. Its error still surfaces as a listener error.
       deps.stopImmediatePropagation(event);
+      deps.deliver(event);
     });
   }
 };

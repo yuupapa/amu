@@ -21,19 +21,27 @@ describe("shieldsEvent", () => {
 });
 
 describe("installPanelShield", () => {
-  const harness = (currentHost: object | null) => {
+  const harness = (currentHost: object | null, deliver?: (event: object) => void) => {
     const listeners = new Map<string, (event: object) => void>();
     const stopped: object[] = [];
     const delivered: object[] = [];
+    const order: string[] = [];
     const paths = new Map<object, object[]>();
     installPanelShield<object>({
       listen: (type, handler) => {
         listeners.set(type, handler);
       },
       composedPath: (event) => paths.get(event) ?? [],
-      stopImmediatePropagation: (event) => stopped.push(event),
+      stopImmediatePropagation: (event) => {
+        order.push("stop");
+        stopped.push(event);
+      },
       host: () => currentHost,
-      deliver: (event) => delivered.push(event),
+      deliver: (event) => {
+        order.push("deliver");
+        delivered.push(event);
+        deliver?.(event);
+      },
     });
     const fire = (type: string, path: object[]) => {
       const event = { type };
@@ -41,7 +49,7 @@ describe("installPanelShield", () => {
       listeners.get(type)?.(event);
       return event;
     };
-    return { listeners, stopped, delivered, fire };
+    return { listeners, stopped, delivered, order, fire };
   };
 
   it("listens to paste, clipboard, key, input and composition events", () => {
@@ -64,12 +72,21 @@ describe("installPanelShield", () => {
     }
   });
 
-  it("stops a panel event from reaching Studio and hands it to the panel first", () => {
-    const { stopped, delivered, fire } = harness(host);
+  it("stops a panel event from reaching Studio, then hands it to the panel", () => {
+    const { stopped, delivered, order, fire } = harness(host);
     const paste = fire("paste", [host, win]);
     const input = fire("input", [host, win]);
     expect(stopped).toEqual([paste, input]);
     expect(delivered).toEqual([paste, input]);
+    expect(order).toEqual(["stop", "deliver", "stop", "deliver"]);
+  });
+
+  it("keeps the event from Studio even when the panel's handling throws", () => {
+    const { stopped, fire } = harness(host, () => {
+      throw new Error("panel failed");
+    });
+    expect(() => fire("paste", [host, win])).toThrow("panel failed");
+    expect(stopped).toEqual([{ type: "paste" }]);
   });
 
   it("lets Studio's own events through untouched", () => {

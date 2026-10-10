@@ -32,7 +32,9 @@ const flush = async () => {
   for (let i = 0; i < 10; i += 1) await Promise.resolve();
 };
 
-const makeHarness = (options: { measure?: CaptureDeps["measure"] } = {}) => {
+const makeHarness = (
+  options: { measure?: CaptureDeps["measure"]; hide?: CaptureDeps["hide"] } = {},
+) => {
   const log: string[] = [];
   let now = 0;
   let nextTimer = 1;
@@ -57,6 +59,7 @@ const makeHarness = (options: { measure?: CaptureDeps["measure"] } = {}) => {
       log.push(`ready ${input.requestId}`);
       ready.push(input);
     },
+    abort: (requestId) => log.push(`abort ${requestId}`),
     pause: () => log.push("pause"),
     seek: (timeSec) => {
       log.push(`seek ${timeSec}`);
@@ -70,7 +73,7 @@ const makeHarness = (options: { measure?: CaptureDeps["measure"] } = {}) => {
       frames.push(step);
       return step.promise;
     },
-    hide: () => log.push("hide"),
+    hide: options.hide ?? (() => log.push("hide")),
     show: () => log.push("show"),
     measure:
       options.measure ??
@@ -302,7 +305,8 @@ describe("a capture whose hidden overlay never reached the screen", () => {
     await flush();
     await begun;
     expect(harness.ready).toEqual([]);
-    expect(harness.log.slice(-2)).toEqual(["frames 1", "show"]);
+    // Main is told, so a retry right after is not refused as busy.
+    expect(harness.log.slice(-3)).toEqual(["frames 1", "abort r1", "show"]);
     expect(harness.settled).toEqual([{ requestId: "r1", ok: false }]);
   });
 
@@ -320,6 +324,43 @@ describe("a capture whose hidden overlay never reached the screen", () => {
     await flush();
     await begun;
     expect(harness.ready).toHaveLength(1);
+  });
+});
+
+describe("a capture given up after main began it", () => {
+  it("tells main when the composition cannot be measured", async () => {
+    const harness = makeHarness({ measure: () => null });
+    const client = createCaptureClient(harness.deps);
+    client.request(spec());
+    await runBegin(harness, client);
+    expect(harness.log.slice(-2)).toEqual(["abort r1", "show"]);
+  });
+
+  it("does not abort a capture that was reported ready or never began", async () => {
+    const harness = makeHarness();
+    const client = createCaptureClient(harness.deps);
+    client.request(spec());
+    await runBegin(harness, client);
+    client.done("r1", false);
+    client.request(spec({ requestId: "r2" }));
+    harness.advance(CAPTURE_SELF_TIMEOUT_MS);
+    expect(harness.log.some((line) => line.startsWith("abort"))).toBe(false);
+  });
+
+  it("puts the overlay back when hiding it throws", async () => {
+    const harness = makeHarness({
+      hide: () => {
+        throw new Error("hide failed");
+      },
+    });
+    const client = createCaptureClient(harness.deps);
+    client.request(spec());
+    await expect(runBegin(harness, client)).resolves.toBeUndefined();
+    expect(harness.log.slice(-3)).toEqual(["frames 2", "abort r1", "show"]);
+    expect(harness.ready).toEqual([]);
+    expect(harness.settled).toEqual([{ requestId: "r1", ok: false }]);
+    expect(client.busy()).toBe(false);
+    expect(harness.timers.size).toBe(0);
   });
 });
 
