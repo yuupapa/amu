@@ -23,6 +23,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -48,13 +49,6 @@ const adapter = {
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("Runs here never reach a provider"),
 } as ProviderAdapterV2Shape;
-const layerDatabase = SqlitePersistence.layerMemory;
-const layerOrchestration = ProviderReplayHarness.layerWithRegistry(
-  { name: "creator-sender" },
-  ProviderAdapterRegistry.layerFromAdapters([adapter]),
-  { databaseLayer: layerDatabase, runEffectWorker: false },
-);
-const layerThreads = ThreadManagement.layer.pipe(Layer.provideMerge(layerOrchestration));
 
 const destination: CreatorDestination = {
   environmentId: EnvironmentId.make("env-1"),
@@ -71,6 +65,66 @@ interface Faults {
   failAfterCommit: boolean;
   calls: number;
 }
+
+interface PersistedCounts {
+  readonly receipts: number;
+  readonly messages: number;
+  readonly effects: number;
+}
+
+interface CommitBoundary {
+  readonly phase: "beforeCommit" | "afterCommit";
+  readonly commandId: CommandId;
+  readonly messageId: MessageId;
+  readonly entered: Deferred.Deferred<PersistedCounts>;
+}
+
+const persistedCounts = (sql: SqlClient.SqlClient, boundary: CommitBoundary) =>
+  sql<PersistedCounts>`
+    SELECT
+      (SELECT COUNT(*) FROM orchestration_command_receipts WHERE command_id = ${boundary.commandId}) AS receipts,
+      (SELECT COUNT(*) FROM orchestration_v2_projection_messages WHERE message_id = ${boundary.messageId}) AS messages,
+      (SELECT COUNT(*) FROM orchestration_v2_effect_outbox WHERE command_id = ${boundary.commandId}) AS effects
+  `.pipe(Effect.map((rows) => rows[0]!));
+
+// Only the SQL dependency is decorated. The real EventSink still writes its
+// receipt, projections and outbox in the real SQLite transaction. The inner
+// barrier runs after those writes, before SqlClient issues COMMIT; the outer
+// barrier runs only after COMMIT has returned. No production hook is needed.
+const layerCommitBoundaryDatabase = (faults: { boundary: CommitBoundary | null }) =>
+  Layer.effect(
+    SqlClient.SqlClient,
+    Effect.gen(function* () {
+      const real = yield* SqlClient.SqlClient;
+      const atBoundary = (phase: CommitBoundary["phase"]) =>
+        Effect.suspend(() => {
+          const boundary = faults.boundary;
+          if (boundary === null || boundary.phase !== phase) return Effect.void;
+          return persistedCounts(real, boundary).pipe(
+            Effect.orDie,
+            Effect.flatMap((counts) => {
+              if (counts.receipts === 0) return Effect.void;
+              // One send transaction only; later read-only projection
+              // transactions must remain available to prove its outcome.
+              faults.boundary = null;
+              return Deferred.succeed(boundary.entered, counts).pipe(Effect.andThen(Effect.never));
+            }),
+          );
+        });
+      const withTransaction: SqlClient.SqlClient["withTransaction"] = (effect) =>
+        Effect.flatMap(Effect.serviceOption(real.transactionService), (current) =>
+          Option.isSome(current)
+            ? real.withTransaction(effect)
+            : real
+                .withTransaction(effect.pipe(Effect.tap(() => atBoundary("beforeCommit"))))
+                .pipe(Effect.tap(() => atBoundary("afterCommit"))),
+        );
+      return new Proxy(real, {
+        get: (target, key) =>
+          key === "withTransaction" ? withTransaction : Reflect.get(target, key),
+      });
+    }),
+  ).pipe(Layer.provide(SqlitePersistence.layerMemory));
 
 const layerFaultyThreads = (faults: Faults) =>
   Layer.effect(
@@ -99,7 +153,7 @@ const layerFaultyThreads = (faults: Faults) =>
           ),
       });
     }),
-  ).pipe(Layer.provide(layerThreads));
+  );
 
 const png = (): Uint8Array => {
   const bytes = new Uint8Array(96);
@@ -115,6 +169,14 @@ const png = (): Uint8Array => {
 
 const harness = Effect.gen(function* () {
   const faults: Faults = { before: Effect.void, failAfterCommit: false, calls: 0 };
+  const transactionFaults: { boundary: CommitBoundary | null } = { boundary: null };
+  const layerDatabase = layerCommitBoundaryDatabase(transactionFaults);
+  const layerOrchestration = ProviderReplayHarness.layerWithRegistry(
+    { name: "creator-sender" },
+    ProviderAdapterRegistry.layerFromAdapters([adapter]),
+    { databaseLayer: layerDatabase, runEffectWorker: false },
+  );
+  const layerThreads = ThreadManagement.layer.pipe(Layer.provideMerge(layerOrchestration));
   const configContext = yield* Layer.build(
     ServerConfig.layerTest(process.cwd(), { prefix: "t3-creator-sender-int-" }),
   );
@@ -128,7 +190,7 @@ const harness = Effect.gen(function* () {
         Layer.provideMerge(CreatorService.layer),
         Layer.provide(
           Layer.mergeAll(
-            layerFaultyThreads(faults),
+            layerFaultyThreads(faults).pipe(Layer.provide(layerThreads)),
             CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase)),
             Layer.succeed(ServerConfig.ServerConfig, config),
             Layer.mock(ServerSettingsService)({
@@ -142,6 +204,7 @@ const harness = Effect.gen(function* () {
         ),
       ),
       layerThreads,
+      layerDatabase,
       CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase)),
     ),
   );
@@ -215,7 +278,20 @@ const harness = Effect.gen(function* () {
   const statuses = service
     .list(ref)
     .pipe(Effect.map((snapshot) => snapshot.comments.map((entry) => entry.status)));
-  return { faults, sender, ref, proposal, landed, confirm, statuses };
+  const pauseCommit = (phase: CommitBoundary["phase"]) =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<PersistedCounts>();
+      const boundary = { phase, commandId, messageId, entered };
+      transactionFaults.boundary = boundary;
+      return {
+        entered: Deferred.await(entered),
+        counts: persistedCounts(Context.get(context, SqlClient.SqlClient), boundary),
+        clear: Effect.sync(() => {
+          transactionFaults.boundary = null;
+        }),
+      };
+    });
+  return { faults, sender, ref, proposal, landed, confirm, statuses, pauseCommit };
 });
 
 it.layer(NodeServices.layer)("CreatorSender with the real orchestrator", (it) => {
@@ -241,6 +317,60 @@ it.layer(NodeServices.layer)("CreatorSender with the real orchestrator", (it) =>
       expect(after.message?.attachments).toHaveLength(1);
       expect(yield* statuses).toEqual(["sent"]);
       expect(faults.calls).toBe(2);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "interrupting the real EventSink transaction rolls back receipt, message and outbox",
+    () =>
+      Effect.gen(function* () {
+        const { faults, sender, landed, confirm, statuses, pauseCommit } = yield* harness;
+        const boundary = yield* pauseCommit("beforeCommit");
+        const fiber = yield* confirm.pipe(Effect.forkScoped);
+        const written = yield* boundary.entered;
+        expect(written.receipts).toBe(1);
+        expect(written.messages).toBe(1);
+        expect(written.effects).toBeGreaterThan(0);
+
+        // Wait for the original real send and SQLite rollback to finish before
+        // using absence as evidence that the same proposal can be resent.
+        yield* Fiber.interrupt(fiber);
+        expect(yield* landed).toEqual({ receipt: null, message: null });
+        expect(yield* boundary.counts).toEqual({ receipts: 0, messages: 0, effects: 0 });
+        expect(yield* statuses).toEqual(["sending"]);
+        yield* boundary.clear;
+        yield* TestClock.adjust("30 seconds");
+        yield* sender.reconcile(PROJECT);
+        const after = yield* landed;
+        expect(after.receipt).toBe("accepted");
+        expect(after.message?.attachments).toHaveLength(1);
+        const persisted = yield* boundary.counts;
+        expect(persisted.receipts).toBe(1);
+        expect(persisted.messages).toBe(1);
+        expect(persisted.effects).toBe(written.effects);
+        expect(yield* statuses).toEqual(["sent"]);
+        expect(faults.calls).toBe(2);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("interrupting just after SQLite COMMIT settles the real send without resending", () =>
+    Effect.gen(function* () {
+      const { faults, sender, landed, confirm, statuses, pauseCommit } = yield* harness;
+      const boundary = yield* pauseCommit("afterCommit");
+      const fiber = yield* confirm.pipe(Effect.forkScoped);
+      const written = yield* boundary.entered;
+      expect(written.receipts).toBe(1);
+      expect(written.messages).toBe(1);
+      expect(written.effects).toBeGreaterThan(0);
+      yield* Fiber.interrupt(fiber);
+      expect((yield* landed).receipt).toBe("accepted");
+      expect(yield* boundary.counts).toEqual(written);
+      expect(yield* statuses).toEqual(["sending"]);
+      yield* boundary.clear;
+      yield* sender.reconcile(PROJECT);
+      expect(yield* statuses).toEqual(["sent"]);
+      expect(yield* boundary.counts).toEqual(written);
+      expect(faults.calls).toBe(1);
     }).pipe(Effect.scoped),
   );
 
