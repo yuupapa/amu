@@ -100,6 +100,7 @@ import {
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   WS_METHODS,
+  WsCreatorRpcGroup,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -109,7 +110,7 @@ import {
   HttpServerRespondable,
   HttpServerResponse,
 } from "effect/http";
-import { RpcSerialization, RpcServer } from "effect/rpc";
+import { type RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -547,6 +548,13 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 
 // Middleware added later wraps middleware added earlier, so instrumentation wraps authorization.
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+// Amu Creator's handlers form their own layer: in one handler object with the
+// rest, `toLayer` exceeds the type checker's instantiation depth.
+const ServerWsCreatorRpcGroup = WsCreatorRpcGroup.middleware(RpcInstrumentation);
+type CreatorRpcTag = RpcGroup.Rpcs<typeof WsCreatorRpcGroup>["_tag"];
+const ServerWsCoreRpcGroup = ServerWsRpcGroup.omit(
+  ...([...WsCreatorRpcGroup.requests.keys()] as Array<CreatorRpcTag>),
+);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -1187,19 +1195,14 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
   },
 );
 
-const layerWsRpc = (
+const layerWsCoreRpc = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
-  creator: CreatorService.CreatorService["Service"],
-  creatorSender: CreatorSender.CreatorSender["Service"],
-  creatorOpen: CreatorOpen.CreatorOpen["Service"],
-  /** The desktop app's own session on a loopback socket; the Creator surface needs it. */
-  desktopSession: boolean,
 ) =>
-  ServerWsRpcGroup.toLayer(
+  ServerWsCoreRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -1824,7 +1827,7 @@ const layerWsRpc = (
         return result;
       });
 
-      const handlers = ServerWsRpcGroup.of({
+      const handlers = ServerWsCoreRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -2923,7 +2926,6 @@ const layerWsRpc = (
         [WS_METHODS.previewReportProfiles]: (input) => serverBrowser.reportProfiles(input),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
-        ...makeCreatorWsHandlers({ desktopSession, creator, creatorSender, creatorOpen }),
         [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
         [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
         [WS_METHODS.deviceList]: (input) =>
@@ -3138,6 +3140,35 @@ const layerWsRpc = (
       });
       return handlers;
     }),
+  );
+
+const layerWsRpc = (
+  currentSession: EnvironmentAuth.AuthenticatedSession,
+  clientOrigin: OrchestrationClientOrigin,
+  clientAnalyticsProps: Readonly<Record<string, unknown>>,
+  previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  serverBrowser: ServerBrowser.ServerBrowser["Service"],
+  creator: CreatorService.CreatorService["Service"],
+  creatorSender: CreatorSender.CreatorSender["Service"],
+  creatorOpen: CreatorOpen.CreatorOpen["Service"],
+  /** The desktop app's own session on a loopback socket; the Creator surface needs it. */
+  desktopSession: boolean,
+) =>
+  Layer.merge(
+    ServerWsCreatorRpcGroup.toLayer(
+      Effect.succeed(
+        ServerWsCreatorRpcGroup.of(
+          makeCreatorWsHandlers({ desktopSession, creator, creatorSender, creatorOpen }),
+        ),
+      ),
+    ),
+    layerWsCoreRpc(
+      currentSession,
+      clientOrigin,
+      clientAnalyticsProps,
+      previewAutomationBroker,
+      serverBrowser,
+    ),
   );
 
 // A defect in a handler's effect fails only its own request. RpcServer's default

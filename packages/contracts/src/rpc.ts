@@ -1974,6 +1974,30 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
   { error: EnvironmentAuthorizationError },
 ) {}
 
+/**
+ * Amu Creator's procedures, merged into `WsRpcGroup`. The server implements them
+ * as their own handler layer, which keeps the main handler object within the
+ * type checker's instantiation depth.
+ */
+export const WsCreatorRpcGroup = RpcGroup.make(
+  WsCreatorOpenByUserRpc,
+  WsCreatorSetEpochRpc,
+  WsCreatorSaveDraftRpc,
+  WsCreatorUpdateCommentRpc,
+  WsCreatorSetPlaceRpc,
+  WsCreatorAttachShotRpc,
+  WsCreatorDeleteCommentRpc,
+  WsCreatorProposeRpc,
+  WsCreatorCancelProposalRpc,
+  WsCreatorConfirmSendRpc,
+  WsCreatorHaltSendRpc,
+  WsCreatorAcknowledgeConflictRpc,
+  WsCreatorConfirmByUserRpc,
+  WsCreatorReadShotRpc,
+  WsCreatorListRpc,
+  WsCreatorSubscribeRpc,
+).middleware(RpcScopeAuthorization);
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -2134,22 +2158,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewReportProfilesRpc,
   WsPreviewReportStatusRpc,
   WsSubscribePreviewEventsRpc,
-  WsCreatorOpenByUserRpc,
-  WsCreatorSetEpochRpc,
-  WsCreatorSaveDraftRpc,
-  WsCreatorUpdateCommentRpc,
-  WsCreatorSetPlaceRpc,
-  WsCreatorAttachShotRpc,
-  WsCreatorDeleteCommentRpc,
-  WsCreatorProposeRpc,
-  WsCreatorCancelProposalRpc,
-  WsCreatorConfirmSendRpc,
-  WsCreatorHaltSendRpc,
-  WsCreatorAcknowledgeConflictRpc,
-  WsCreatorConfirmByUserRpc,
-  WsCreatorReadShotRpc,
-  WsCreatorListRpc,
-  WsCreatorSubscribeRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsDeviceConfigureRpc,
   WsDeviceListRpc,
@@ -2179,4 +2187,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
-).middleware(RpcScopeAuthorization);
+)
+  .middleware(RpcScopeAuthorization)
+  .merge(WsCreatorRpcGroup);
