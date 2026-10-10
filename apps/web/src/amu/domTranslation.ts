@@ -1,6 +1,7 @@
 import { japaneseUiText } from "../uiText.ja";
 import { japaneseUiTextV2 } from "./uiText.v2.ja";
 import { rebrandUiText } from "../uiText";
+import { translateTimeText } from "./timeText.ja";
 
 /**
  * Amu shows the app in Japanese by translating copy as it reaches the page,
@@ -37,6 +38,8 @@ type Template = {
   readonly translated: string;
   /** Longest fixed part, checked with `includes` before running the pattern. */
   readonly anchor: string;
+  /** "{0}m ago" and the like: also filled into other templates ("Settled {0}"). */
+  readonly timeLike: boolean;
 };
 
 function escapeRegExp(text: string): string {
@@ -60,7 +63,7 @@ function buildTables(dictionary: Readonly<Record<string, string>>) {
       }
       // A short fixed part ("{0}d") would match ordinary words ("Add"), so
       // such templates take numbers only.
-      const timeLike = /^\{\d+\}\s?[a-z]{1,3}( ago)?$/.test(key);
+      const timeLike = /^\{\d+\}\s?[a-z]{1,3}( ago| left)?$/.test(key);
       const value = anchor.length < 4 || timeLike ? "(\\d+(?:[.,]\\d+)?)" : "(.+?)";
       parts.forEach((part, index) => {
         if (index % 2 === 0) {
@@ -78,7 +81,7 @@ function buildTables(dictionary: Readonly<Record<string, string>>) {
         return position === -1 ? `{${n}}` : `$${position + 1}`;
       });
       if (anchor.length === 0) continue;
-      templates.push({ pattern: new RegExp(source, "s"), translated, anchor });
+      templates.push({ pattern: new RegExp(source, "s"), translated, anchor, timeLike });
     } else if (!exact.has(key)) {
       exact.set(key, japanese);
     }
@@ -108,13 +111,25 @@ export function translateUiCopy(text: string): string | null {
     if (match === null) continue;
     const values = match.slice(1);
     const translated = template.translated.replace(/\$(\d+)/g, (_, n: string) => {
-      const value = values[Number(n) - 1] ?? "";
-      // Inserted names stay verbatim, but known copy inside them is translated too.
-      return exact.get(normalizeUiKey(value)) ?? value;
+      const value = normalizeUiKey(values[Number(n) - 1] ?? "");
+      // Inserted names stay verbatim, but known copy and times inside them are
+      // translated too ("Settled 5m ago").
+      return exact.get(value) ?? translateTimeValue(value, templates) ?? value;
     });
     return keepEdgeSpace(text, rebrandUiText(translated));
   }
-  return null;
+  const time = translateTimeText(key);
+  return time === null ? null : keepEdgeSpace(text, time);
+}
+
+/** A relative time or duration inserted into another template. */
+function translateTimeValue(value: string, templates: readonly Template[]): string | null {
+  for (const template of templates) {
+    if (!template.timeLike) continue;
+    const match = template.pattern.exec(value);
+    if (match !== null) return template.translated.replace(/\$1/g, match[1] ?? "");
+  }
+  return translateTimeText(value);
 }
 
 /** Text outside the dictionary still never shows the upstream app name. */

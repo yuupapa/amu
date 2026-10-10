@@ -39,6 +39,30 @@ describe("translateUiCopy", () => {
     expect(translateUiCopy("5m ago")).toBe("5分前");
   });
 
+  it("translates timestamps and relative times from timestampFormat.ts", () => {
+    expect(translateUiCopy("yesterday at 20:49")).toBe("昨日 20:49");
+    expect(translateUiCopy("tomorrow at 8:05 PM")).toBe("明日 8:05 PM");
+    expect(translateUiCopy("just now")).toBe("たった今");
+    expect(translateUiCopy("3w")).toBe("3週間");
+    expect(translateUiCopy("20:49, 9th October 2026")).toBe("2026年10月9日 20:49");
+    expect(translateUiCopy("8:49 PM, 1st May 2025")).toBe("2025年5月1日 8:49 PM");
+    // Times inside other copy.
+    expect(translateUiCopy("Settled 5m ago")).toBe("完了：5分前");
+    expect(translateUiCopy("Snoozed, 3h left")).toBe("スヌーズ中（残り3時間）");
+    expect(translateUiCopy("Archived 2d ago · Created just now")).toBe(
+      "アーカイブ：2日前・作成：たった今",
+    );
+    expect(translateUiCopy("Last run 16h ago. 2 MB recovered.")).toBe(
+      "前回の実行：16時間前。2 MB を空けました。",
+    );
+    expect(translateUiCopy("Connected for 4m")).toBe("接続中（4分）");
+    // Compound durations.
+    expect(translateUiCopy("1m 5s")).toBe("1分5秒");
+    expect(translateUiCopy("Expires in 4m 12s")).toBe("あと4分12秒で期限切れ");
+    expect(translateUiCopy("Expires in 1d 3h")).toBe("あと1日3時間で期限切れ");
+    expect(translateUiCopy("Expires in soon")).toBeNull();
+  });
+
   it("translates copy added by the 2026-10-10 upstream sync", () => {
     expect(translateUiCopy("Open on this computer")).toBe("このコンピューターで開く");
     expect(translateUiCopy("Open in Studio Mac's browser")).toBe("Studio Mac のブラウザーで開く");
