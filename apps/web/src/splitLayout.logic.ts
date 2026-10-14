@@ -118,8 +118,9 @@ function mapPane(
 }
 
 /**
- * Puts `newPane` next to `paneId` on the given side. Returns null when the
- * layout is full or the pane does not exist, so callers can tell the user.
+ * Puts `newPane` next to `paneId` on the given side and evens out every
+ * ratio. Returns null when the layout is full or the pane does not exist, so
+ * callers can tell the user.
  */
 export function splitSplitPane(
   layout: SplitLayout,
@@ -140,7 +141,7 @@ export function splitSplitPane(
     first: newFirst ? leaf : existing,
     second: newFirst ? existing : leaf,
   }));
-  return { root, focusedPaneId: newPane.paneId };
+  return { root: equalizeSplitRatios(root), focusedPaneId: newPane.paneId };
 }
 
 function removePane(node: SplitNode, paneId: string): SplitNode | null {
@@ -154,13 +155,39 @@ function removePane(node: SplitNode, paneId: string): SplitNode | null {
   return first === node.first && second === node.second ? node : { ...node, first, second };
 }
 
-/** Closes a pane; its sibling takes over the freed space. The last pane stays. */
+/** How many equal slots `node` fills along `direction`: nested splits in the same direction add up. */
+function slotsAlong(node: SplitNode, direction: SplitDirection): number {
+  if (node.type === "pane" || node.direction !== direction) return 1;
+  return slotsAlong(node.first, direction) + slotsAlong(node.second, direction);
+}
+
+/**
+ * Resets every ratio so panes sharing a row or a column get equal space.
+ * Splits in the same direction count as one run, so three side-by-side panes
+ * each get a third rather than half, quarter, quarter.
+ */
+function equalizeSplitRatios(node: SplitNode): SplitNode {
+  if (node.type === "pane") return node;
+  const first = equalizeSplitRatios(node.first);
+  const second = equalizeSplitRatios(node.second);
+  const firstSlots = slotsAlong(first, node.direction);
+  const ratio = firstSlots / (firstSlots + slotsAlong(second, node.direction));
+  return first === node.first && second === node.second && node.ratio === ratio
+    ? node
+    : { ...node, ratio, first, second };
+}
+
+/**
+ * Closes a pane and shares the freed space evenly among the rest, so the
+ * remaining panes never end up lopsided. The last pane stays.
+ */
 export function closeSplitPane(layout: SplitLayout, paneId: string): SplitLayout {
   const panes = listSplitPanes(layout.root);
   const index = panes.findIndex((pane) => pane.paneId === paneId);
   if (index === -1 || panes.length <= 1) return layout;
-  const root = removePane(layout.root, paneId);
-  if (root === null) return layout;
+  const removed = removePane(layout.root, paneId);
+  if (removed === null) return layout;
+  const root = equalizeSplitRatios(removed);
   if (layout.focusedPaneId !== paneId) return { root, focusedPaneId: layout.focusedPaneId };
   const remaining = listSplitPanes(root);
   const nextFocus = remaining[Math.min(index, remaining.length - 1)] ?? remaining[0]!;

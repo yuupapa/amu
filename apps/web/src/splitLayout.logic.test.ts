@@ -72,6 +72,83 @@ describe("splitLayout.logic", () => {
     expect(countSplitPanes(last)).toBe(1);
   });
 
+  function paneSizes(layout: SplitLayout) {
+    return computeSplitGeometry(layout.root).panes.map((pane) => [
+      pane.paneId,
+      Number(pane.rect.width.toFixed(4)),
+      Number(pane.rect.height.toFixed(4)),
+    ]);
+  }
+
+  it("adding a third side-by-side pane gives each a third", () => {
+    let layout = split(createSplitLayout("a", thread("a")), "a", "right", "b");
+    layout = setSplitRatio(layout, [], 0.7);
+    layout = split(layout, "b", "right", "c");
+    expect(paneSizes(layout)).toEqual([
+      ["a", 0.3333, 1],
+      ["b", 0.3333, 1],
+      ["c", 0.3333, 1],
+    ]);
+  });
+
+  it("stacking a pane in one column keeps the two columns even", () => {
+    let layout = split(createSplitLayout("a", thread("a")), "a", "right", "b");
+    layout = setSplitRatio(layout, [], 0.3);
+    layout = split(layout, "b", "bottom", "c");
+    expect(paneSizes(layout)).toEqual([
+      ["a", 0.5, 1],
+      ["b", 0.5, 0.5],
+      ["c", 0.5, 0.5],
+    ]);
+  });
+
+  it("closing one of three side-by-side panes leaves two equal halves", () => {
+    let layout = split(createSplitLayout("a", thread("a")), "a", "right", "b");
+    layout = split(layout, "b", "right", "c");
+    layout = setSplitRatio(layout, [], 0.2);
+    layout = setSplitRatio(layout, ["second"], 0.7);
+    const closed = closeSplitPane(layout, "b");
+    expect(paneSizes(closed)).toEqual([
+      ["a", 0.5, 1],
+      ["c", 0.5, 1],
+    ]);
+  });
+
+  it("closing one of four side-by-side panes leaves three equal columns", () => {
+    let layout = split(createSplitLayout("a", thread("a")), "a", "right", "b");
+    layout = split(layout, "b", "right", "c");
+    layout = split(layout, "c", "right", "d");
+    layout = setSplitRatio(layout, [], 0.6);
+    const closed = closeSplitPane(layout, "d");
+    expect(paneSizes(closed)).toEqual([
+      ["a", 0.3333, 1],
+      ["b", 0.3333, 1],
+      ["c", 0.3333, 1],
+    ]);
+  });
+
+  it("closing a stacked pane next to a column evens out the two columns", () => {
+    let layout = split(createSplitLayout("a", thread("a")), "a", "right", "b");
+    layout = split(layout, "b", "bottom", "c");
+    layout = setSplitRatio(layout, [], 0.3);
+    layout = setSplitRatio(layout, ["second"], 0.7);
+    expect(paneSizes(closeSplitPane(layout, "b"))).toEqual([
+      ["a", 0.5, 1],
+      ["c", 0.5, 1],
+    ]);
+  });
+
+  it("closing the full-height column evens out the remaining stack", () => {
+    let layout = split(createSplitLayout("a", thread("a")), "a", "right", "b");
+    layout = split(layout, "b", "bottom", "c");
+    layout = setSplitRatio(layout, [], 0.3);
+    layout = setSplitRatio(layout, ["second"], 0.7);
+    expect(paneSizes(closeSplitPane(layout, "a"))).toEqual([
+      ["b", 1, 0.5],
+      ["c", 1, 0.5],
+    ]);
+  });
+
   it("finds panes by thread and ignores no-op target changes", () => {
     const layout = split(createSplitLayout("a", thread("a")), "a", "right", "b");
     expect(findSplitPaneByTarget(layout, thread("b"))?.paneId).toBe("b");
