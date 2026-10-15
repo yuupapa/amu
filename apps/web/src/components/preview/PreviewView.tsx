@@ -1046,14 +1046,20 @@ export function PreviewView({
         expandAction={
           isCreatorTab ? (
             <>
-              <CreatorExpandButton threadRef={threadRef} />
+              {/* Popped out, the panel only holds a notice: nothing to enlarge. */}
+              {creatorPoppedOut ? null : <CreatorExpandButton threadRef={threadRef} />}
               {previewBridge && runtimeTabId && !isServerTab ? (
                 <CreatorPopoutButton
                   runtimeTabId={runtimeTabId}
                   poppedOut={creatorPoppedOut}
-                  disabled={
-                    !creatorPoppedOut &&
-                    (!desktopOverlay?.hasWebContents || recordingRuntimeTabId !== null)
+                  disabledReason={
+                    creatorPoppedOut
+                      ? null
+                      : recordingRuntimeTabId !== null
+                        ? "録画中は使えません"
+                        : !desktopOverlay?.hasWebContents
+                          ? "読み込み中です"
+                          : null
                   }
                 />
               ) : null}
