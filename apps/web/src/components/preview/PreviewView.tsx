@@ -93,6 +93,7 @@ import {
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Button } from "~/components/ui/button";
 import { useCreatorAttention } from "~/amu/creator/creatorAttention";
+import { CreatorExpandButton } from "~/amu/creator/CreatorExpandButton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { observeResize } from "~/lib/observeResize";
 
@@ -1026,6 +1027,7 @@ export function PreviewView({
             </Tooltip>
           ) : null
         }
+        expandAction={snapshot?.creator ? <CreatorExpandButton threadRef={threadRef} /> : undefined}
         trailingActions={
           moreMenuActions ? (
             <PreviewMoreMenu

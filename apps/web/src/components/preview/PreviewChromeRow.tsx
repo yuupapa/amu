@@ -56,6 +56,8 @@ interface Props {
    * Trailing slot rendered after the URL input. Used by the preview view
    * to mount the three-dot menu (hard reload, devtools, zoom, clear data).
    */
+  /** Shown just before trailingActions; Creator tabs put their expand toggle here. */
+  expandAction?: ReactNode;
   trailingActions?: ReactNode;
   /**
    * Slot between the nav buttons and the URL input. The preview view uses it
@@ -89,6 +91,7 @@ export function PreviewChromeRow({
   pickActive,
   pickDisabled,
   pickDisabledReason,
+  expandAction,
   trailingActions,
   leadingActions,
 }: Props) {
@@ -307,6 +310,7 @@ export function PreviewChromeRow({
             </TooltipPopup>
           </Tooltip>
         ) : null}
+        {expandAction}
         {trailingActions}
       </form>
       <div
