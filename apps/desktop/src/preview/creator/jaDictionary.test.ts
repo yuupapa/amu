@@ -73,4 +73,76 @@ describe("translate", () => {
     expect(translate("Renders (3)", "content")).toBe("書き出し履歴（3）");
     expect(translate("4 clips", "content")).toBe("4 個のクリップ");
   });
+
+  it("covers every tooltip label of Studio's toolbars, player and header (HyperFrames 0.8.157)", () => {
+    // The `label` of each `Tr` tooltip in Studio's bundle, both states of each toggle.
+    const tooltips = [
+      "Inspector",
+      "Export",
+      "Switch to dark theme",
+      "Switch to light theme",
+      "Capture current frame",
+      "Capturing frame…",
+      "Render and export this composition",
+      "A render is already in progress",
+      "Play",
+      "Pause",
+      "Loop playback",
+      "Mute audio",
+      "Unmute audio",
+      "Playback speed",
+      "Enter fullscreen (F)",
+      "Exit fullscreen (F)",
+      "Shortcuts and tools",
+      "Jump to frame",
+      "Switch to frame display",
+      "Switch to time display",
+      "Clear in-point",
+      "Clear out-point",
+      "Zoom in",
+      "Zoom out",
+      "Fit timeline to width",
+      "Show audio meters",
+      "Hide audio meters",
+      "Ripple on — keeps the main track gapless",
+      "Ripple off — deleting a main-track clip leaves a gap",
+      "Snapping on (N)",
+      "Snapping off (N)",
+      "Linked Selection on — a click selects both halves (⌥-click for one)",
+      "Linked Selection off — a click selects one clip",
+      "Auto-record manual edits as keyframes (click to turn off)",
+      "Manual edits will not be recorded as keyframes (click to turn on)",
+      "Hide thumbnails — labels only",
+      "Show thumbnails — posters stay visible; richer previews appear on interaction",
+      "Split at playhead (S)",
+      "Move the playhead inside the clip to split",
+      "Select a clip to split",
+      "Add beat at playhead",
+      "A beat already exists at the playhead",
+      "Add a music track with beat analysis to place beats",
+      "Add keyframe at playhead (K)",
+      "Remove keyframe at playhead (K)",
+      "Add keyframe at playhead, extends animation (K)",
+      "Add keyframe (K)",
+      "Select an animated element to add keyframes",
+      "Motion path endpoints cannot be removed",
+      "Extend motion path to playhead (K)",
+      "Add waypoint to motion path (K)",
+      "Remove waypoint from motion path (K)",
+      "Delete render file",
+      "Hide finished renders from this list (files stay on disk)",
+      "Download",
+      "Available when the render finishes",
+      "Automate",
+      "Automated",
+      "Render intro",
+      "Undo (Cmd+Z)",
+      "Redo (Ctrl+Shift+Z)",
+    ];
+    expect(tooltips.filter((label) => translate(label, "chrome") === null)).toEqual([]);
+    expect(translate("Hide audio meters")).toBe("音量メーターを隠す");
+    expect(translate("Undo Split clip at playhead (Cmd+Z)")).toBe(
+      "元に戻す：再生位置でクリップを分割（Cmd+Z）",
+    );
+  });
 });

@@ -343,6 +343,15 @@ export const readScenes = (): SceneSource[] => {
   });
 };
 
+/**
+ * Studio's `Tr` tooltip wraps its trigger in `<span class="contents">` and
+ * renders the label in a `role="tooltip"` popup, which the translator picks up
+ * like any added text. A native `title` there would show a second tooltip.
+ */
+export const STUDIO_TOOLTIP_TRIGGER = "span.contents";
+const hasStudioTooltip = (element: Element): boolean =>
+  element.parentElement?.matches(STUDIO_TOOLTIP_TRIGGER) === true;
+
 /** Translates Studio text and remembers originals so teardown can put them back. */
 export const createTranslator = (isOurs: (node: Node) => boolean) => {
   const texts = new Map<Text, { original: string; translated: string }>();
@@ -390,10 +399,12 @@ export const createTranslator = (isOurs: (node: Node) => boolean) => {
       const next = translate(value, "chrome");
       if (next !== null && next !== value) setAttribute(element, name, next);
     }
-    // Icon-only buttons get the Japanese label as a tooltip too.
+    // Icon-only buttons get the Japanese label as a tooltip too, unless Studio
+    // shows its own tooltip for them (translated above as it appears).
     if (
       !element.hasAttribute("title") &&
-      element.matches("button, [role=button], [role=tab], a, [role=slider]")
+      element.matches("button, [role=button], [role=tab], a, [role=slider]") &&
+      !hasStudioTooltip(element)
     ) {
       const label = element.getAttribute("aria-label");
       if (label && /[ぁ-んァ-ン一-龥]/.test(label)) setAttribute(element, "title", label);

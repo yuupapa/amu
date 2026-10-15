@@ -310,6 +310,119 @@ const JA_DICT: Readonly<Record<string, string>> = {
   "Clear out-point": "終了点を解除",
   "Jump to in-point": "開始点へ移動",
   "Jump to out-point": "終了点へ移動",
+
+  // ツールチップ（Studio のポップアップ表示）とボタンの名前
+  "Loop playback": "ループ再生",
+  "Enter fullscreen (F)": "全画面表示（F キー）",
+  "Exit fullscreen (F)": "全画面表示を終了（F キー）",
+  "Capturing frame…": "フレームを保存中…",
+  "Render and export this composition": "このコンポジションを書き出す",
+  "FFmpeg is not installed. Opens the Renders panel with the install command.":
+    "FFmpeg が入っていません。書き出し履歴のパネルでインストール方法を確認できます",
+  "Switch to frame display": "フレーム数の表示に切り替え",
+  "Switch to time display": "時間の表示に切り替え",
+  "Show audio meters": "音量メーターを表示",
+  "Hide audio meters": "音量メーターを隠す",
+  "Ripple on — keeps the main track gapless":
+    "リップル編集：オン（メイントラックのすき間を自動で詰める）",
+  "Ripple off — deleting a main-track clip leaves a gap":
+    "リップル編集：オフ（メイントラックのクリップを消すとすき間が残る）",
+  "Snapping on (N)": "スナップ：オン（N キー）",
+  "Snapping off (N)": "スナップ：オフ（N キー）",
+  "Linked Selection on — a click selects both halves (⌥-click for one)":
+    "リンク選択：オン（クリックで両方を選択。⌥+クリックで片方だけ）",
+  "Linked Selection off — a click selects one clip": "リンク選択：オフ（クリックで 1 つだけ選択）",
+  "Auto-record manual edits as keyframes (click to turn off)":
+    "手で動かした変更をキーフレームとして自動記録中（クリックでオフ）",
+  "Manual edits will not be recorded as keyframes (click to turn on)":
+    "手で動かした変更はキーフレームとして記録しません（クリックでオン）",
+  "Show thumbnails — posters stay visible; richer previews appear on interaction":
+    "サムネイルを表示（操作すると詳しいプレビューが出ます）",
+  "Move the playhead inside the clip to split":
+    "分割するには、再生位置をクリップの中に置いてください",
+  "Select a clip to split": "分割するクリップを選んでください",
+  "Add a music track with beat analysis to place beats":
+    "拍（ビート）の目印を置くには、ビート解析した音楽トラックを追加してください",
+  "A beat already exists at the playhead": "再生位置にはすでに拍（ビート）の目印があります",
+  "Motion path endpoints cannot be removed": "動きの軌道の端点は削除できません",
+  "Extend motion path to playhead (K)": "動きの軌道を再生位置まで延ばす（K キー）",
+  "Extend motion path to playhead": "動きの軌道を再生位置まで延ばす",
+  "Remove waypoint from motion path (K)": "動きの軌道から経由点を削除（K キー）",
+  "Remove motion path waypoint": "動きの軌道の経由点を削除",
+  "Add waypoint to motion path (K)": "動きの軌道に経由点を追加（K キー）",
+  "Add motion path waypoint": "動きの軌道に経由点を追加",
+  "Motion path endpoint": "動きの軌道の端点",
+  "Remove keyframe at playhead (K)": "再生位置のキーフレームを削除（K キー）",
+  "Remove keyframe at playhead": "再生位置のキーフレームを削除",
+  "Add keyframe at playhead, extends animation (K)":
+    "再生位置にキーフレームを追加して、アニメーションを延ばす（K キー）",
+  "Add keyframe at playhead (K)": "再生位置にキーフレームを追加（K キー）",
+  "Add keyframe (K)": "キーフレームを追加（K キー）",
+  "Select an animated element to add keyframes":
+    "キーフレームを追加するには、アニメーションのある要素を選んでください",
+  "Delete render file": "書き出したファイルを削除",
+  "Hide finished renders from this list (files stay on disk)":
+    "終わった書き出しを一覧から隠す（ファイルは残ります）",
+  "Available when the render finishes": "書き出しが終わると使えます",
+  Automate: "自動で動かす",
+  Automated: "自動で動かし中",
+  "Back to parent composition": "親のコンポジションに戻る",
+  "Back (Esc, or double-click empty timeline)":
+    "戻る（Esc キー、またはタイムラインの空いた所をダブルクリック）",
+  "Clip actions": "クリップの操作",
+  "Keyframe actions": "キーフレームの操作",
+  "Linked clips": "リンクしたクリップ",
+  "Composition navigation": "コンポジションの移動",
+  Close: "閉じる",
+  Dismiss: "閉じる",
+  "Dismiss error": "エラーを閉じる",
+  "Fit the whole frame in view": "画面全体が見えるように合わせる",
+  "Hold to show original": "押している間、元の状態を表示",
+  "Meet Framey": "Framey を紹介",
+  "Send feedback to the HyperFrames team": "HyperFrames チームに意見を送る",
+  "Search blocks": "部品を検索",
+  "Upload image asset": "画像素材をアップロード",
+  "Import local font files": "手元のフォントファイルを読み込む",
+  "Copy prompt to AI agent": "AI エージェント向けの指示をコピー",
+  "Generate a prompt to paste into your AI agent": "AI エージェントに貼り付ける指示を作る",
+  "Copy description to clipboard — paste into agent prompts":
+    "説明をクリップボードにコピー（AI エージェントへの指示に貼り付けられます）",
+  "Rotate selection": "選んだものを回転",
+  "Reset 3D orientation": "3D の向きを元に戻す",
+  "Reposition crop": "切り抜く位置を動かす",
+  "Crop presets": "切り抜きのプリセット",
+  "Group name": "グループ名",
+  "Name this group": "このグループに名前を付ける",
+  "This track cannot be grouped": "このトラックはグループにできません",
+  "Effects — group these clips first": "エフェクト（先にクリップをグループにしてください）",
+  "Group these clips to add effects to all of them":
+    "クリップをグループにすると、まとめてエフェクトを付けられます",
+  "Text formatting": "文字の書式",
+  "Text colour": "文字の色",
+  "Move slide up": "スライドを上へ",
+  "Move slide down": "スライドを下へ",
+  "Move up": "上へ移動",
+  "Move down": "下へ移動",
+  "Next keyframe": "次のキーフレームへ",
+  "Previous keyframe": "前のキーフレームへ",
+  "Click to rename": "クリックで名前を変更",
+  "Drag to move · ⌥-click to delete": "ドラッグで移動 · ⌥+クリックで削除",
+  "Loading composition": "コンポジションを読み込み中",
+  "Preparing preview assets": "プレビュー用の素材を準備中",
+  "Console errors in preview": "プレビューのコンソールエラー",
+  "Unsaved Studio version": "保存していない Studio の版",
+  "Undo last slideshow edit (⌘Z)": "スライドショーの直前の編集を元に戻す（⌘Z）",
+  "Ungroup (⌘⇧G)": "グループ解除（⌘⇧G）",
+  Remove: "削除",
+  "Add an animation": "アニメーションを追加",
+  "Add a new animation effect to this element": "この要素に新しいアニメーション効果を追加",
+  "Change an animation": "アニメーションを変更",
+  "Remove an animation": "アニメーションを削除",
+  "Remove this animation": "このアニメーションを削除",
+  "Reset effects": "エフェクトを元に戻す",
+  "Color grading": "色調整",
+  "Reset color grading": "色調整を元に戻す",
+  "Add to composition at current time": "今の再生位置でコンポジションに追加",
 };
 
 const entry = (key: string): string | undefined =>
@@ -338,6 +451,11 @@ const COUNTED_PATTERNS: ReadonlyArray<Pattern> = [
  * chrome: buttons, menus, tabs, labels and tooltip attributes.
  */
 const NAMED_PATTERNS: ReadonlyArray<Pattern> = [
+  [/^Split at playhead \((.+)\)$/, ([, k]) => `再生位置でクリップを分割（${k} キー）`],
+  [
+    /^(Undo|Redo)(?: (.+))? \(((?:Cmd|Ctrl)\+[^)]+)\)$/,
+    ([, a, d, k]) => `${a === "Undo" ? "元に戻す" : "やり直す"}${d ? `：${word(d)}` : ""}（${k}）`,
+  ],
   [/^Close (.+)$/, ([, a = ""]) => `「${word(a)}」を閉じる`],
   [/^Open composition (.+)$/, ([, a]) => `コンポジション「${a}」を開く`],
   [/^Add (.+) to timeline at playhead$/, ([, a]) => `「${a}」を再生位置でタイムラインに追加`],
