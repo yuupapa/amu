@@ -198,3 +198,59 @@ describe("HostedBrowserWebview settings hydration", () => {
     expect(mocks.setClientSettings).not.toHaveBeenCalled();
   });
 });
+
+describe("HostedBrowserWebview popped-out Creator tab", () => {
+  it("keeps the tab without a webview while popped out and remounts at the latest page", async () => {
+    mocks.getClientSettings.mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
+    const createGuest = vi.fn((_attributes: unknown) =>
+      Object.assign(new EventTarget(), { getWebContentsId: () => 41 }),
+    );
+    const threadRef = {
+      environmentId: EnvironmentId.make("host-creator-popout"),
+      threadId: ThreadId.make("thread-creator-popout"),
+    };
+    const runtimeTabId = "creator-tab";
+    const render = (poppedOut: boolean, initialUrl: string) => (
+      <HostedBrowserWebview
+        threadRef={threadRef}
+        tabId="server-tab"
+        runtimeTabId={runtimeTabId}
+        initialUrl={initialUrl}
+        viewport={FILL_PREVIEW_VIEWPORT}
+        pictureInPicture={false}
+        poppedOut={poppedOut}
+        profileId={undefined}
+        zoomFactor={1}
+      />
+    );
+
+    await act(async () => {
+      renderer = create(render(true, "http://localhost:3002/#project/a"), {
+        createNodeMock: (element) =>
+          element.type === "webview"
+            ? createGuest(element.props)
+            : { scrollLeft: 0, scrollTop: 0, scrollTo: () => undefined },
+      });
+      await ensureClientSettingsHydrated();
+    });
+    // The tab stays open, but no webview exists to take it back from the window.
+    expect(mocks.createTab).toHaveBeenCalledOnce();
+    expect(createGuest).not.toHaveBeenCalled();
+    expect(mocks.registerWebview).not.toHaveBeenCalled();
+
+    await act(async () => {
+      renderer?.update(render(false, "http://localhost:3002/#project/b"));
+    });
+    expect(createGuest).toHaveBeenCalledOnce();
+    expect(createGuest).toHaveBeenCalledWith(
+      expect.objectContaining({ src: "http://localhost:3002/#project/b" }),
+    );
+    expect(mocks.registerWebview).toHaveBeenCalledExactlyOnceWith(runtimeTabId, 41);
+
+    await act(async () => {
+      renderer?.update(render(true, "http://localhost:3002/#project/b"));
+    });
+    expect(renderer?.root.findAll((node) => node.type === "webview")).toHaveLength(0);
+    expect(mocks.closeTab).not.toHaveBeenCalled();
+  });
+});

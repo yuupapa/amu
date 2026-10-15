@@ -246,6 +246,10 @@ vi.mock("electron", () => ({
   nativeImage: {
     createFromPath,
   },
+  screen: {
+    getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+    getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+  },
   shell: {
     showItemInFolder,
   },
@@ -4971,6 +4975,153 @@ describe("PreviewManager Amu Creator", () => {
         yield* manager.closeTab("tab_creator");
         yield* settle(() => events.length === 4);
         expect(events[3]).toMatchObject({ kind: "revoked", reason: "tab-closed", epoch: 4 });
+      }),
+    ),
+  );
+
+  const makeCreatorPopoutWindow = (guest: ReturnType<typeof makeCreatorGuest>) => {
+    const windowListeners = new Map<string, () => void>();
+    let destroyed = false;
+    const loadURL = vi.fn(async (_url: string) => undefined);
+    // The window's webContents is a top-level page, not a webview of the main window.
+    Object.assign(guest.webContents, { getType: () => "window", hostWebContents: null, loadURL });
+    const close = vi.fn(() => {
+      if (destroyed) return;
+      destroyed = true;
+      windowListeners.get("closed")?.();
+    });
+    const window = {
+      webContents: guest.webContents,
+      isDestroyed: () => destroyed,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      setTitle: vi.fn(),
+      once: vi.fn((event: string, listener: () => void) => {
+        windowListeners.set(event, listener);
+      }),
+      close,
+      destroy: close,
+    };
+    browserWindowConstructor.mockImplementation(function () {
+      return window;
+    });
+    return { window, loadURL };
+  };
+
+  const collectStates = (manager: PreviewManager.PreviewManager["Service"]) =>
+    Effect.gen(function* () {
+      const states: PreviewManager.PreviewTabState[] = [];
+      yield* manager.subscribeStateChanges((_tabId, state) =>
+        Effect.sync(() => {
+          states.push(state);
+        }),
+      );
+      return states;
+    });
+
+  effectIt.effect(
+    "moves a Creator tab into its own window and back, recovering the session each way",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const webview = makeCreatorGuest(42, "http://localhost:3002/#project/demo");
+          const popoutGuest = makeCreatorGuest(50, "http://localhost:3002/#project/demo");
+          const { window, loadURL } = makeCreatorPopoutWindow(popoutGuest);
+          const events = yield* collectCreatorEvents(manager);
+          const states = yield* collectStates(manager);
+          yield* openCreatorTab(manager, [webview, popoutGuest]);
+          browserWindowConstructor.mockClear();
+          const first = yield* manager.registerCreatorSession("tab_creator", BINDING);
+          expect(first).toMatchObject({ ok: true, epoch: 1 });
+
+          yield* manager.popOutCreator("tab_creator");
+          expect(browserWindowConstructor).toHaveBeenCalledOnce();
+          expect(browserWindowConstructor.mock.calls[0]?.[0]).toMatchObject({
+            width: 1600,
+            height: 972,
+            resizable: true,
+            webPreferences: {
+              preload: "/tmp/t3/desktop/preview-pick-preload.cjs",
+              sandbox: true,
+              contextIsolation: false,
+              nodeIntegration: false,
+              webviewTag: false,
+            },
+          });
+          expect(loadURL).toHaveBeenCalledWith("http://localhost:3002/#project/demo");
+          expect(window.show).toHaveBeenCalled();
+          yield* settle(() => events.some((event) => event["reason"] === "guest-swapped"));
+          expect(events.at(-1)).toMatchObject({ kind: "revoked", epoch: 2 });
+          expect(states.at(-1)).toMatchObject({ webContentsId: 50, poppedOut: true });
+
+          // The panel's webview, still mounted for a moment, cannot take the tab back.
+          const reclaimed = yield* Effect.exit(manager.registerWebview("tab_creator", 42));
+          expect(reclaimed._tag).toBe("Failure");
+
+          // The renderer re-registers on the swap; the window's overlay turns on.
+          const popped = yield* manager.registerCreatorSession("tab_creator", BINDING);
+          if (!popped.ok) throw new Error("registration refused");
+          expect(popped.epoch).toBe(3);
+          expect(popoutGuest.sent("creator:activate").at(-1)).toEqual({
+            generation: popped.generation,
+          });
+          popoutGuest.ipcHandlers.get("creator:draft")?.(popoutGuest.fromMainFrame, {
+            generation: popped.generation,
+            payload: { comment: "from the window" },
+          });
+          yield* settle(() => events.some((event) => event["kind"] === "draft"));
+          expect(events.find((event) => event["kind"] === "draft")).toMatchObject({
+            tabId: "tab_creator",
+            epoch: 3,
+            payload: { comment: "from the window" },
+          });
+
+          // Asking again brings the open window forward instead of opening another.
+          yield* manager.popOutCreator("tab_creator");
+          expect(browserWindowConstructor).toHaveBeenCalledOnce();
+          expect(window.focus).toHaveBeenCalledTimes(2);
+
+          // Closing the window hands the tab back without a guest, for the webview to claim.
+          window.close();
+          yield* settle(() => states.at(-1)?.poppedOut === false);
+          expect(states.at(-1)).toMatchObject({ webContentsId: null, poppedOut: false });
+          yield* settle(() => events.filter((event) => event["kind"] === "revoked").length === 2);
+          expect(events.at(-1)).toMatchObject({
+            kind: "revoked",
+            reason: "guest-swapped",
+            epoch: 4,
+          });
+          yield* manager.registerWebview("tab_creator", 42);
+          const back = yield* manager.registerCreatorSession("tab_creator", BINDING);
+          if (!back.ok) throw new Error("registration refused");
+          expect(back.epoch).toBe(5);
+          expect(webview.sent("creator:activate").at(-1)).toEqual({ generation: back.generation });
+        }),
+      ),
+  );
+
+  effectIt.effect("opens a window only for a Creator tab and closes it with the tab", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const webview = makeCreatorGuest(42);
+        const popoutGuest = makeCreatorGuest(50);
+        const { window } = makeCreatorPopoutWindow(popoutGuest);
+        yield* openCreatorTab(manager, [webview, popoutGuest]);
+        browserWindowConstructor.mockClear();
+
+        // No Creator session on the tab: not a Creator tab.
+        const refused = yield* Effect.exit(manager.popOutCreator("tab_creator"));
+        expect(refused._tag).toBe("Failure");
+        expect(browserWindowConstructor).not.toHaveBeenCalled();
+
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        yield* manager.popOutCreator("tab_creator");
+        const pip = yield* Effect.exit(manager.openPictureInPicture("tab_creator"));
+        expect(pip._tag).toBe("Failure");
+        yield* manager.closeTab("tab_creator");
+        expect(window.isDestroyed()).toBe(true);
       }),
     ),
   );

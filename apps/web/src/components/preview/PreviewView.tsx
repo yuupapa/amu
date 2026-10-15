@@ -94,6 +94,7 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Button } from "~/components/ui/button";
 import { useCreatorAttention } from "~/amu/creator/creatorAttention";
 import { CreatorExpandButton } from "~/amu/creator/CreatorExpandButton";
+import { CreatorPoppedOutNotice, CreatorPopoutButton } from "~/amu/creator/CreatorPopoutButton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { observeResize } from "~/lib/observeResize";
 
@@ -232,6 +233,9 @@ export function PreviewView({
   const serverInputDisabled = isServerTab && serverControlledTabId !== runtimeTabId;
   const [serverFrameTabId, setServerFrameTabId] = useState<string | null>(null);
   const desktopOverlay = tabId ? (previewState.desktopByTabId[tabId] ?? null) : null;
+  const isCreatorTab = Boolean(snapshot?.creator);
+  /** The Creator page is in its own window; the panel shows a notice instead of the webview. */
+  const creatorPoppedOut = isCreatorTab && (desktopOverlay?.poppedOut ?? false);
   const navStatus = snapshot?.navStatus ?? { _tag: "Idle" as const };
   const url = navStatus._tag === "Idle" ? "" : navStatus.url;
   const loading = desktopOverlay?.loading ?? navStatus._tag === "Loading";
@@ -524,7 +528,10 @@ export function PreviewView({
         ...(nativeServerTab && previewBridge
           ? {
               openDevTools: desktopCall(previewBridge.openDevTools),
-              toggleNativePictureInPicture: () => handleNativePictureInPicture(),
+              // Creator tabs float in their own window instead (see CreatorPopoutButton).
+              ...(isCreatorTab
+                ? {}
+                : { toggleNativePictureInPicture: () => handleNativePictureInPicture() }),
             }
           : {}),
       }
@@ -547,7 +554,9 @@ export function PreviewView({
               ?.clearCache(threadRef.environmentId, activeProfileId)
               .catch(() => undefined),
           openDevTools: desktopCall(previewBridge.openDevTools),
-          toggleNativePictureInPicture: () => handleNativePictureInPicture(),
+          ...(isCreatorTab
+            ? {}
+            : { toggleNativePictureInPicture: () => handleNativePictureInPicture() }),
         }
       : null;
 
@@ -989,10 +998,13 @@ export function PreviewView({
         // Capture, annotation, and the more menu drive the desktop webview, so
         // server tabs leave them out. Floating works for both.
         onCapture={previewBridge && tabId && !isServerTab ? handleCapture : undefined}
-        captureDisabled={!desktopOverlay || isUnreachable}
+        // Capture records the panel's webview, which a popped-out Creator tab does not have.
+        captureDisabled={!desktopOverlay || isUnreachable || creatorPoppedOut}
         recording={recordingRuntimeTabId !== null}
         onPictureInPicture={
-          tabId && (isServerTab || previewBridge) ? handlePictureInPicture : undefined
+          tabId && !isCreatorTab && (isServerTab || previewBridge)
+            ? handlePictureInPicture
+            : undefined
         }
         pictureInPicture={miniPlayerTabId === tabId}
         pictureInPictureDisabled={
@@ -1003,9 +1015,13 @@ export function PreviewView({
         // Disable when there's no tab (nothing to pick on) OR the page
         // failed to load (a React overlay covers the webview, so the
         // user wouldn't be able to actually click anything underneath).
-        pickDisabled={!tabId || isUnreachable}
+        pickDisabled={!tabId || isUnreachable || creatorPoppedOut}
         pickDisabledReason={
-          isUnreachable ? "Page didn't load — pick unavailable until the page renders" : undefined
+          isUnreachable
+            ? "Page didn't load — pick unavailable until the page renders"
+            : creatorPoppedOut
+              ? "Creatorは別ウィンドウで開いています"
+              : undefined
         }
         leadingActions={
           // Only when it differs from the default: labelling every tab
@@ -1027,7 +1043,23 @@ export function PreviewView({
             </Tooltip>
           ) : null
         }
-        expandAction={snapshot?.creator ? <CreatorExpandButton threadRef={threadRef} /> : undefined}
+        expandAction={
+          isCreatorTab ? (
+            <>
+              <CreatorExpandButton threadRef={threadRef} />
+              {previewBridge && runtimeTabId && !isServerTab ? (
+                <CreatorPopoutButton
+                  runtimeTabId={runtimeTabId}
+                  poppedOut={creatorPoppedOut}
+                  disabled={
+                    !creatorPoppedOut &&
+                    (!desktopOverlay?.hasWebContents || recordingRuntimeTabId !== null)
+                  }
+                />
+              ) : null}
+            </>
+          ) : undefined
+        }
         trailingActions={
           moreMenuActions ? (
             <PreviewMoreMenu
@@ -1107,12 +1139,16 @@ export function PreviewView({
           </>
         ) : runtimeTabId && snapshot && !showEmptyState ? (
           previewBridge ? (
-            <BrowserSurfaceSlot
-              key={runtimeTabId}
-              tabId={runtimeTabId}
-              visible={visible && !isUnreachable}
-              className="absolute inset-0 h-full w-full"
-            />
+            creatorPoppedOut ? (
+              <CreatorPoppedOutNotice runtimeTabId={runtimeTabId} />
+            ) : (
+              <BrowserSurfaceSlot
+                key={runtimeTabId}
+                tabId={runtimeTabId}
+                visible={visible && !isUnreachable}
+                className="absolute inset-0 h-full w-full"
+              />
+            )
           ) : (
             <div className="flex h-full items-center justify-center p-8 text-center">
               <p className="max-w-sm text-sm text-muted-foreground">
@@ -1136,6 +1172,7 @@ export function PreviewView({
         ) : null}
         {runtimeTabId &&
         desktopOverlay &&
+        !creatorPoppedOut &&
         !showEmptyState &&
         !isUnreachable &&
         !activeRecordingTabIds.has(runtimeTabId) ? (

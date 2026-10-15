@@ -172,4 +172,6 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(PreviewIpc.creatorApprove);
   yield* ipc.handle(PreviewIpc.pushCreatorState);
   yield* ipc.handle(PreviewIpc.pickCreatorVideo);
+  yield* ipc.handle(PreviewIpc.popOutCreator);
+  yield* ipc.handle(PreviewIpc.returnCreator);
 });

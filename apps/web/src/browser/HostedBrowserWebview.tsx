@@ -55,6 +55,12 @@ export function HostedBrowserWebview(props: {
   readonly viewport: PreviewViewportSetting;
   readonly pictureInPicture: boolean;
   /**
+   * The tab's Amu Creator page is in its own desktop window, whose guest the
+   * tab owns meanwhile. No webview is mounted (it would take the tab back), but
+   * the tab lease is kept so the tab stays open.
+   */
+  readonly poppedOut?: boolean;
+  /**
    * Fixed for the tab's lifetime: Electron only honours `partition` before the
    * guest attaches, so a live change here would not move the tab anyway.
    */
@@ -78,6 +84,7 @@ export function HostedBrowserWebview(props: {
     initialUrl,
     viewport,
     pictureInPicture,
+    poppedOut = false,
     zoomFactor,
     profileId,
     serverDriven = false,
@@ -143,6 +150,15 @@ export function HostedBrowserWebview(props: {
   const [webviewGeneration, setWebviewGeneration] = useState(0);
   const [recoverySrc, setRecoverySrc] = useState(initialSrc);
   const latestUrlRef = useRef(initialUrl);
+  // Back from its Creator window, the tab gets a fresh guest at the page it was on.
+  const [shownPoppedOut, setShownPoppedOut] = useState(poppedOut);
+  if (shownPoppedOut !== poppedOut) {
+    setShownPoppedOut(poppedOut);
+    if (!poppedOut) {
+      setRecoverySrc(initialUrl ?? initialSrc);
+      setWebviewGeneration((generation) => generation + 1);
+    }
+  }
 
   useEffect(() => {
     latestUrlRef.current = initialUrl;
@@ -211,7 +227,7 @@ export function HostedBrowserWebview(props: {
       webview.removeEventListener("render-process-gone", recoverGuest);
       webview.removeEventListener("focus", dismissHostPopups);
     };
-  }, [clientSettingsHydrated, config, initialSrc, runtimeTabId, webviewGeneration]);
+  }, [clientSettingsHydrated, config, initialSrc, poppedOut, runtimeTabId, webviewGeneration]);
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;
@@ -296,7 +312,7 @@ export function HostedBrowserWebview(props: {
     wrapper.scrollTo({ left: 0, top: 0 });
   }, [runtimeTabId, viewport._tag, viewportHeight, viewportWidth]);
 
-  if (!clientSettingsHydrated || !config) return null;
+  if (!clientSettingsHydrated || !config || poppedOut) return null;
 
   const renderingActive = active || backgroundActivity || pictureInPicture || recordingActive;
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({

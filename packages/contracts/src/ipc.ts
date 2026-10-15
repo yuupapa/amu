@@ -635,6 +635,12 @@ export interface DesktopPreviewTabState {
   zoomFactor: number;
   /** Whether this tab is currently mirrored into a desktop picture-in-picture window. */
   pictureInPicture: boolean;
+  /**
+   * Whether this Amu Creator tab's page lives in its own desktop window. The
+   * main window shows a placeholder and must not mount a webview for the tab
+   * meanwhile, or that guest would take the tab back.
+   */
+  poppedOut: boolean;
   colorScheme: DesktopPreviewColorScheme;
   /**
    * Whether the user has silenced this tab. Per tab rather than per origin, so
@@ -1446,6 +1452,13 @@ export interface DesktopPreviewBridge {
     open: (tabId: string) => Promise<void>;
     close: (tabId: string) => Promise<void>;
   };
+  /**
+   * Moves an Amu Creator tab's page into its own window, live and at native
+   * resolution; brings that window forward when it is already open.
+   */
+  popOutCreator: (tabId: string) => Promise<void>;
+  /** Closes the tab's Creator window so the page returns to the panel. */
+  returnCreator: (tabId: string) => Promise<void>;
   recording: {
     onInput: (listener: (event: DesktopPreviewRecordingInputEvent) => void) => () => void;
     startScreencast: (tabId: string) => Promise<void>;

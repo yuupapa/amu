@@ -42,6 +42,7 @@ import {
   type Session,
   clipboard,
   nativeImage,
+  screen,
   shell,
   webContents,
 } from "electron";
@@ -73,6 +74,7 @@ import { MENU_ACTION_CHANNEL, PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from ".
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
 import * as BrowserSession from "./BrowserSession.ts";
+import { createCreatorPopoutWindow } from "./CreatorPopoutWindow.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
   ANNOTATION_SEND_ENABLED_CHANNEL,
@@ -81,6 +83,7 @@ import {
   ELEMENT_PICKED_CHANNEL,
   HUMAN_INPUT_CHANNEL,
   MOUSE_NAVIGATE_CHANNEL,
+  PASSKEY_BRIDGE_ARGUMENT,
   RECORDING_CURSOR_CHANNEL,
   RECORDING_INPUT_CHANNEL,
   RECORDING_CONTROLLER_CHANNEL,
@@ -128,6 +131,8 @@ export interface PreviewTabState {
   canGoForward: boolean;
   zoomFactor: number;
   pictureInPicture: boolean;
+  /** The tab's guest is an Amu Creator window rather than the main window's webview. */
+  poppedOut: boolean;
   colorScheme: DesktopPreviewColorScheme;
   /** User intent to silence this tab. Re-applied to each guest that attaches. */
   audioMuted: boolean;
@@ -454,6 +459,15 @@ interface FrameCaptureSession {
   readonly lastPictureInPictureFrame: Buffer | null;
 }
 
+/** An Amu Creator tab's own window; its webContents becomes the tab's guest once loaded. */
+interface CreatorPopout {
+  readonly window: BrowserWindow;
+  readonly webContentsId: number;
+}
+
+/** How long a Creator window may take to load Studio before opening it fails. */
+const CREATOR_POPOUT_LOAD_TIMEOUT = "15 seconds";
+
 interface PictureInPictureSession {
   readonly window: BrowserWindow;
   readonly webContentsId: number;
@@ -623,6 +637,7 @@ const isPreviewInputSignal = (value: unknown): value is PreviewInputSignal => {
 const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function* (
   artifactDirectory: string,
   pictureInPicturePreloadPath: string,
+  creatorPopoutPreloadPath: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
@@ -656,6 +671,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   // only owner of these; see creatorSessions.ts.
   const creatorLedger = makeCreatorLedger();
   const creatorEventListenersRef = yield* Ref.make<ReadonlySet<CreatorEventListener>>(new Set());
+  const creatorPopouts = new Map<string, CreatorPopout>();
+  const isCreatorPopoutGuest = (webContentsId: number): boolean => {
+    for (const popout of creatorPopouts.values()) {
+      if (popout.webContentsId === webContentsId) return true;
+    }
+    return false;
+  };
   const clock = yield* Clock.Clock;
   const controlSessionsRef = yield* SynchronizedRef.make<
     ReadonlyMap<number, BrowserControlSession>
@@ -1439,7 +1461,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         (revocation) => announceCreatorRevocation(revocation, "revoke-all"),
         { discard: true },
       ),
-    );
+    ).pipe(Effect.andThen(Effect.suspend(() => closeAllCreatorPopouts())));
 
   const isCreatorSessionCurrent = (tabId: string, generation: number) =>
     Effect.sync(() => creatorLedger.isCurrent(tabId, generation));
@@ -2038,7 +2060,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     };
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
       syncMenuShortcuts(wc, input);
-      const host = wc.hostWebContents;
+      // A Creator window has no host; its app shortcuts belong to the main window.
+      const host =
+        wc.hostWebContents ??
+        (isCreatorPopoutGuest(wc.id) ? (currentMainWindow?.webContents ?? null) : null);
       const forwarded =
         input.type === "keyDown" &&
         !input.isComposing &&
@@ -2188,10 +2213,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           currentMainWindow = undefined;
           frameCaptureWindowOpen = false;
           mainWindowCleanupFiber = runFork(
-            Effect.all([closeAllPictureInPicture(), stopAllRecordings()], {
-              concurrency: "unbounded",
-              discard: true,
-            }).pipe(Effect.ignore),
+            Effect.all(
+              [closeAllPictureInPicture(), stopAllRecordings(), closeAllCreatorPopouts()],
+              {
+                concurrency: "unbounded",
+                discard: true,
+              },
+            ).pipe(Effect.ignore),
           );
         });
         return [undefined, sessions] as const;
@@ -2222,6 +2250,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           canGoForward: false,
           zoomFactor: normalizeZoomFactor(defaults?.zoomFactor),
           pictureInPicture: false,
+          poppedOut: false,
           colorScheme: defaults?.colorScheme ?? "system",
           ...(defaults?.serverTab === undefined ? {} : { serverTab: defaults.serverTab }),
           audioMuted: false,
@@ -2256,6 +2285,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     clearPendingRecording(tabId);
     annotationSendEnabled.delete(tabId);
     yield* announceCreatorRevocation(creatorLedger.closeTab(tabId), "tab-closed");
+    yield* destroyCreatorPopout(tabId);
     yield* Effect.all(
       [
         cancelPickElement(tabId),
@@ -2298,6 +2328,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       canGoForward: false,
       zoomFactor: DEFAULT_ZOOM_FACTOR,
       pictureInPicture: false,
+      poppedOut: false,
       colorScheme: "system",
       audioMuted: false,
       audible: false,
@@ -2344,10 +2375,30 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       !wc ||
       wc.isDestroyed() ||
       wc.getType() !== "webview" ||
-      (Option.isSome(mainWindow) && wc.hostWebContents !== mainWindow.value.webContents)
+      (Option.isSome(mainWindow) && wc.hostWebContents !== mainWindow.value.webContents) ||
+      // While the tab lives in its Creator window, a webview still mounted in
+      // the main window must not take it back.
+      creatorPopouts.has(tabId)
     ) {
       return yield* new PreviewWebContentsNotFoundError({ tabId, webContentsId });
     }
+    yield* adoptGuestUnlocked(tabId, wc, expectedGeneration, false);
+  });
+
+  /**
+   * Makes `wc` the tab's guest: a webview from the main window, or the
+   * webContents of the tab's Creator window (`poppedOut`). A different guest
+   * the tab owned is detached and its Creator session revoked as swapped.
+   */
+  const adoptGuestUnlocked = Effect.fn("PreviewManager.adoptGuestUnlocked")(function* (
+    tabId: string,
+    wc: Electron.WebContents,
+    expectedGeneration: number | undefined,
+    poppedOut: boolean,
+  ) {
+    const webContentsId = wc.id;
+    const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+    if (!tab) return yield* new PreviewTabNotFoundError({ tabId });
     yield* rendererHistory.register(wc, { surface: "preview", tabId });
     const attached = yield* Ref.get(attachedRef);
     const annotationTheme = yield* Ref.get(annotationThemeRef);
@@ -2428,6 +2479,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         const next: PreviewTabState = {
           ...currentWithoutFavicon,
           webContentsId,
+          poppedOut,
           navStatus: pendingUrl === null ? computeNavStatus(wc) : current.navStatus,
           canGoBack: wc.navigationHistory.canGoBack(),
           canGoForward: wc.navigationHistory.canGoForward(),
@@ -2524,6 +2576,200 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
+  /**
+   * Gives the tab back to the main window once its Creator window goes away:
+   * the window's guest is detached and the tab is left without one, so the
+   * renderer mounts its webview again and the Creator session recovers there.
+   */
+  const releaseCreatorPopoutUnlocked = Effect.fn("PreviewManager.releaseCreatorPopoutUnlocked")(
+    function* (tabId: string, popout: CreatorPopout) {
+      if (creatorPopouts.get(tabId) !== popout) return;
+      creatorPopouts.delete(tabId);
+      const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+      if (!tab) return;
+      const owned = tab.webContentsId === popout.webContentsId;
+      if (owned) {
+        yield* announceCreatorRevocation(creatorLedger.revoke(tabId), "guest-swapped");
+        yield* Effect.all(
+          [
+            detachControlSession(popout.webContentsId),
+            detachListeners(popout.webContentsId),
+            cancelPickElement(tabId),
+          ],
+          { concurrency: 3, discard: true },
+        );
+      }
+      const updatedAt = yield* currentIso;
+      const released = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
+        const current = tabs.get(tabId);
+        if (!current) return [Option.none<PreviewTabState>(), tabs] as const;
+        const { favicon: _favicon, ...currentWithoutFavicon } = current;
+        const next: PreviewTabState =
+          current.webContentsId === popout.webContentsId
+            ? {
+                ...currentWithoutFavicon,
+                webContentsId: null,
+                poppedOut: false,
+                canGoBack: false,
+                canGoForward: false,
+                audible: false,
+                updatedAt,
+              }
+            : { ...current, poppedOut: false, updatedAt };
+        return [
+          Option.some(next),
+          replaceMap(tabs, (copy) => {
+            copy.set(tabId, next);
+          }),
+        ] as const;
+      });
+      if (Option.isSome(released)) yield* emitIfCurrent(tabId, released.value);
+    },
+  );
+
+  /** For a closing tab, which detaches its guest itself. */
+  const destroyCreatorPopout = (tabId: string) =>
+    attempt({ operation: "creatorPopout.destroy", tabId }, () => {
+      const popout = creatorPopouts.get(tabId);
+      if (!popout) return;
+      creatorPopouts.delete(tabId);
+      if (!popout.window.isDestroyed()) popout.window.destroy();
+    }).pipe(Effect.ignore);
+
+  /**
+   * Moves an Amu Creator tab's page into its own window and adopts that
+   * window's webContents as the tab's guest. Studio loads there first, so the
+   * panel keeps showing it until the window is ready. Brings the window
+   * forward when the tab already has one.
+   */
+  const popOutCreator = Effect.fn("PreviewManager.popOutCreator")(function* (tabId: string) {
+    const existing = creatorPopouts.get(tabId);
+    if (existing) {
+      yield* attempt(
+        { operation: "creatorPopout.focus", tabId, webContentsId: existing.webContentsId },
+        () => {
+          if (existing.window.isDestroyed()) return;
+          if (existing.window.isMinimized()) existing.window.restore();
+          existing.window.show();
+          existing.window.focus();
+        },
+      );
+      return;
+    }
+    const expectedGeneration = tabLifecycleGenerations.get(tabId);
+    const source = yield* requireWebContents(tabId);
+    const url = source.getURL();
+    // A Creator tab shows loopback Studio and has a session the renderer registered.
+    if (!isCreatorGuestUrl(url) || creatorLedger.session(tabId) === undefined) {
+      return yield* new PreviewOperationError({
+        operation: "creatorPopout.open",
+        tabId,
+        webContentsId: source.id,
+        cause: new Error("Only an Amu Creator tab can open in its own window."),
+      });
+    }
+    // Recording and picture-in-picture capture the main window's webview.
+    if (
+      (yield* SynchronizedRef.get(frameCaptureSessionsRef)).get(tabId)?.consumers.has("recording")
+    ) {
+      return yield* new PreviewOperationError({
+        operation: "creatorPopout.open",
+        tabId,
+        webContentsId: source.id,
+        cause: new Error("Stop recording before opening Amu Creator in its own window."),
+      });
+    }
+    yield* closePictureInPicture(tabId);
+    const window = yield* attempt(
+      { operation: "creatorPopout.create", tabId, webContentsId: source.id },
+      () => {
+        const mainWindow = currentMainWindow;
+        const display =
+          mainWindow && !mainWindow.isDestroyed()
+            ? screen.getDisplayMatching(mainWindow.getBounds())
+            : screen.getPrimaryDisplay();
+        return createCreatorPopoutWindow({
+          session: source.session,
+          preload: creatorPopoutPreloadPath,
+          additionalArguments: passkeys.bridgeEnabled ? [PASSKEY_BRIDGE_ARGUMENT] : [],
+          workArea: display.workArea,
+          pageTitle: source.getTitle(),
+          onLeave: (next) => {
+            if (isPopupUrl(next)) runFork(emitOpenLink({ tabId, url: next, background: false }));
+          },
+        });
+      },
+    );
+    const popout: CreatorPopout = { window, webContentsId: window.webContents.id };
+    creatorPopouts.set(tabId, popout);
+    window.once("closed", () => {
+      runFork(withTabLifecycleLock(tabId, releaseCreatorPopoutUnlocked(tabId, popout)));
+    });
+    const opened = yield* Effect.gen(function* () {
+      const loaded = yield* attemptPromise(
+        { operation: "creatorPopout.load", tabId, webContentsId: popout.webContentsId },
+        () => window.webContents.loadURL(url),
+      ).pipe(Effect.timeoutOption(CREATOR_POPOUT_LOAD_TIMEOUT));
+      if (Option.isNone(loaded)) {
+        return yield* new PreviewOperationError({
+          operation: "creatorPopout.load",
+          tabId,
+          webContentsId: popout.webContentsId,
+          cause: new Error("Amu Creator did not load in its own window."),
+        });
+      }
+      yield* withTabLifecycleLock(
+        tabId,
+        Effect.gen(function* () {
+          if (
+            creatorPopouts.get(tabId) !== popout ||
+            window.isDestroyed() ||
+            (yield* Ref.get(closingTabIdsRef)).has(tabId) ||
+            tabLifecycleGenerations.get(tabId) !== expectedGeneration
+          ) {
+            return yield* new PreviewTabNotFoundError({ tabId });
+          }
+          yield* adoptGuestUnlocked(tabId, window.webContents, expectedGeneration, true);
+        }),
+      );
+      yield* attempt(
+        { operation: "creatorPopout.show", tabId, webContentsId: popout.webContentsId },
+        () => {
+          window.show();
+          window.focus();
+        },
+      );
+    }).pipe(Effect.exit);
+    if (Exit.isFailure(opened)) {
+      yield* withTabLifecycleLock(tabId, releaseCreatorPopoutUnlocked(tabId, popout));
+      yield* attempt({ operation: "creatorPopout.close", tabId }, () => {
+        if (!window.isDestroyed()) window.destroy();
+      }).pipe(Effect.ignore);
+      return yield* Effect.failCause(opened.cause);
+    }
+  });
+
+  /** Closes the tab's Creator window; its page comes back to the panel. */
+  const returnCreator = Effect.fn("PreviewManager.returnCreator")(function* (tabId: string) {
+    const popout = creatorPopouts.get(tabId);
+    if (!popout) return;
+    yield* withTabLifecycleLock(tabId, releaseCreatorPopoutUnlocked(tabId, popout));
+    yield* attempt(
+      { operation: "creatorPopout.close", tabId, webContentsId: popout.webContentsId },
+      () => {
+        if (!popout.window.isDestroyed()) popout.window.close();
+      },
+    ).pipe(Effect.ignore);
+  });
+
+  const closeAllCreatorPopouts = Effect.fn("PreviewManager.closeAllCreatorPopouts")(function* () {
+    yield* Effect.forEach(
+      [...creatorPopouts.keys()],
+      (tabId) => returnCreator(tabId).pipe(Effect.ignore),
+      { discard: true },
+    );
+  });
+
   const navigate = Effect.fn("PreviewManager.navigate")(function* (tabId: string, rawUrl: string) {
     const url = yield* attempt({ operation: "navigate.normalizeUrl", tabId }, () =>
       normalizePreviewUrl(rawUrl),
@@ -2543,6 +2789,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         canGoForward: current?.canGoForward ?? false,
         zoomFactor: current?.zoomFactor ?? DEFAULT_ZOOM_FACTOR,
         pictureInPicture: current?.pictureInPicture ?? false,
+        poppedOut: current?.poppedOut ?? false,
         colorScheme: current?.colorScheme ?? "system",
         // Both carry across navigation. Mute is user intent, and the old
         // document keeps playing until loadURL actually replaces it, so
@@ -3368,6 +3615,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const openPictureInPicture = Effect.fn("PreviewManager.openPictureInPicture")(function* (
     tabId: string,
   ) {
+    if (creatorPopouts.has(tabId)) {
+      return yield* new PreviewOperationError({
+        operation: "pictureInPicture.open",
+        tabId,
+        cause: new Error("Amu Creator is open in its own window."),
+      });
+    }
     const claim = yield* pictureInPictureMutationSemaphore.withPermit(
       Effect.gen(function* () {
         const existing = (yield* SynchronizedRef.get(pictureInPictureSessionsRef)).get(tabId);
@@ -3939,6 +4193,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     openPictureInPicture,
     openDevTools,
     pickElement,
+    popOutCreator,
+    returnCreator,
     prepareWebview,
     reapplyZoom,
     refresh,
@@ -4192,6 +4448,10 @@ export class PreviewManager extends Context.Service<
     readonly copyArtifactToClipboard: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly openPictureInPicture: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly closePictureInPicture: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    /** Amu Creator: moves the tab's page into its own window, or brings that window forward. */
+    readonly popOutCreator: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    /** Amu Creator: closes the tab's own window; the page returns to the panel. */
+    readonly returnCreator: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly startRecording: (
       tabId: string,
       options?: RecordingInputOptions,
@@ -4290,6 +4550,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
   const operations = yield* makeNativeOperations(
     environment.browserArtifactsDir,
     environment.path.join(environment.dirname, "preview-pip-preload.cjs"),
+    environment.path.join(environment.dirname, "preview-pick-preload.cjs"),
   );
 
   return PreviewManager.of({
@@ -4363,6 +4624,8 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     copyArtifactToClipboard: operations.copyArtifactToClipboard,
     openPictureInPicture: operations.openPictureInPicture,
     closePictureInPicture: operations.closePictureInPicture,
+    popOutCreator: operations.popOutCreator,
+    returnCreator: operations.returnCreator,
     startRecording: operations.startRecording,
     stopRecording: operations.stopRecording,
     saveRecording: operations.saveRecording,

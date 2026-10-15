@@ -27,6 +27,8 @@ export interface DesktopPreviewOverlay {
   loading: boolean;
   zoomFactor: number;
   pictureInPicture: boolean;
+  /** The tab's Amu Creator page is in its own desktop window. */
+  poppedOut: boolean;
   colorScheme: DesktopPreviewColorScheme;
   audioMuted: boolean;
   audible: boolean;
@@ -376,6 +378,7 @@ function isPreviewStateEqual(
       previous.loading === next.loading &&
       previous.zoomFactor === next.zoomFactor &&
       previous.pictureInPicture === next.pictureInPicture &&
+      previous.poppedOut === next.poppedOut &&
       previous.colorScheme === next.colorScheme &&
       previous.audioMuted === next.audioMuted &&
       previous.audible === next.audible &&

@@ -542,6 +542,28 @@ export const pushCreatorState = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const popOutCreator = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_POP_OUT_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.popOutCreator")(function* ({ tabId }, event) {
+    yield* ensureCreatorRenderer(event);
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.popOutCreator(tabId);
+  }),
+});
+
+export const returnCreator = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_CREATOR_RETURN_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.returnCreator")(function* ({ tabId }, event) {
+    yield* ensureCreatorRenderer(event);
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.returnCreator(tabId);
+  }),
+});
+
 /** Video kinds Amu Creator opens for review (the server checks the extension again). */
 const CREATOR_VIDEO_EXTENSIONS = ["mp4", "mov", "webm"];
 

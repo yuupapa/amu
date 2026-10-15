@@ -120,6 +120,8 @@ export const PREVIEW_CREATOR_IS_CURRENT_CHANNEL = "desktop:preview-creator-is-cu
 export const PREVIEW_CREATOR_APPROVE_CHANNEL = "desktop:preview-creator-approve";
 export const PREVIEW_CREATOR_PUSH_STATE_CHANNEL = "desktop:preview-creator-push-state";
 export const PREVIEW_CREATOR_PICK_VIDEO_CHANNEL = "desktop:preview-creator-pick-video";
+export const PREVIEW_CREATOR_POP_OUT_CHANNEL = "desktop:preview-creator-pop-out";
+export const PREVIEW_CREATOR_RETURN_CHANNEL = "desktop:preview-creator-return";
 
 export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
 
