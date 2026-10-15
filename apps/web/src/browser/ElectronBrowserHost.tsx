@@ -14,7 +14,7 @@ import { useActivePreviewSessions } from "~/previewStateStore";
 import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { CreatorPopoutKeepAlive } from "~/amu/creator/CreatorSessionHost";
+import { CreatorTabWatcher } from "~/amu/creator/CreatorSessionHost";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserDefaults } from "./browserDefaults";
@@ -153,13 +153,13 @@ export function ElectronBrowserHost() {
                     }
                   : {})}
               />
-              {snapshot.creator && poppedOut ? (
-                // A popped-out Creator window outlives a thread switch; so must its bridge.
-                <CreatorPopoutKeepAlive
+              {snapshot.creator ? (
+                <CreatorTabWatcher
                   threadRef={threadRef}
                   serverTabId={snapshot.tabId}
                   runtimeTabId={runtimeTabId}
                   bindingId={snapshot.creator.bindingId}
+                  poppedOut={poppedOut}
                 />
               ) : null}
             </Fragment>

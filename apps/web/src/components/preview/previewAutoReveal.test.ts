@@ -73,20 +73,24 @@ describe("revealableSessions", () => {
 });
 
 describe("previewRevealActions", () => {
-  it("floats a Creator tab an agent opened, like an agent browser tab (auto-show on)", () => {
-    // The bug: Creator tabs are desktop tabs, which the reveal pass used to skip.
-    expect(pass([], [creatorTab("creator")], { autoShow: true })).toEqual([
-      { kind: "float", tabId: "creator" },
-    ]);
+  it("floats an agent browser tab when auto-show is on", () => {
     expect(pass([], [agentServerTab("agent", "r1")], { autoShow: true })).toEqual([
       { kind: "float", tabId: "agent" },
     ]);
   });
 
-  it("opens a Creator tab in the right panel when auto-show is off", () => {
-    expect(pass([], [creatorTab("creator")], { autoShow: false })).toEqual([
-      { kind: "panel", tabId: "creator" },
-    ]);
+  it("opens a Creator tab an agent opened in the panel, then in its own window", () => {
+    // Creator tabs are desktop tabs, which the reveal pass used to skip; they
+    // never float, whatever auto-show says.
+    for (const autoShow of [true, false]) {
+      expect(pass([], [creatorTab("creator")], { autoShow })).toEqual([
+        { kind: "panel", tabId: "creator" },
+        { kind: "creator-window", tabId: "creator" },
+      ]);
+    }
+  });
+
+  it("leaves other agent tabs where they are when auto-show is off", () => {
     // An ordinary agent browser tab stays quiet unless forced.
     expect(pass([], [agentServerTab("agent", "r1")], { autoShow: false })).toEqual([]);
     expect(pass([], [agentServerTab("agent", "r1", true)], { autoShow: false })).toEqual([

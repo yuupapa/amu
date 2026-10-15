@@ -8,8 +8,10 @@
  * - With "auto-show floating preview" on, or a forced request: a tab that is
  *   not a panel tab floats over the chat; a forced one already in the panel
  *   comes to the front.
- * - With it off: an Amu Creator tab opens in the right panel, since the agent
- *   opened it for the user to review; other tabs stay where they are.
+ * - With it off: tabs other than Amu Creator stay where they are.
+ * - An Amu Creator tab never floats: the agent opened it for the user to
+ *   review, so it opens in the right panel and then moves into its own desktop
+ *   window (`creator-window`), falling back to the panel if that fails.
  *
  * Server tabs need the environment's browser; desktop tabs (Creator tabs are
  * always desktop tabs) need the Electron client. The baseline still covers
@@ -32,7 +34,8 @@ export type RevealSurface = {
 export type PreviewRevealAction =
   | { readonly kind: "float"; readonly tabId: string }
   | { readonly kind: "activate"; readonly surfaceId: string }
-  | { readonly kind: "panel"; readonly tabId: string };
+  | { readonly kind: "panel"; readonly tabId: string }
+  | { readonly kind: "creator-window"; readonly tabId: string };
 
 /** Tab id -> the reveal request id last seen for it. */
 export type PreviewRevealBaseline = ReadonlyMap<string, string | undefined>;
@@ -73,10 +76,14 @@ export function previewRevealActions(input: {
     const surface = input.surfaces.find(
       (entry) => entry.kind === "preview" && entry.resourceId === session.tabId,
     );
-    if (!input.autoShowFloating && !forced) {
-      if (session.creator !== undefined) actions.push({ kind: "panel", tabId: session.tabId });
+    if (session.creator !== undefined) {
+      actions.push({ kind: "panel", tabId: session.tabId });
+      if (session.runtime !== "server") {
+        actions.push({ kind: "creator-window", tabId: session.tabId });
+      }
       continue;
     }
+    if (!input.autoShowFloating && !forced) continue;
     if (surface && forced) actions.push({ kind: "activate", surfaceId: surface.id });
     else if (!surface) actions.push({ kind: "float", tabId: session.tabId });
   }

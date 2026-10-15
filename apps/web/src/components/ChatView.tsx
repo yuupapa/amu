@@ -586,6 +586,7 @@ import { Button, InlineButton } from "./ui/button";
 import { useLunaAuto } from "../amu/useLunaAuto";
 import { useSwitchNotice } from "../amu/useSwitchNotice";
 import { CreatorSessionHost } from "../amu/creator/CreatorSessionHost";
+import { requestCreatorAutoPopout } from "../amu/creator/creatorWindow";
 import { useCreatorOpener } from "../amu/creator/useCreatorOpener";
 import {
   AlertDialog,
@@ -5601,11 +5602,17 @@ export default function ChatView(props: ChatViewProps) {
             .getState()
             .open(activeThreadRef, browserMiniPlayerSource(action.tabId));
           break;
+        case "creator-window":
+          requestCreatorAutoPopout(
+            previewRuntimeTabId(activeThreadRef, activePreviewState.serverEpoch, action.tabId),
+          );
+          break;
       }
     }
   }, [
     activeEnvironmentServerBrowser,
     activePreviewState.listLoaded,
+    activePreviewState.serverEpoch,
     activePreviewState.sessions,
     activeThreadRef,
     autoShowFloatingPreview,

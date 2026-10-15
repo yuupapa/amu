@@ -5,16 +5,22 @@
  * guest's drafts or captures on the floor.
  */
 import type { CreatorBindingId, ScopedThreadRef } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { useThreadPreviewState } from "~/previewStateStore";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { useThreadShell } from "~/state/entities";
 
 import { CreatorConfirmSheet } from "./CreatorConfirmSheet";
 import { setCreatorAttention } from "./creatorAttention";
 import { creatorAttentionProposal } from "./creatorSheet";
+import {
+  runCreatorWindowAction,
+  takeCreatorAutoPopout,
+  useCreatorAutoPopoutRequested,
+} from "./creatorWindow";
 import { useCreatorEnabled, useCreatorSession, useCreatorSettingGate } from "./useCreatorSession";
 
 function CreatorSessionRunner(props: {
@@ -73,19 +79,55 @@ function CreatorSessionRunner(props: {
 }
 
 /**
- * Keeps a popped-out Creator tab's bridge forwarding while its thread is not
- * the active one: its window stays usable, so comments made there must still
- * reach the server. The app-wide browser host mounts one per popped-out tab;
- * it never draws the confirm sheet, which stays with the chat view's runner.
+ * Watches one Creator tab from the app-wide browser host, which stays mounted
+ * whichever thread is shown and whether or not the right panel is open:
+ *
+ * - While the tab is popped out it holds the tab's bridge (passively: the chat
+ *   view's runner keeps the confirm sheet), so comments made in the window
+ *   still reach the server after a thread switch.
+ * - Popping out closes the thread's right panel, leaving the chat the whole
+ *   width; coming back by any path (the button, the window's ×, a crash, a
+ *   failed load) reopens it on this tab. A panel the user reopens meanwhile is
+ *   left alone.
+ * - A tab an agent just opened moves into its window once its session is
+ *   live; if that fails it stays in the panel, after a toast.
  */
-export function CreatorPopoutKeepAlive(props: {
+export function CreatorTabWatcher(props: {
   readonly threadRef: ScopedThreadRef;
   readonly serverTabId: string;
   readonly runtimeTabId: string;
   readonly bindingId: CreatorBindingId;
+  readonly poppedOut: boolean;
 }) {
-  const enabled = useCreatorEnabled(props.threadRef.environmentId) === true;
-  useCreatorSession({ ...props, enabled: enabled && previewBridge !== null, passive: true });
+  const { threadRef, serverTabId, runtimeTabId, bindingId, poppedOut } = props;
+  const enabled = useCreatorEnabled(threadRef.environmentId) === true && previewBridge !== null;
+  const autoPopout = useCreatorAutoPopoutRequested(runtimeTabId);
+  const session = useCreatorSession({
+    threadRef,
+    serverTabId,
+    runtimeTabId,
+    bindingId,
+    enabled: enabled && (poppedOut || autoPopout),
+    passive: true,
+  });
+
+  const live = session.view.generation !== null;
+  useEffect(() => {
+    if (!autoPopout || !live || !takeCreatorAutoPopout(runtimeTabId)) return;
+    void runCreatorWindowAction("pop-out", runtimeTabId).then((opened) => {
+      if (!opened) useRightPanelStore.getState().openBrowser(threadRef, serverTabId);
+    });
+  }, [autoPopout, live, runtimeTabId, serverTabId, threadRef]);
+
+  // Acts on transitions only: mounting on an already popped-out tab changes nothing.
+  const shownPoppedOut = useRef(poppedOut);
+  useEffect(() => {
+    if (shownPoppedOut.current === poppedOut) return;
+    shownPoppedOut.current = poppedOut;
+    const panels = useRightPanelStore.getState();
+    if (poppedOut) panels.close(threadRef);
+    else panels.openBrowser(threadRef, serverTabId);
+  }, [poppedOut, serverTabId, threadRef]);
   return null;
 }
 

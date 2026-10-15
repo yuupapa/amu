@@ -30,6 +30,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { CreatorChip } from "~/amu/creator/CreatorChip";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -438,6 +439,8 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {/* Amu: the thread's Creator tab, reachable with the right panel closed. */}
+      <CreatorChip threadRef={activeThreadRef} />
     </div>
   );
 });
