@@ -5102,6 +5102,56 @@ describe("PreviewManager Amu Creator", () => {
       ),
   );
 
+  effectIt.effect("keeps every load main starts on a Creator window on loopback Studio", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const webview = makeCreatorGuest(42);
+        const popoutGuest = makeCreatorGuest(50);
+        const { loadURL } = makeCreatorPopoutWindow(popoutGuest);
+        const links: Array<Record<string, unknown>> = [];
+        yield* manager.subscribeOpenLinks((event) =>
+          Effect.sync(() => {
+            links.push(event as unknown as Record<string, unknown>);
+          }),
+        );
+        yield* openCreatorTab(manager, [webview, popoutGuest]);
+        yield* manager.registerCreatorSession("tab_creator", BINDING);
+        yield* manager.popOutCreator("tab_creator");
+        loadURL.mockClear();
+        const setWindowOpenHandler = popoutGuest.webContents.setWindowOpenHandler as unknown as {
+          mock: { calls: Array<[(details: Record<string, unknown>) => unknown]> };
+        };
+        const openHandler = setWindowOpenHandler.mock.calls.at(-1)![0];
+
+        // A target=_blank form POST elsewhere would otherwise load in place.
+        expect(
+          openHandler({
+            url: "https://elsewhere.example/submit",
+            disposition: "foreground-tab",
+            postBody: { data: [], contentType: "application/x-www-form-urlencoded" },
+          }),
+        ).toEqual({ action: "deny" });
+        // A plain in-place open elsewhere becomes a preview tab instead.
+        expect(openHandler({ url: "https://elsewhere.example/", disposition: "other" })).toEqual({
+          action: "deny",
+        });
+        yield* settle(() => links.length === 1);
+        expect(links).toEqual([
+          { tabId: "tab_creator", url: "https://elsewhere.example/", background: false },
+        ]);
+
+        // The address bar cannot send the window elsewhere either.
+        const external = yield* Effect.exit(manager.navigate("tab_creator", "https://example.com"));
+        expect(external._tag).toBe("Failure");
+        yield* settle(() => false);
+        expect(loadURL).not.toHaveBeenCalled();
+
+        yield* manager.navigate("tab_creator", "http://localhost:3002/#project/other");
+        expect(loadURL).toHaveBeenCalledExactlyOnceWith("http://localhost:3002/#project/other");
+      }),
+    ),
+  );
+
   effectIt.effect("opens a window only for a Creator tab and closes it with the tab", () =>
     withManager((manager) =>
       Effect.gen(function* () {

@@ -98,6 +98,17 @@ export const createCreatorPopoutWindow = (options: {
     event.preventDefault();
     options.onLeave(event.url);
   });
+  // Loads main or a debugger starts (loadURL, CDP Page.navigate) skip
+  // will-navigate. PreviewManager refuses them up front; this is the backstop.
+  contents.on("did-start-navigation", (event) => {
+    if (!event.isMainFrame || event.isSameDocument || isCreatorGuestUrl(event.url)) return;
+    contents.stop();
+    options.onLeave(event.url);
+  });
+  // Last resort: a non-Studio page that still committed never stays in here.
+  contents.on("did-navigate", (_event, url) => {
+    if (!isCreatorGuestUrl(url) && !window.isDestroyed()) window.close();
+  });
   contents.on("will-redirect", (event) => {
     if (event.isMainFrame && !isCreatorGuestUrl(event.url)) event.preventDefault();
   });

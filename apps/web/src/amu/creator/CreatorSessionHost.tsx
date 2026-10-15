@@ -72,6 +72,23 @@ function CreatorSessionRunner(props: {
   );
 }
 
+/**
+ * Keeps a popped-out Creator tab's bridge forwarding while its thread is not
+ * the active one: its window stays usable, so comments made there must still
+ * reach the server. The app-wide browser host mounts one per popped-out tab;
+ * it never draws the confirm sheet, which stays with the chat view's runner.
+ */
+export function CreatorPopoutKeepAlive(props: {
+  readonly threadRef: ScopedThreadRef;
+  readonly serverTabId: string;
+  readonly runtimeTabId: string;
+  readonly bindingId: CreatorBindingId;
+}) {
+  const enabled = useCreatorEnabled(props.threadRef.environmentId) === true;
+  useCreatorSession({ ...props, enabled: enabled && previewBridge !== null, passive: true });
+  return null;
+}
+
 export function CreatorSessionHost(props: { readonly threadRef: ScopedThreadRef }) {
   useCreatorSettingGate();
   const enabled = useCreatorEnabled(props.threadRef.environmentId) === true;

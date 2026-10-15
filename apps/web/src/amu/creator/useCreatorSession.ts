@@ -114,6 +114,8 @@ export function useCreatorSettingGate(): void {
 interface SharedBridge {
   readonly bridge: CreatorBridge;
   readonly holders: Set<string>;
+  /** Holders that only keep the bridge alive and never draw its sheet. */
+  readonly passiveHolders: Set<string>;
   readonly listeners: Set<(view: CreatorBridgeView) => void>;
   /** Told when a holder joins or leaves, so the sheet owner moves with it. */
   readonly holderListeners: Set<() => void>;
@@ -127,7 +129,12 @@ const sharedBridges = new Map<string, SharedBridge>();
  */
 const draftKeysByBinding = new Map<CreatorBindingId, Map<string, CreatorCommentId>>();
 
-const firstHolder = (shared: SharedBridge) => shared.holders.values().next().value;
+const firstHolder = (shared: SharedBridge) => {
+  for (const holder of shared.holders) {
+    if (!shared.passiveHolders.has(holder)) return holder;
+  }
+  return undefined;
+};
 const notifyHolders = (shared: SharedBridge) => {
   for (const listener of shared.holderListeners) listener();
 };
@@ -135,6 +142,7 @@ const notifyHolders = (shared: SharedBridge) => {
 function acquireBridge(
   key: string,
   holder: string,
+  passive: boolean,
   input: {
     tabId: string;
     bindingId: CreatorBindingId;
@@ -145,6 +153,7 @@ function acquireBridge(
   const existing = sharedBridges.get(key);
   if (existing) {
     existing.holders.add(holder);
+    if (passive) existing.passiveHolders.add(holder);
     notifyHolders(existing);
     return existing;
   }
@@ -187,6 +196,7 @@ function acquireBridge(
   const shared: SharedBridge = {
     bridge: creator,
     holders: new Set([holder]),
+    passiveHolders: new Set(passive ? [holder] : []),
     listeners,
     holderListeners: new Set(),
     release: () => {
@@ -203,6 +213,7 @@ function releaseBridge(key: string, holder: string): void {
   const shared = sharedBridges.get(key);
   if (!shared) return;
   shared.holders.delete(holder);
+  shared.passiveHolders.delete(holder);
   if (shared.holders.size > 0) {
     notifyHolders(shared);
     return;
@@ -240,8 +251,10 @@ export function useCreatorSession(input: {
   readonly runtimeTabId: string;
   readonly bindingId: CreatorBindingId;
   readonly enabled: boolean;
+  /** Keeps the bridge forwarding without ever owning its confirm sheet. */
+  readonly passive?: boolean;
 }): CreatorSessionState {
-  const { threadRef, serverTabId, runtimeTabId, bindingId, enabled } = input;
+  const { threadRef, serverTabId, runtimeTabId, bindingId, enabled, passive = false } = input;
   const environmentId = threadRef.environmentId;
   const threadId = threadRef.threadId;
   const holder = useId();
@@ -252,7 +265,7 @@ export function useCreatorSession(input: {
   useEffect(() => {
     if (!enabled || !previewBridge) return;
     const key = `${environmentId}\0${runtimeTabId}\0${bindingId}`;
-    const acquired = acquireBridge(key, holder, {
+    const acquired = acquireBridge(key, holder, passive, {
       tabId: runtimeTabId,
       bindingId,
       rpc,
@@ -269,7 +282,17 @@ export function useCreatorSession(input: {
       setShared(null);
       setView(INACTIVE_VIEW);
     };
-  }, [bindingId, enabled, environmentId, holder, rpc, runtimeTabId, serverTabId, threadId]);
+  }, [
+    bindingId,
+    enabled,
+    environmentId,
+    holder,
+    passive,
+    rpc,
+    runtimeTabId,
+    serverTabId,
+    threadId,
+  ]);
 
   const subscribeHolders = useCallback(
     (notify: () => void) => {

@@ -678,6 +678,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     }
     return false;
   };
+  /**
+   * A Creator window runs the pick preload without context isolation, so it
+   * may only ever load loopback Studio. `will-navigate` only sees navigations
+   * the page starts; every load main starts on a guest asks here first.
+   */
+  const guestMayLoad = (wc: Electron.WebContents, url: string): boolean =>
+    !isCreatorPopoutGuest(wc.id) || isCreatorGuestUrl(url);
   const clock = yield* Clock.Clock;
   const controlSessionsRef = yield* SynchronizedRef.make<
     ReadonlyMap<number, BrowserControlSession>
@@ -2174,6 +2181,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             );
             return { action: "deny" };
           }
+          if (!guestMayLoad(wc, details.url)) {
+            // A Creator window keeps Studio; a plain link elsewhere becomes a tab.
+            if (!details.postBody && isPopupUrl(details.url)) {
+              runFork(emitOpenLink({ tabId, url: details.url, background: false }));
+            }
+            return { action: "deny" };
+          }
           runFork(
             attemptPromise({ operation: "openPreviewWindow", tabId, webContentsId: wc.id }, () =>
               wc.loadURL(details.url),
@@ -2285,7 +2299,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     clearPendingRecording(tabId);
     annotationSendEnabled.delete(tabId);
     yield* announceCreatorRevocation(creatorLedger.closeTab(tabId), "tab-closed");
-    yield* destroyCreatorPopout(tabId);
     yield* Effect.all(
       [
         cancelPickElement(tabId),
@@ -2308,7 +2321,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         }),
       ] as const;
     });
-    if (Option.isNone(tab)) return;
+    if (Option.isNone(tab)) return yield* destroyCreatorPopout(tabId);
     const closedTab = tab.value;
     if (closedTab.webContentsId != null) {
       yield* Effect.all(
@@ -2319,6 +2332,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         { concurrency: 2, discard: true },
       );
     }
+    // After the detach, which still needs the window's guest alive.
+    yield* destroyCreatorPopout(tabId);
     const updatedAt = yield* currentIso;
     const closed: PreviewTabState = {
       ...closedTab,
@@ -2530,7 +2545,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       pendingUrl &&
       latestNavStatus?.kind === "Loading" &&
       latestNavStatus.url === pendingUrl &&
-      wc.getURL() !== pendingUrl
+      wc.getURL() !== pendingUrl &&
+      guestMayLoad(wc, pendingUrl)
     ) {
       runFork(
         attemptPromise({ operation: "registerWebview.loadPendingUrl", tabId, webContentsId }, () =>
@@ -2774,6 +2790,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const url = yield* attempt({ operation: "navigate.normalizeUrl", tabId }, () =>
       normalizePreviewUrl(rawUrl),
     );
+    if (creatorPopouts.has(tabId) && !isCreatorGuestUrl(url)) {
+      return yield* new PreviewOperationError({
+        operation: "navigate.creatorPopout",
+        tabId,
+        cause: new Error("Amu Creator's own window only shows the local Studio page."),
+      });
+    }
     const updatedAt = yield* currentIso;
     const pending = yield* SynchronizedRef.modify(tabsRef, (tabs) => {
       const current = tabs.get(tabId);
@@ -2865,6 +2888,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.reload(),
       );
       return;
+    }
+    // Checked again on the guest itself: the window may have been adopted meanwhile.
+    if (!guestMayLoad(wc, url)) {
+      return yield* new PreviewOperationError({
+        operation: "navigate.creatorPopout",
+        tabId,
+        webContentsId: wc.id,
+        cause: new Error("Amu Creator's own window only shows the local Studio page."),
+      });
     }
     yield* attemptPromise({ operation: "navigate.loadURL", tabId, webContentsId: wc.id }, () =>
       wc.loadURL(url),

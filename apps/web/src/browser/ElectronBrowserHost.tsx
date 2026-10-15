@@ -3,7 +3,7 @@
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { AuthPreviewOperateScope, FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { type ComponentProps, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentProps, Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
@@ -14,6 +14,7 @@ import { useActivePreviewSessions } from "~/previewStateStore";
 import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { CreatorPopoutKeepAlive } from "~/amu/creator/CreatorSessionHost";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserDefaults } from "./browserDefaults";
@@ -131,27 +132,37 @@ export function ElectronBrowserHost() {
         ({ threadRef, snapshot, runtimeTabId, pictureInPicture, poppedOut, zoomFactor }) => {
           const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
           return (
-            <AuthorizedBrowserWebview
-              key={runtimeTabId}
-              threadRef={threadRef}
-              tabId={snapshot.tabId}
-              runtimeTabId={runtimeTabId}
-              initialUrl={url}
-              viewport={snapshot.viewport ?? FILL_PREVIEW_VIEWPORT}
-              pictureInPicture={pictureInPicture}
-              poppedOut={poppedOut}
-              profileId={snapshot.profileId}
-              zoomFactor={zoomFactor}
-              serverDriven={snapshot.runtime === "server"}
-              {...(snapshot.runtime === "server"
-                ? {
-                    serverRendering: {
-                      colorScheme: snapshot.colorScheme ?? "system",
-                      zoomFactor: snapshot.zoomFactor ?? 1,
-                    },
-                  }
-                : {})}
-            />
+            <Fragment key={runtimeTabId}>
+              <AuthorizedBrowserWebview
+                threadRef={threadRef}
+                tabId={snapshot.tabId}
+                runtimeTabId={runtimeTabId}
+                initialUrl={url}
+                viewport={snapshot.viewport ?? FILL_PREVIEW_VIEWPORT}
+                pictureInPicture={pictureInPicture}
+                poppedOut={poppedOut}
+                profileId={snapshot.profileId}
+                zoomFactor={zoomFactor}
+                serverDriven={snapshot.runtime === "server"}
+                {...(snapshot.runtime === "server"
+                  ? {
+                      serverRendering: {
+                        colorScheme: snapshot.colorScheme ?? "system",
+                        zoomFactor: snapshot.zoomFactor ?? 1,
+                      },
+                    }
+                  : {})}
+              />
+              {snapshot.creator && poppedOut ? (
+                // A popped-out Creator window outlives a thread switch; so must its bridge.
+                <CreatorPopoutKeepAlive
+                  threadRef={threadRef}
+                  serverTabId={snapshot.tabId}
+                  runtimeTabId={runtimeTabId}
+                  bindingId={snapshot.creator.bindingId}
+                />
+              ) : null}
+            </Fragment>
           );
         },
       )}
