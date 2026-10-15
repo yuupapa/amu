@@ -51,6 +51,7 @@ export function ElectronBrowserHost() {
                 pictureInPicture:
                   previewState.desktopByTabId[snapshot.tabId]?.pictureInPicture ?? false,
                 poppedOut: previewState.desktopByTabId[snapshot.tabId]?.poppedOut ?? false,
+                desktopKnown: previewState.desktopByTabId[snapshot.tabId] !== undefined,
                 zoomFactor: previewState.desktopByTabId[snapshot.tabId]?.zoomFactor ?? 1,
               }))
           : [];
@@ -129,7 +130,15 @@ export function ElectronBrowserHost() {
   return (
     <div className="contents" data-electron-browser-host>
       {sessions.map(
-        ({ threadRef, snapshot, runtimeTabId, pictureInPicture, poppedOut, zoomFactor }) => {
+        ({
+          threadRef,
+          snapshot,
+          runtimeTabId,
+          pictureInPicture,
+          poppedOut,
+          desktopKnown,
+          zoomFactor,
+        }) => {
           const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
           return (
             <Fragment key={runtimeTabId}>
@@ -160,6 +169,7 @@ export function ElectronBrowserHost() {
                   runtimeTabId={runtimeTabId}
                   bindingId={snapshot.creator.bindingId}
                   poppedOut={poppedOut}
+                  desktopKnown={desktopKnown}
                 />
               ) : null}
             </Fragment>

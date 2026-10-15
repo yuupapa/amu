@@ -4,19 +4,26 @@
  * preview panel, so switching the right panel to another tab does not drop the
  * guest's drafts or captures on the floor.
  */
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { CreatorBindingId, ScopedThreadRef } from "@t3tools/contracts";
 import { useEffect, useRef, useState } from "react";
 
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { previewBridge } from "~/components/preview/previewBridge";
-import { useThreadPreviewState } from "~/previewStateStore";
-import { useRightPanelStore } from "~/rightPanelStore";
+import { readThreadPreviewState, useThreadPreviewState } from "~/previewStateStore";
+import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 import { useThreadShell } from "~/state/entities";
 
 import { CreatorConfirmSheet } from "./CreatorConfirmSheet";
 import { setCreatorAttention } from "./creatorAttention";
 import { creatorAttentionProposal } from "./creatorSheet";
 import {
+  creatorPanelMarks,
+  creatorPoppedOutStep,
+  creatorReturnedStep,
+} from "./creatorPanelAutoClose";
+import {
+  clearCreatorAutoPopout,
   runCreatorWindowAction,
   takeCreatorAutoPopout,
   useCreatorAutoPopoutRequested,
@@ -98,8 +105,10 @@ export function CreatorTabWatcher(props: {
   readonly runtimeTabId: string;
   readonly bindingId: CreatorBindingId;
   readonly poppedOut: boolean;
+  /** Whether the desktop has reported this tab yet; until then `poppedOut` is only a default. */
+  readonly desktopKnown: boolean;
 }) {
-  const { threadRef, serverTabId, runtimeTabId, bindingId, poppedOut } = props;
+  const { threadRef, serverTabId, runtimeTabId, bindingId, poppedOut, desktopKnown } = props;
   const enabled = useCreatorEnabled(threadRef.environmentId) === true && previewBridge !== null;
   const autoPopout = useCreatorAutoPopoutRequested(runtimeTabId);
   const session = useCreatorSession({
@@ -111,6 +120,8 @@ export function CreatorTabWatcher(props: {
     passive: true,
   });
 
+  // A closed tab's request goes with it.
+  useEffect(() => () => clearCreatorAutoPopout(runtimeTabId), [runtimeTabId]);
   const live = session.view.generation !== null;
   useEffect(() => {
     if (!autoPopout || !live || !takeCreatorAutoPopout(runtimeTabId)) return;
@@ -119,15 +130,37 @@ export function CreatorTabWatcher(props: {
     });
   }, [autoPopout, live, runtimeTabId, serverTabId, threadRef]);
 
-  // Acts on transitions only: mounting on an already popped-out tab changes nothing.
-  const shownPoppedOut = useRef(poppedOut);
+  // Acts on transitions. The first known state only recovers a panel a pop-out
+  // closed before a crash or restart; mounting on a popped-out tab changes nothing.
+  const shownPoppedOut = useRef<boolean | null>(null);
   useEffect(() => {
-    if (shownPoppedOut.current === poppedOut) return;
+    if (!desktopKnown || shownPoppedOut.current === poppedOut) return;
+    const first = shownPoppedOut.current === null;
     shownPoppedOut.current = poppedOut;
+    if (first && poppedOut) return;
+    const threadKey = scopedThreadKey(threadRef);
     const panels = useRightPanelStore.getState();
-    if (poppedOut) panels.close(threadRef);
-    else panels.openBrowser(threadRef, serverTabId);
-  }, [poppedOut, serverTabId, threadRef]);
+    const panelOpen = selectThreadRightPanelState(panels.byThreadKey, threadRef).isOpen;
+    const marked = creatorPanelMarks.has(threadKey);
+    const step = poppedOut
+      ? creatorPoppedOutStep({ panelOpen, marked })
+      : creatorReturnedStep({
+          panelOpen,
+          marked,
+          otherPoppedOut: Object.entries(readThreadPreviewState(threadRef).desktopByTabId).some(
+            ([tabId, desktop]) => tabId !== serverTabId && desktop.poppedOut,
+          ),
+        });
+    if (step === "close") {
+      creatorPanelMarks.set(threadKey);
+      panels.close(threadRef);
+    } else if (step === "reopen") {
+      creatorPanelMarks.clear(threadKey);
+      panels.openBrowser(threadRef, serverTabId);
+    } else if (step === "forget") {
+      creatorPanelMarks.clear(threadKey);
+    }
+  }, [desktopKnown, poppedOut, serverTabId, threadRef]);
   return null;
 }
 

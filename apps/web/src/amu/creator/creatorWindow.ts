@@ -41,25 +41,37 @@ export async function runCreatorWindowAction(
 /** An agent-opened tab whose session never goes live within this long stays in the panel. */
 const AUTO_POPOUT_TTL_MS = 60_000;
 
-const autoPopouts = new Map<string, number>();
+/** Pending requests; each drops itself when it expires, releasing what it held open. */
+const autoPopouts = new Map<string, ReturnType<typeof setTimeout>>();
 const listeners = new Set<() => void>();
 const notify = () => {
   for (const listener of listeners) listener();
 };
 
-/** Marks a tab an agent just opened to move into its own window once registered. */
-export function requestCreatorAutoPopout(runtimeTabId: string, now = Date.now()): void {
-  autoPopouts.set(runtimeTabId, now);
+/** Drops the tab's pending request, if any (it expired, was taken, or the tab closed). */
+export function clearCreatorAutoPopout(runtimeTabId: string): void {
+  const expiry = autoPopouts.get(runtimeTabId);
+  if (expiry === undefined) return;
+  clearTimeout(expiry);
+  autoPopouts.delete(runtimeTabId);
   notify();
 }
 
-/** Takes the tab's pending request; false when there is none or it went stale. */
-export function takeCreatorAutoPopout(runtimeTabId: string, now = Date.now()): boolean {
-  const requestedAt = autoPopouts.get(runtimeTabId);
-  if (requestedAt === undefined) return false;
-  autoPopouts.delete(runtimeTabId);
+/** Marks a tab an agent just opened to move into its own window once registered. */
+export function requestCreatorAutoPopout(runtimeTabId: string): void {
+  clearCreatorAutoPopout(runtimeTabId);
+  autoPopouts.set(
+    runtimeTabId,
+    setTimeout(() => clearCreatorAutoPopout(runtimeTabId), AUTO_POPOUT_TTL_MS),
+  );
   notify();
-  return now - requestedAt <= AUTO_POPOUT_TTL_MS;
+}
+
+/** Takes the tab's pending request; false when there is none (or it already expired). */
+export function takeCreatorAutoPopout(runtimeTabId: string): boolean {
+  if (!autoPopouts.has(runtimeTabId)) return false;
+  clearCreatorAutoPopout(runtimeTabId);
+  return true;
 }
 
 const subscribe = (listener: () => void) => {
