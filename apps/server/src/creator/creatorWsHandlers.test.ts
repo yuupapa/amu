@@ -5,6 +5,7 @@ import * as Stream from "effect/Stream";
 
 import type * as CreatorOpen from "./CreatorOpen.ts";
 import type * as CreatorSender from "./CreatorSender.ts";
+import type * as GalleryOpen from "../gallery/GalleryOpen.ts";
 import type * as CreatorService from "./CreatorService.ts";
 import { makeCreatorWsHandlers } from "./creatorWsHandlers.ts";
 
@@ -17,11 +18,22 @@ const unreachable = <S extends object>() =>
       key === "then" ? undefined : () => Effect.die(`service reached: ${String(key)}`),
   });
 
-const make = (desktopSession: boolean, opened: Array<CreatorOpen.CreatorOpenInput> = []) =>
+const make = (
+  desktopSession: boolean,
+  opened: Array<CreatorOpen.CreatorOpenInput> = [],
+  galleryOpened: Array<GalleryOpen.GalleryOpenInput> = [],
+) =>
   makeCreatorWsHandlers({
     desktopSession,
     creator: unreachable<CreatorService.CreatorService["Service"]>(),
     creatorSender: unreachable<CreatorSender.CreatorSender["Service"]>(),
+    galleryOpen: {
+      open: (input) =>
+        Effect.sync(() => {
+          galleryOpened.push(input);
+          return { tabId: "gallery-tab", url: "http://127.0.0.1:8768/" };
+        }),
+    },
     creatorOpen: {
       open: (input) =>
         Effect.sync(() => {
@@ -85,5 +97,23 @@ it.effect("the desktop app's session opens as the user", () =>
     } as never);
     expect(result.tabId).toBe("tab-1");
     expect(opened).toEqual([{ path: "/Users/me/promo", threadId, openedBy: "user" }]);
+  }),
+);
+
+it.effect("Amu Gallery opens only from the desktop app's session, as the user", () =>
+  Effect.gen(function* () {
+    const refusedOpens: Array<GalleryOpen.GalleryOpenInput> = [];
+    const refused = yield* Effect.flip(
+      make(false, [], refusedOpens)[WS_METHODS.galleryOpenByUser]({ threadId } as never),
+    );
+    expect(refused).toMatchObject({ _tag: "GalleryOperationError", code: "unauthorized" });
+    expect(refusedOpens).toEqual([]);
+
+    const opened: Array<GalleryOpen.GalleryOpenInput> = [];
+    const result = yield* make(true, [], opened)[WS_METHODS.galleryOpenByUser]({
+      threadId,
+    } as never);
+    expect(result.tabId).toBe("gallery-tab");
+    expect(opened).toEqual([{ threadId, openedBy: "user" }]);
   }),
 );

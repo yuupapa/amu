@@ -15,9 +15,12 @@ export function CreatorPopoutButton({
   runtimeTabId,
   poppedOut,
   disabledReason = null,
+  appName = "Creator",
 }: {
   runtimeTabId: string;
   poppedOut: boolean;
+  /** "Creator", or "ギャラリー" for an Amu Gallery tab. */
+  appName?: string;
   /** Why the button cannot be used now; null when it can. Shown as its tooltip. */
   disabledReason?: string | null;
 }) {
@@ -25,7 +28,7 @@ export function CreatorPopoutButton({
   const label = poppedOut ? "パネルに戻す" : "別ウィンドウ";
   const tooltip =
     disabledReason ??
-    (poppedOut ? "Creatorをこのパネルに戻します" : "Creatorを別ウィンドウで大きく開きます");
+    (poppedOut ? `${appName}をこのパネルに戻します` : `${appName}を別ウィンドウで大きく開きます`);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -35,7 +38,7 @@ export function CreatorPopoutButton({
             size="xs"
             onClick={() => {
               if (disabled) return;
-              void runCreatorWindowAction(poppedOut ? "return" : "pop-out", runtimeTabId);
+              void runCreatorWindowAction(poppedOut ? "return" : "pop-out", runtimeTabId, appName);
             }}
             // aria-disabled rather than disabled, so the tooltip can still say why.
             aria-disabled={disabled ? "true" : undefined}
@@ -52,22 +55,31 @@ export function CreatorPopoutButton({
 }
 
 /** Shown in the panel while the Creator tab's page is in its own window. */
-export function CreatorPoppedOutNotice({ runtimeTabId }: { runtimeTabId: string }) {
+export function CreatorPoppedOutNotice({
+  runtimeTabId,
+  appName = "Creator",
+}: {
+  runtimeTabId: string;
+  appName?: string;
+}) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
       <div className="flex flex-col gap-1">
-        <p className="text-sm text-muted-foreground">Creatorは別ウィンドウで開いています</p>
+        <p className="text-sm text-muted-foreground">{appName}は別ウィンドウで開いています</p>
         <p className="text-xs text-muted-foreground">ウィンドウを閉じてもパネルに戻ります</p>
       </div>
       <div className="flex items-center gap-2">
         <Button
           size="sm"
           variant="outline"
-          onClick={() => void runCreatorWindowAction("pop-out", runtimeTabId)}
+          onClick={() => void runCreatorWindowAction("pop-out", runtimeTabId, appName)}
         >
-          Creatorウィンドウを表示
+          {appName}ウィンドウを表示
         </Button>
-        <Button size="sm" onClick={() => void runCreatorWindowAction("return", runtimeTabId)}>
+        <Button
+          size="sm"
+          onClick={() => void runCreatorWindowAction("return", runtimeTabId, appName)}
+        >
           パネルに戻す
         </Button>
       </div>

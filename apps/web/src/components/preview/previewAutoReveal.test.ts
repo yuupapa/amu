@@ -90,6 +90,16 @@ describe("previewRevealActions", () => {
     }
   });
 
+  it("opens an Amu Gallery tab an agent opened the same way as Creator", () => {
+    const galleryTab = session("gallery", { reveal: true, gallery: { label: "素材ギャラリー" } });
+    for (const autoShow of [true, false]) {
+      expect(pass([], [galleryTab], { autoShow })).toEqual([
+        { kind: "panel", tabId: "gallery" },
+        { kind: "creator-window", tabId: "gallery" },
+      ]);
+    }
+  });
+
   it("leaves other agent tabs where they are when auto-show is off", () => {
     // An ordinary agent browser tab stays quiet unless forced.
     expect(pass([], [agentServerTab("agent", "r1")], { autoShow: false })).toEqual([]);

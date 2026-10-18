@@ -190,6 +190,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.previewReportStatus]: "preview",
   [WS_METHODS.subscribePreviewEvents]: "preview",
   [WS_METHODS.creatorOpenByUser]: "creator",
+  [WS_METHODS.galleryOpenByUser]: "gallery",
   [WS_METHODS.creatorSetEpoch]: "creator",
   [WS_METHODS.creatorSaveDraft]: "creator",
   [WS_METHODS.creatorUpdateComment]: "creator",

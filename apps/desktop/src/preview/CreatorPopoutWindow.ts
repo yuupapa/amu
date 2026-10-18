@@ -43,7 +43,8 @@ export const creatorPopoutBounds = (workArea: CreatorPopoutRect): CreatorPopoutR
   };
 };
 
-export const creatorPopoutTitle = (pageTitle: string): string => {
+export const creatorPopoutTitle = (pageTitle: string, gallery = false): string => {
+  if (gallery) return "Amu ギャラリー";
   const label = pageTitle.trim();
   return label.length > 0 ? `Amu Creator — ${label}` : "Amu Creator";
 };
@@ -59,13 +60,15 @@ export const createCreatorPopoutWindow = (options: {
   readonly additionalArguments: ReadonlyArray<string>;
   readonly workArea: CreatorPopoutRect;
   readonly pageTitle: string;
+  /** An Amu Gallery tab: the window is titled 「Amu ギャラリー」. */
+  readonly gallery?: boolean;
   readonly onLeave: (url: string) => void;
 }): BrowserWindow => {
   const window = new BrowserWindow({
     ...creatorPopoutBounds(options.workArea),
     minWidth: MIN_WIDTH,
     minHeight: MIN_HEIGHT,
-    title: creatorPopoutTitle(options.pageTitle),
+    title: creatorPopoutTitle(options.pageTitle, options.gallery),
     show: false,
     resizable: true,
     maximizable: true,
@@ -91,7 +94,7 @@ export const createCreatorPopoutWindow = (options: {
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
   contents.on("page-title-updated", (event, title) => {
     event.preventDefault();
-    window.setTitle(creatorPopoutTitle(title));
+    window.setTitle(creatorPopoutTitle(title, options.gallery));
   });
   contents.on("will-navigate", (event) => {
     if (isCreatorGuestUrl(event.url)) return;

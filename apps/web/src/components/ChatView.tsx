@@ -588,6 +588,7 @@ import { useSwitchNotice } from "../amu/useSwitchNotice";
 import { CreatorSessionHost } from "../amu/creator/CreatorSessionHost";
 import { requestCreatorAutoPopout } from "../amu/creator/creatorWindow";
 import { useCreatorOpener } from "../amu/creator/useCreatorOpener";
+import { useGalleryOpener } from "../amu/gallery/useGalleryOpener";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -2360,6 +2361,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const activePreviewState = useThreadPreviewState(activeThreadRef);
   const creatorOpener = useCreatorOpener(activeThreadRef ?? null);
+  const galleryOpener = useGalleryOpener(activeThreadRef ?? null);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
   const previewSessionsReady = !activeEnvironmentServerBrowser || activePreviewState.listLoaded;
   const resolvePreviewRuntimeTabId = useMemo(
@@ -12258,6 +12260,7 @@ export default function ChatView(props: ChatViewProps) {
           pullRequestsAvailable={pullRequestsSurfaceAvailable}
           deviceAvailable={activeThreadRef !== null}
           creatorOpener={creatorOpener}
+          galleryOpener={galleryOpener}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -12318,6 +12321,7 @@ export default function ChatView(props: ChatViewProps) {
             pullRequestsAvailable={pullRequestsSurfaceAvailable}
             deviceAvailable={activeThreadRef !== null}
             creatorOpener={creatorOpener}
+            galleryOpener={galleryOpener}
           >
             {rightPanelContent}
           </RightPanelTabs>

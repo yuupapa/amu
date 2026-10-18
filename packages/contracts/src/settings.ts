@@ -1179,6 +1179,11 @@ export const ServerSettings = Schema.Struct({
    * browser. While false every Creator operation is refused and no Creator capability is granted.
    */
   amuCreatorEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * Amu Gallery: opens the local media gallery (`tools/media-gallery`) in a Creator-style tab.
+   * While false `gallery_open` and the user entry points are refused.
+   */
+  amuGalleryEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /** Whether the server-local Device panel setup flow has been completed. */
   deviceOnboardingCompleted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   deviceHosts: SshDeviceHostConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
@@ -1492,6 +1497,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
   enableDeviceSupport: Schema.optionalKey(Schema.Boolean),
   amuCreatorEnabled: Schema.optionalKey(Schema.Boolean),
+  amuGalleryEnabled: Schema.optionalKey(Schema.Boolean),
   deviceOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
   deviceHosts: Schema.optionalKey(SshDeviceHostConfigs),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),

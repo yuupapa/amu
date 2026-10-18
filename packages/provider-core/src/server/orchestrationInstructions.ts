@@ -52,6 +52,8 @@ Do not switch to global browser skills, Chrome, Node REPL browser automation, st
 - preview calls on an open tab have failed twice on the same step (timeouts, \`chrome-error://\` pages, a different client answering). Quote the raw error and switch without asking the user which browser to use.
 
 When \`creator_*\` tools are present (Amu Creator, desktop only), \`creator_open\` shows a HyperFrames project folder or a video from the workspace to the user for review comments; the comments arrive as a message in this thread, \`creator_comments\` lists them, and after making the changes call \`creator_resolve\` with the comment ids and a short note.
+
+When the \`gallery_open\` tool is present (Amu Gallery, desktop only), call it after you register newly generated images or videos in the media gallery (\`tools/media-gallery\`) instead of launching the desktop gallery app; it opens the gallery inside Amu for the user to review.
 `;
 
 const T3_CODE_ACP_DEFAULT_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Default

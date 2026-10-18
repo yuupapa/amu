@@ -18,6 +18,8 @@ export type CreatorWindowAction = "pop-out" | "return";
 export async function runCreatorWindowAction(
   action: CreatorWindowAction,
   runtimeTabId: string,
+  /** What the toasts call the tab: Amu Creator, or Amu Gallery's "ギャラリー". */
+  appName = "Creator",
 ): Promise<boolean> {
   if (!previewBridge) return false;
   const operation =
@@ -30,8 +32,8 @@ export async function runCreatorWindowAction(
       type: "error",
       title:
         action === "pop-out"
-          ? "Creatorを別ウィンドウで開けませんでした"
-          : "Creatorをパネルに戻せませんでした",
+          ? `${appName}を別ウィンドウで開けませんでした`
+          : `${appName}をパネルに戻せませんでした`,
       description: error instanceof Error ? error.message : "エラーが発生しました。",
     });
     return false;

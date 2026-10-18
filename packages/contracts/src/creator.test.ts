@@ -221,4 +221,7 @@ describe("RPC contract", () => {
     }
     expect(Object.values(WS_METHODS).filter((m) => m.startsWith("creator."))).toHaveLength(16);
   });
+  it("registers Amu Gallery's open in the websocket group", () => {
+    expect(WsRpcGroup.requests.has(WS_METHODS.galleryOpenByUser)).toBe(true);
+  });
 });

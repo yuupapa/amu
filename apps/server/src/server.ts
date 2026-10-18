@@ -64,6 +64,7 @@ import * as CreatorOpen from "./creator/CreatorOpen.ts";
 import * as CreatorPreviewSupervisor from "./creator/CreatorPreviewSupervisor.ts";
 import * as CreatorSender from "./creator/CreatorSender.ts";
 import * as CreatorService from "./creator/CreatorService.ts";
+import * as GalleryOpen from "./gallery/GalleryOpen.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -731,9 +732,11 @@ const layerMakeRoutes = Layer.mergeAll(
   // when that desktop channel is available, so it shares the same channel instance.
   // The sender and the opener run on the same CreatorService instance as the
   // WebSocket handlers and the MCP tools. The opener owns the HyperFrames previews.
+  // Amu Gallery opens its tabs through the same desktop channel.
   Layer.provide(
     Layer.mergeAll(
       ServerBrowser.layer,
+      GalleryOpen.layer,
       Layer.mergeAll(
         CreatorSender.layer,
         CreatorOpen.layer.pipe(Layer.provide(CreatorPreviewSupervisor.layer)),

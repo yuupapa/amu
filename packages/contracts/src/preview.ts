@@ -12,6 +12,7 @@ import { Schema } from "effect";
 import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BROWSER_PROFILE_MAX_COUNT, BrowserProfile, BrowserProfileId } from "./browserProfile.ts";
 import { CreatorTabInfo } from "./creator.ts";
+import { GalleryTabInfo } from "./gallery.ts";
 
 export const PREVIEW_URL_MAX_LENGTH = 2_048;
 export const CONFIGURED_LOCAL_SERVER_URLS_MAX_ITEMS = 32;
@@ -225,6 +226,8 @@ export const PreviewSessionSnapshot = Schema.Struct({
    * the public `PreviewOpenInput` cannot request a Creator binding.
    */
   creator: Schema.optional(CreatorTabInfo),
+  /** Set by the server when the tab was opened by Amu Gallery; like `creator`, never by a client. */
+  gallery: Schema.optional(GalleryTabInfo),
   updatedAt: Schema.String,
 });
 export type PreviewSessionSnapshot = typeof PreviewSessionSnapshot.Type;

@@ -105,6 +105,7 @@ import {
 import {
   type CreatorRevocation,
   isCreatorGuestUrl,
+  isGalleryGuestUrl,
   makeCreatorLedger,
   measureGuestPayload,
 } from "./creatorSessions.ts";
@@ -2676,12 +2677,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const source = yield* requireWebContents(tabId);
     const url = source.getURL();
     // A Creator tab shows loopback Studio and has a session the renderer registered.
-    if (!isCreatorGuestUrl(url) || creatorLedger.session(tabId) === undefined) {
+    // An Amu Gallery tab shows the media gallery on its fixed loopback port.
+    if (
+      !isCreatorGuestUrl(url) ||
+      (creatorLedger.session(tabId) === undefined && !isGalleryGuestUrl(url))
+    ) {
       return yield* new PreviewOperationError({
         operation: "creatorPopout.open",
         tabId,
         webContentsId: source.id,
-        cause: new Error("Only an Amu Creator tab can open in its own window."),
+        cause: new Error("Only an Amu Creator or Amu Gallery tab can open in its own window."),
       });
     }
     // Recording and picture-in-picture capture the main window's webview.
@@ -2710,6 +2715,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           additionalArguments: passkeys.bridgeEnabled ? [PASSKEY_BRIDGE_ARGUMENT] : [],
           workArea: display.workArea,
           pageTitle: source.getTitle(),
+          gallery: isGalleryGuestUrl(url),
           onLeave: (next) => {
             if (isPopupUrl(next)) runFork(emitOpenLink({ tabId, url: next, background: false }));
           },

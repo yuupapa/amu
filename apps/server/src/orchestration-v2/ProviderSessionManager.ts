@@ -363,7 +363,7 @@ export const layerWithOptions = (
       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
         function* (threadId: ThreadId) {
           if (Option.isNone(serverSettings))
-            return { browser: true, device: false, creator: false };
+            return { browser: true, device: false, creator: false, gallery: false };
           return yield* Effect.gen(function* () {
             const settings = yield* serverSettings.value.getSettings;
             const thread = yield* projectionStore.getThread(threadId);
@@ -377,6 +377,7 @@ export const layerWithOptions = (
             // Amu Creator is one server-wide trial setting; its tools also refuse
             // at call time once it is turned off.
             const creator = settings.amuCreatorEnabled;
+            const gallery = settings.amuGalleryEnabled;
             if (browserOverridden || deviceOverridden) {
               const project = Option.isSome(projectService)
                 ? yield* projectService.value.getById(thread.projectId)
@@ -386,6 +387,7 @@ export const layerWithOptions = (
                   browser: browserOverridden ? false : settings.enableAgentBrowserAccess,
                   device: deviceOverridden ? false : settings.enableAgentDeviceAccess,
                   creator,
+                  gallery,
                 };
             }
             const effective = resolveProjectSettings(settings, thread.projectId).settings;
@@ -393,13 +395,14 @@ export const layerWithOptions = (
               browser: effective.enableAgentBrowserAccess,
               device: effective.enableAgentDeviceAccess,
               creator,
+              gallery,
             };
           }).pipe(
             Effect.catch((cause) =>
               Effect.logWarning(
                 "Could not resolve agent access; withholding browser and device tools.",
                 { threadId, cause },
-              ).pipe(Effect.as({ browser: false, device: false, creator: false })),
+              ).pipe(Effect.as({ browser: false, device: false, creator: false, gallery: false })),
             ),
           );
         },
@@ -498,6 +501,7 @@ export const layerWithOptions = (
                   browser: browserToolsAvailable,
                   device: deviceToolsAvailable,
                   creator: creatorToolsAvailable,
+                  gallery: galleryToolsAvailable,
                 } = yield* agentAccessSettings(threadId);
                 const capabilities = new Set<
                   import("../mcp/McpInvocationContext.ts").McpCapability
@@ -505,6 +509,7 @@ export const layerWithOptions = (
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
                 if (creatorToolsAvailable) capabilities.add("creator");
+                if (galleryToolsAvailable) capabilities.add("gallery");
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
@@ -530,7 +535,8 @@ export const layerWithOptions = (
                     // credential reuse: rotate so the new scope reflects it.
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable &&
-                    resolved.capabilities.has("creator") === creatorToolsAvailable
+                    resolved.capabilities.has("creator") === creatorToolsAvailable &&
+                    resolved.capabilities.has("gallery") === galleryToolsAvailable
                   ) {
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }

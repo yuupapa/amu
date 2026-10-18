@@ -188,6 +188,7 @@ import * as CreatorOpen from "./creator/CreatorOpen.ts";
 import { makeCreatorWsHandlers } from "./creator/creatorWsHandlers.ts";
 import * as CreatorSender from "./creator/CreatorSender.ts";
 import * as CreatorService from "./creator/CreatorService.ts";
+import * as GalleryOpen from "./gallery/GalleryOpen.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
@@ -3151,6 +3152,7 @@ const layerWsRpc = (
   creator: CreatorService.CreatorService["Service"],
   creatorSender: CreatorSender.CreatorSender["Service"],
   creatorOpen: CreatorOpen.CreatorOpen["Service"],
+  galleryOpen: GalleryOpen.GalleryOpen["Service"],
   /** The desktop app's own session on a loopback socket; the Creator surface needs it. */
   desktopSession: boolean,
 ) =>
@@ -3158,7 +3160,13 @@ const layerWsRpc = (
     ServerWsCreatorRpcGroup.toLayer(
       Effect.succeed(
         ServerWsCreatorRpcGroup.of(
-          makeCreatorWsHandlers({ desktopSession, creator, creatorSender, creatorOpen }),
+          makeCreatorWsHandlers({
+            desktopSession,
+            creator,
+            creatorSender,
+            creatorOpen,
+            galleryOpen,
+          }),
         ),
       ),
     ),
@@ -3186,6 +3194,7 @@ export const layer = Layer.unwrap(
     const creator = yield* CreatorService.CreatorService;
     const creatorSender = yield* CreatorSender.CreatorSender;
     const creatorOpen = yield* CreatorOpen.CreatorOpen;
+    const galleryOpen = yield* GalleryOpen.GalleryOpen;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
@@ -3245,6 +3254,7 @@ export const layer = Layer.unwrap(
               creator,
               creatorSender,
               creatorOpen,
+              galleryOpen,
               isDesktopAppSession(session, deriveAuthClientMetadata({ request }).ipAddress),
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),

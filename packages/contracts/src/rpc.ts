@@ -272,6 +272,7 @@ import {
   CreatorSubscribeInput,
   CreatorUpdateCommentInput,
 } from "./creator.ts";
+import { GalleryError, GalleryOpenByUserInput, GalleryOpenResult } from "./gallery.ts";
 import {
   DiscoveredLocalServerList,
   ConfiguredLocalServerUrls,
@@ -481,6 +482,8 @@ export const WS_METHODS = {
 
   // Amu Creator methods
   creatorOpenByUser: "creator.openByUser",
+  // Amu Gallery (served with the Creator group: the same desktop-only surface)
+  galleryOpenByUser: "gallery.openByUser",
   creatorSetEpoch: "creator.setEpoch",
   creatorSaveDraft: "creator.saveDraft",
   creatorUpdateComment: "creator.updateComment",
@@ -1572,6 +1575,12 @@ const WsCreatorOpenByUserRpc = Rpc.make(WS_METHODS.creatorOpenByUser, {
   error: CreatorRpcError,
 });
 
+const WsGalleryOpenByUserRpc = Rpc.make(WS_METHODS.galleryOpenByUser, {
+  payload: GalleryOpenByUserInput,
+  success: GalleryOpenResult,
+  error: Schema.Union([GalleryError, EnvironmentAuthorizationError]),
+});
+
 const WsCreatorSetEpochRpc = Rpc.make(WS_METHODS.creatorSetEpoch, {
   payload: CreatorSetEpochInput,
   error: CreatorRpcError,
@@ -1981,6 +1990,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
  */
 export const WsCreatorRpcGroup = RpcGroup.make(
   WsCreatorOpenByUserRpc,
+  WsGalleryOpenByUserRpc,
   WsCreatorSetEpochRpc,
   WsCreatorSaveDraftRpc,
   WsCreatorUpdateCommentRpc,

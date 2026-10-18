@@ -15,6 +15,7 @@ import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { CreatorTabWatcher } from "~/amu/creator/CreatorSessionHost";
+import { GalleryTabWatcher } from "~/amu/gallery/GalleryTabWatcher";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserDefaults } from "./browserDefaults";
@@ -168,6 +169,16 @@ export function ElectronBrowserHost() {
                   serverTabId={snapshot.tabId}
                   runtimeTabId={runtimeTabId}
                   bindingId={snapshot.creator.bindingId}
+                  poppedOut={poppedOut}
+                  desktopKnown={desktopKnown}
+                />
+              ) : null}
+              {snapshot.gallery ? (
+                <GalleryTabWatcher
+                  threadRef={threadRef}
+                  serverTabId={snapshot.tabId}
+                  runtimeTabId={runtimeTabId}
+                  loaded={snapshot.navStatus._tag === "Success"}
                   poppedOut={poppedOut}
                   desktopKnown={desktopKnown}
                 />

@@ -20,6 +20,11 @@ export function createCreatorEnvironmentAtoms<R, E>(
       label: "environment-data:creator:open-by-user",
       tag: WS_METHODS.creatorOpenByUser,
     }),
+    /** Amu Gallery: opens (or replaces) the thread's gallery tab. */
+    galleryOpenByUser: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:gallery:open-by-user",
+      tag: WS_METHODS.galleryOpenByUser,
+    }),
     setEpoch: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:creator:set-epoch",
       tag: WS_METHODS.creatorSetEpoch,

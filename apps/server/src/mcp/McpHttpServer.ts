@@ -52,6 +52,8 @@ import * as PullRequestsHandlers from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import * as CreatorHandlers from "./toolkits/creator/handlers.ts";
 import { CreatorToolkit } from "./toolkits/creator/tools.ts";
+import * as GalleryHandlers from "./toolkits/gallery/handlers.ts";
+import { GalleryToolkit } from "./toolkits/gallery/tools.ts";
 import * as DeviceHandlers from "./toolkits/device/handlers.ts";
 import {
   DeviceScreenshotTool,
@@ -862,6 +864,8 @@ export const layerDeviceToolkit = Layer.mergeAll(
 
 export const layerCreatorToolkit = toolkitRegistration(CreatorToolkit, CreatorHandlers.layer);
 
+export const layerGalleryToolkit = toolkitRegistration(GalleryToolkit, GalleryHandlers.layer);
+
 export const layerMcpTransport = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
@@ -882,5 +886,6 @@ export const layer = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerCreatorToolkit,
+  layerGalleryToolkit,
   layerHtmlToolkit,
 ).pipe(Layer.provideMerge(layerMcpTransport));

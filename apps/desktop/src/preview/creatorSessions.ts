@@ -118,6 +118,19 @@ export const measureGuestPayload = (
 };
 
 /** HyperFrames Studio is served on loopback HTTP; no other page may act as the Creator guest. */
+/** The loopback port of Amu Gallery (the local media gallery's server.py). */
+export const GALLERY_GUEST_PORT = "8768";
+
+/** An Amu Gallery page: the media gallery on its fixed loopback port. */
+export const isGalleryGuestUrl = (url: string): boolean => {
+  if (!isCreatorGuestUrl(url)) return false;
+  try {
+    return new URL(url).port === GALLERY_GUEST_PORT;
+  } catch {
+    return false;
+  }
+};
+
 export const isCreatorGuestUrl = (url: string): boolean => {
   try {
     const parsed = new URL(url);

@@ -22,7 +22,7 @@ import type { PreviewSessionSnapshot } from "@t3tools/contracts";
 
 export type RevealSession = Pick<
   PreviewSessionSnapshot,
-  "tabId" | "runtime" | "reveal" | "revealRequest" | "creator"
+  "tabId" | "runtime" | "reveal" | "revealRequest" | "creator" | "gallery"
 >;
 
 export type RevealSurface = {
@@ -76,7 +76,8 @@ export function previewRevealActions(input: {
     const surface = input.surfaces.find(
       (entry) => entry.kind === "preview" && entry.resourceId === session.tabId,
     );
-    if (session.creator !== undefined) {
+    // Amu Gallery tabs move into their own window the same way.
+    if (session.creator !== undefined || session.gallery !== undefined) {
       actions.push({ kind: "panel", tabId: session.tabId });
       if (session.runtime !== "server") {
         actions.push({ kind: "creator-window", tabId: session.tabId });

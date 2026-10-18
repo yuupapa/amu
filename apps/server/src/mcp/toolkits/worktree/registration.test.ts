@@ -30,6 +30,7 @@ import * as PreviewManager from "../../../preview/Manager.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as CreatorOpen from "../../../creator/CreatorOpen.ts";
+import * as GalleryOpen from "../../../gallery/GalleryOpen.ts";
 import * as CreatorService from "../../../creator/CreatorService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
@@ -59,6 +60,7 @@ const layerStubServices = Layer.mergeAll(
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(CreatorService.CreatorService)({ attachTabNow: () => false }),
   Layer.mock(CreatorOpen.CreatorOpen)({}),
+  Layer.mock(GalleryOpen.GalleryOpen)({}),
 );
 
 const ToolsListPayload = Schema.fromJsonString(

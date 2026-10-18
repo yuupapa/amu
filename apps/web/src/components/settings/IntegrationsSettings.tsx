@@ -654,6 +654,37 @@ function AmuCreatorSettings() {
   );
 }
 
+/** Server setting `amuGalleryEnabled`: the Gallery tabs, their WS call and the agents' gallery tool. */
+function AmuGallerySettings() {
+  const { scope, environment: selected } = useSettingsScope();
+  const enabled = useScopedSettings((settings) => settings.amuGalleryEnabled);
+  const updateSettings = useUpdateScopedSettings();
+  const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
+  const environmentId = connected ? selected.environmentId : null;
+  const canConfigure = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const projectScope = scope.kind === "project" || scope.kind === "checkout";
+
+  return (
+    <SettingsSection id="amu-gallery" title="Amu ギャラリー">
+      <SettingsRow
+        {...searchableSetting("amu-gallery")}
+        serverScoped
+        settingKeys={["amuGalleryEnabled"]}
+        description="生成した画像・動画を確かめる素材ギャラリー（~/YouTube動画/tools/media-gallery）を、Amu Creator と同じようにタブや別ウィンドウで開けるようにします。AI も登録のあとに開けます。デスクトップアプリだけで使えます。"
+        control={
+          <ScopedSwitch
+            settingKeys={["amuGalleryEnabled"]}
+            checked={enabled}
+            disabled={!isElectron || !canConfigure || projectScope || environmentId === null}
+            aria-label="Amu ギャラリー"
+            onCheckedChange={(checked) => updateSettings({ amuGalleryEnabled: Boolean(checked) })}
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 function DeviceIntegrationSettings() {
   const { search, environment: selected } = useSettingsScope();
   const settings = useScopedSettings();
@@ -1581,6 +1612,7 @@ export function IntegrationsSettingsPanel() {
       </SettingsSection>
       <DeviceIntegrationSettings />
       <AmuCreatorSettings />
+      <AmuGallerySettings />
     </SettingsPageContainer>
   );
 }

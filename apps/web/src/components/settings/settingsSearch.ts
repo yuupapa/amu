@@ -682,6 +682,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["hyperframes 動画 修正コメント レビュー creator 試験版 studio"],
   },
   {
+    id: "amu-gallery",
+    title: "Amu ギャラリー",
+    to: "/settings/integrations",
+    targetId: "amu-gallery",
+    desktopOnly: true,
+    searchTerms: ["ギャラリー 素材 画像 動画 生成 gallery media"],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",

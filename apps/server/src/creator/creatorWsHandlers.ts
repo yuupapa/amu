@@ -7,6 +7,7 @@
  */
 import {
   CreatorOperationError,
+  GalleryOperationError,
   WS_METHODS,
   type CreatorAcknowledgeConflictInput,
   type CreatorAttachShotInput,
@@ -24,6 +25,7 @@ import {
   type CreatorSetPlaceInput,
   type CreatorSubscribeInput,
   type CreatorUpdateCommentInput,
+  type GalleryOpenByUserInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
@@ -31,6 +33,7 @@ import * as Stream from "effect/Stream";
 import type * as CreatorOpen from "./CreatorOpen.ts";
 import type * as CreatorSender from "./CreatorSender.ts";
 import type * as CreatorService from "./CreatorService.ts";
+import type * as GalleryOpen from "../gallery/GalleryOpen.ts";
 
 export interface CreatorWsHandlerDeps {
   /** The WS session is the desktop app's own (`isDesktopAppSession`). */
@@ -38,6 +41,7 @@ export interface CreatorWsHandlerDeps {
   readonly creator: CreatorService.CreatorService["Service"];
   readonly creatorSender: CreatorSender.CreatorSender["Service"];
   readonly creatorOpen: CreatorOpen.CreatorOpen["Service"];
+  readonly galleryOpen: GalleryOpen.GalleryOpen["Service"];
 }
 
 const desktopOnly = new CreatorOperationError({
@@ -50,6 +54,7 @@ export const makeCreatorWsHandlers = ({
   creator,
   creatorSender,
   creatorOpen,
+  galleryOpen,
 }: CreatorWsHandlerDeps) => {
   const gate = <A, E, R>(run: () => Effect.Effect<A, E, R>) =>
     desktopSession ? run() : Effect.fail(desktopOnly);
@@ -59,6 +64,12 @@ export const makeCreatorWsHandlers = ({
       gate(() =>
         creatorOpen.open({ path: input.path, threadId: input.threadId, openedBy: "user" }),
       ),
+    [WS_METHODS.galleryOpenByUser]: (input: GalleryOpenByUserInput) =>
+      desktopSession
+        ? galleryOpen.open({ threadId: input.threadId, openedBy: "user" })
+        : Effect.fail(
+            new GalleryOperationError({ code: "unauthorized", detail: "desktop_session_only" }),
+          ),
     [WS_METHODS.creatorSetEpoch]: (input: CreatorSetEpochInput) =>
       gate(() => creator.setEpoch(input).pipe(Effect.asVoid)),
     [WS_METHODS.creatorSaveDraft]: (input: CreatorSaveDraftInput) =>

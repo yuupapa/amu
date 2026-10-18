@@ -197,6 +197,7 @@ export const RPC_REQUIRED_SCOPES = {
   // Amu Creator. Opening and editing comments is preview control; sending a proposal and
   // changing a comment's review state act on a thread; reading is observation.
   [WS_METHODS.creatorOpenByUser]: AuthPreviewOperateScope,
+  [WS_METHODS.galleryOpenByUser]: AuthPreviewOperateScope,
   [WS_METHODS.creatorSetEpoch]: AuthPreviewOperateScope,
   [WS_METHODS.creatorSaveDraft]: AuthPreviewOperateScope,
   [WS_METHODS.creatorUpdateComment]: AuthPreviewOperateScope,

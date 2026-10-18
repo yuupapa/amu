@@ -11,6 +11,7 @@
  */
 import {
   type CreatorTabInfo,
+  type GalleryTabInfo,
   type PreviewCloseInput,
   type PreviewEvent,
   type PreviewError,
@@ -54,6 +55,8 @@ export class PreviewManager extends Context.Service<
          * public `preview.open` RPC cannot set it.
          */
         readonly creator?: CreatorTabInfo;
+        /** Server-internal: marks an Amu Gallery tab, like `creator`. */
+        readonly gallery?: GalleryTabInfo;
         /** Runs before the `opened` event publishes, so subscribers find state keyed by the tab. */
         readonly beforePublish?: (snapshot: PreviewSessionSnapshot) => void;
       },
@@ -232,6 +235,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           : {}),
         ...(input.reveal === undefined ? {} : { reveal: input.reveal }),
         ...(input.creator === undefined ? {} : { creator: input.creator }),
+        ...(input.gallery === undefined ? {} : { gallery: input.gallery }),
         updatedAt,
       };
       yield* SynchronizedRef.modifyEffect(stateRef, (state) =>

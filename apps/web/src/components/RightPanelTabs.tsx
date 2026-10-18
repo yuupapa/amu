@@ -29,6 +29,7 @@ import {
   Smartphone,
   ChevronDown,
   Clapperboard,
+  Images,
   ChevronLeft,
   ChevronRight,
   FileDiff,
@@ -154,6 +155,8 @@ interface RightPanelTabsProps {
   deviceAvailable: boolean;
   /** 「Amu Creator を開く」; present only in the desktop app with the setting on. */
   creatorOpener?: CreatorOpener | null | undefined;
+  /** 「Amu ギャラリーを開く」; present only in the desktop app with the setting on. */
+  galleryOpener?: (() => void) | null | undefined;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   children: ReactNode;
 }
@@ -631,6 +634,7 @@ export function surfaceTitle(
         const label = snapshot.creator.label.trim();
         return label === "" ? "Amu Creator" : `Amu Creator — ${label}`;
       }
+      if (snapshot?.gallery) return "Amu ギャラリー";
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
       if (snapshot.navStatus.title.trim().length > 0) return snapshot.navStatus.title;
       try {
@@ -680,6 +684,7 @@ function SurfaceIcon({
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (snapshot?.creator) return <Clapperboard className="size-3 shrink-0" />;
+      if (snapshot?.gallery) return <Images className="size-3 shrink-0" />;
       const url = !snapshot || snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
       const favicon = snapshot ? (desktopByTabId[snapshot.tabId]?.favicon ?? null) : null;
       const capturedUrl =
@@ -1420,6 +1425,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                       </SurfaceMenuItem>
                     );
                   })}
+                  {props.galleryOpener ? (
+                    <MenuItem onClick={props.galleryOpener}>
+                      <Images />
+                      Amu ギャラリーを開く
+                    </MenuItem>
+                  ) : null}
                   {props.creatorOpener ? (
                     <MenuSub>
                       <MenuSubTrigger className="[&>svg:last-child]:ms-0">

@@ -233,7 +233,9 @@ export function PreviewView({
   const serverInputDisabled = isServerTab && serverControlledTabId !== runtimeTabId;
   const [serverFrameTabId, setServerFrameTabId] = useState<string | null>(null);
   const desktopOverlay = tabId ? (previewState.desktopByTabId[tabId] ?? null) : null;
-  const isCreatorTab = Boolean(snapshot?.creator);
+  // Amu Gallery tabs behave like Creator tabs (expand, own window), without the review layer.
+  const isCreatorTab = Boolean(snapshot?.creator ?? snapshot?.gallery);
+  const amuAppName = snapshot?.gallery ? "ギャラリー" : "Creator";
   /** The Creator page is in its own window; the panel shows a notice instead of the webview. */
   const creatorPoppedOut = isCreatorTab && (desktopOverlay?.poppedOut ?? false);
   const navStatus = snapshot?.navStatus ?? { _tag: "Idle" as const };
@@ -1020,7 +1022,7 @@ export function PreviewView({
           isUnreachable
             ? "Page didn't load — pick unavailable until the page renders"
             : creatorPoppedOut
-              ? "Creatorは別ウィンドウで開いています"
+              ? `${amuAppName}は別ウィンドウで開いています`
               : undefined
         }
         leadingActions={
@@ -1051,6 +1053,7 @@ export function PreviewView({
               {previewBridge && runtimeTabId && !isServerTab ? (
                 <CreatorPopoutButton
                   runtimeTabId={runtimeTabId}
+                  appName={amuAppName}
                   poppedOut={creatorPoppedOut}
                   disabledReason={
                     creatorPoppedOut
@@ -1146,7 +1149,7 @@ export function PreviewView({
         ) : runtimeTabId && snapshot && !showEmptyState ? (
           previewBridge ? (
             creatorPoppedOut ? (
-              <CreatorPoppedOutNotice runtimeTabId={runtimeTabId} />
+              <CreatorPoppedOutNotice runtimeTabId={runtimeTabId} appName={amuAppName} />
             ) : (
               <BrowserSurfaceSlot
                 key={runtimeTabId}

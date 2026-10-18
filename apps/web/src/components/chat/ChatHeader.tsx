@@ -31,6 +31,7 @@ import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { CreatorChip } from "~/amu/creator/CreatorChip";
+import { GalleryChip } from "~/amu/gallery/GalleryChip";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -441,6 +442,8 @@ export const ChatHeader = memo(function ChatHeader({
       </WorkspaceBreadcrumb>
       {/* Amu: the thread's Creator tab, reachable with the right panel closed. */}
       <CreatorChip threadRef={activeThreadRef} />
+      {/* Amu: the thread's Gallery tab, the same way. */}
+      <GalleryChip threadRef={activeThreadRef} />
     </div>
   );
 });
