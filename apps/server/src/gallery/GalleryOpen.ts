@@ -16,6 +16,7 @@
  */
 import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
+import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -71,7 +72,7 @@ export class GalleryOpen extends Context.Service<
 export interface GalleryOpenOptions {
   readonly galleryDir?: string;
   readonly url?: string;
-  /** How long a started server may take to answer `/api/health`. */
+  /** How long a started server may take to take its port. */
   readonly readyTimeoutMs?: number;
   readonly killGraceMs?: number;
 }
@@ -108,6 +109,39 @@ export const probeGallery = (url: string): Promise<boolean> =>
 
 const galleryAnswers = (url: string) =>
   Effect.tryPromise(() => probeGallery(url)).pipe(Effect.orElseSucceed(() => false));
+
+/** True when something accepts TCP connections on the gallery's port. */
+const portAccepts = (url: string) =>
+  Effect.promise(
+    () =>
+      new Promise<boolean>((resolve) => {
+        const target = new URL(url);
+        const socket = NodeNet.connect({
+          host: target.hostname,
+          port: Number(target.port || GALLERY_PORT),
+        });
+        socket.setTimeout(1_000);
+        socket.once("connect", () => {
+          socket.destroy();
+          resolve(true);
+        });
+        socket.once("timeout", () => {
+          socket.destroy();
+          resolve(false);
+        });
+        socket.once("error", () => resolve(false));
+      }),
+  );
+
+/**
+ * server.py binds its port first and then builds its catalog, making a poster
+ * with ffmpeg for every video that lacks one, before it answers. That can take
+ * minutes after a new episode is registered, so a started server counts as
+ * ready once its port accepts connections and it is still running this long
+ * after: a port held by another app makes server.py exit at once. The tab's
+ * page then finishes loading by itself when the catalog is done.
+ */
+const STARTED_SETTLE_MS = 1_500;
 
 export const make = (options: GalleryOpenOptions = {}) =>
   Effect.gen(function* () {
@@ -185,10 +219,13 @@ export const make = (options: GalleryOpenOptions = {}) =>
         ),
         Effect.forkIn(serviceScope),
       );
-      const deadline = (yield* Clock.currentTimeMillis) + readyTimeoutMs;
+      const startedAt = yield* Clock.currentTimeMillis;
+      const deadline = startedAt + readyTimeoutMs;
       while ((yield* Clock.currentTimeMillis) < deadline) {
-        if (yield* galleryAnswers(url)) return;
         if (owned !== scope) break;
+        if ((yield* Clock.currentTimeMillis) - startedAt >= STARTED_SETTLE_MS) {
+          if ((yield* portAccepts(url)) && owned === scope) return;
+        }
         yield* Effect.sleep("200 millis");
       }
       yield* stopOwned;

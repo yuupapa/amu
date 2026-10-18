@@ -38,8 +38,10 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
     def log_message(self, *args): pass
+# Like the real gallery: bind first, then build the catalog, then answer.
+server = ThreadingHTTPServer(('127.0.0.1', a.port), H)
 time.sleep(float(os.environ.get('FAKE_GALLERY_DELAY', '0')))
-ThreadingHTTPServer(('127.0.0.1', a.port), H).serve_forever()
+server.serve_forever()
 `;
 
 const freePort = () =>
@@ -177,6 +179,7 @@ it.live("an open interrupted while the gallery starts leaves no server behind", 
   Effect.scoped(
     Effect.gen(function* () {
       process.env.FAKE_GALLERY_DELAY = "1.5";
+      // Interrupted before the settle time, while the port is not trusted yet.
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           delete process.env.FAKE_GALLERY_DELAY;
@@ -184,11 +187,32 @@ it.live("an open interrupted while the gallery starts leaves no server behind", 
       );
       const { url, opener } = yield* harness();
       const fiber = yield* Effect.forkChild(opener.open({ threadId, openedBy: "agent" }));
-      yield* Effect.sleep("500 millis");
+      yield* Effect.sleep("700 millis");
       yield* Fiber.interrupt(fiber);
-      // The stand-in would be listening by now had it been left running.
+      // The stand-in would be answering by now had it been left running.
       yield* Effect.sleep("2500 millis");
       expect(yield* answers(url)).toBe(false);
+    }),
+  ),
+);
+
+it.live("opens the tab while a slow gallery is still building its catalog", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      process.env.FAKE_GALLERY_DELAY = "4";
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          delete process.env.FAKE_GALLERY_DELAY;
+        }),
+      );
+      const { url, opener, previews } = yield* harness();
+      const opened = yield* opener.open({ threadId, openedBy: "agent" });
+      // Opened before the gallery answers; it answers once its catalog is built.
+      expect(yield* answers(url)).toBe(false);
+      expect((yield* previews.list({ threadId })).sessions.map((tab) => tab.tabId)).toEqual([
+        opened.tabId,
+      ]);
+      expect(yield* waitUntil(answers(url))).toBe(true);
     }),
   ),
 );
