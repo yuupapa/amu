@@ -65,7 +65,7 @@ export function CreatorPoppedOutNotice({
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
       <div className="flex flex-col gap-1">
-        <p className="text-sm text-muted-foreground">{appName}は別ウィンドウで開いています</p>
+        <p className="text-sm text-muted-foreground">{`${appName}は別ウィンドウで開いています`}</p>
         <p className="text-xs text-muted-foreground">ウィンドウを閉じてもパネルに戻ります</p>
       </div>
       <div className="flex items-center gap-2">
@@ -74,7 +74,7 @@ export function CreatorPoppedOutNotice({
           variant="outline"
           onClick={() => void runCreatorWindowAction("pop-out", runtimeTabId, appName)}
         >
-          {appName}ウィンドウを表示
+          {`${appName}ウィンドウを表示`}
         </Button>
         <Button
           size="sm"
