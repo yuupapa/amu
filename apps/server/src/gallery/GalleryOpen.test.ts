@@ -10,6 +10,7 @@ import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -28,7 +29,7 @@ const threadId = ThreadId.make("thread-gallery-open");
 
 /** Stands in for tools/media-gallery/server.py: answers /api/health on --port. */
 const FAKE_SERVER = `
-import argparse, json
+import argparse, json, os, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 p = argparse.ArgumentParser(); p.add_argument('--port', type=int); a = p.parse_args()
 class H(BaseHTTPRequestHandler):
@@ -37,6 +38,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
     def log_message(self, *args): pass
+time.sleep(float(os.environ.get('FAKE_GALLERY_DELAY', '0')))
 ThreadingHTTPServer(('127.0.0.1', a.port), H).serve_forever()
 `;
 
@@ -167,6 +169,26 @@ it.live("reports a missing gallery folder", () =>
       yield* Effect.promise(() => NodeFSP.rm(NodePath.join(dir, "server.py")));
       const error = yield* Effect.flip(opener.open({ threadId, openedBy: "agent" }));
       expect(error).toMatchObject({ _tag: "GalleryOperationError", code: "not_found" });
+    }),
+  ),
+);
+
+it.live("an open interrupted while the gallery starts leaves no server behind", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      process.env.FAKE_GALLERY_DELAY = "1.5";
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          delete process.env.FAKE_GALLERY_DELAY;
+        }),
+      );
+      const { url, opener } = yield* harness();
+      const fiber = yield* Effect.forkChild(opener.open({ threadId, openedBy: "agent" }));
+      yield* Effect.sleep("500 millis");
+      yield* Fiber.interrupt(fiber);
+      // The stand-in would be listening by now had it been left running.
+      yield* Effect.sleep("2500 millis");
+      expect(yield* answers(url)).toBe(false);
     }),
   ),
 );

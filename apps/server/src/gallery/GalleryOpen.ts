@@ -141,29 +141,40 @@ export const make = (options: GalleryOpenOptions = {}) =>
       }
       const venvPython = NodePath.join(galleryDir, ".venv", "bin", "python");
       const python = NodeFS.existsSync(venvPython) ? venvPython : "python3";
-      const scope = yield* Scope.make();
-      const child = yield* spawner
-        .spawn(
-          ChildProcess.make(python, [script, "--port", new URL(url).port || String(GALLERY_PORT)], {
-            cwd: galleryDir,
-            detached: true,
-            stdin: "ignore",
-            killSignal: "SIGTERM",
-            forceKillAfter: `${killGraceMs} millis`,
-          }),
-        )
-        .pipe(
-          Effect.provideService(Scope.Scope, scope),
-          Effect.tapError(() => Scope.close(scope, Exit.void)),
-          Effect.mapError((cause) =>
-            operationError("unavailable", `spawn_failed: ${cause.message}`),
-          ),
-        );
-      // Keep both pipes drained, or the child can block on a full buffer.
-      for (const output of [child.stdout, child.stderr]) {
-        yield* output.pipe(Stream.runDrain, Effect.ignore, Effect.forkIn(scope));
-      }
-      owned = scope;
+      // From creating the scope to recording it as owned nothing may interrupt,
+      // or a started child would be left without an owner to stop it.
+      const { scope, child } = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const scope = yield* Scope.make();
+          const child = yield* spawner
+            .spawn(
+              ChildProcess.make(
+                python,
+                [script, "--port", new URL(url).port || String(GALLERY_PORT)],
+                {
+                  cwd: galleryDir,
+                  detached: true,
+                  stdin: "ignore",
+                  killSignal: "SIGTERM",
+                  forceKillAfter: `${killGraceMs} millis`,
+                },
+              ),
+            )
+            .pipe(
+              Effect.provideService(Scope.Scope, scope),
+              Effect.tapError(() => Scope.close(scope, Exit.void)),
+              Effect.mapError((cause) =>
+                operationError("unavailable", `spawn_failed: ${cause.message}`),
+              ),
+            );
+          // Keep both pipes drained, or the child can block on a full buffer.
+          for (const output of [child.stdout, child.stderr]) {
+            yield* output.pipe(Stream.runDrain, Effect.ignore, Effect.forkIn(scope));
+          }
+          owned = scope;
+          return { scope, child };
+        }),
+      );
       // A server that exits on its own is no longer ours to stop.
       yield* child.exitCode.pipe(
         Effect.exit,
@@ -254,6 +265,8 @@ export const make = (options: GalleryOpenOptions = {}) =>
       yield* requireThread(input.threadId);
       return yield* lock.withPermits(1)(
         Effect.gen(function* () {
+          // The setting may have been turned off (and every tab closed) while this waited.
+          yield* requireLocal;
           yield* ensureServer;
           const snapshot = yield* previews
             .open({
@@ -277,7 +290,12 @@ export const make = (options: GalleryOpenOptions = {}) =>
             yield* previews.close({ threadId: tab.threadId, tabId: tab.tabId }).pipe(Effect.ignore);
           }
           return { tabId: snapshot.tabId, url } satisfies GalleryOpenResult;
-        }),
+        }).pipe(
+          // A failed or interrupted open must not leave a server it started with no tab.
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit) || tabs.length > 0 ? Effect.void : stopOwned,
+          ),
+        ),
       );
     });
 
