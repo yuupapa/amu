@@ -72,7 +72,7 @@ export class GalleryOpen extends Context.Service<
 export interface GalleryOpenOptions {
   readonly galleryDir?: string;
   readonly url?: string;
-  /** How long a started server may take to take its port. */
+  /** How long starting the server (retries included) may take until it holds its port. */
   readonly readyTimeoutMs?: number;
   readonly killGraceMs?: number;
 }
@@ -154,7 +154,7 @@ export const make = (options: GalleryOpenOptions = {}) =>
     const serviceScope = yield* Scope.Scope;
     const galleryDir = options.galleryDir ?? defaultGalleryDir();
     const url = options.url ?? GALLERY_URL;
-    const readyTimeoutMs = options.readyTimeoutMs ?? 20_000;
+    const readyTimeoutMs = options.readyTimeoutMs ?? 45_000;
     const killGraceMs = options.killGraceMs ?? 3_000;
 
     const tabs: Array<LiveTab> = [];
@@ -168,6 +168,65 @@ export const make = (options: GalleryOpenOptions = {}) =>
       return scope === null ? Effect.void : Scope.close(scope, Exit.void);
     }).pipe(Effect.uninterruptible);
 
+    /** One start of server.py: "ready", or "exited" when it stopped before it took its port. */
+    const launch = (script: string, python: string, deadline: number) =>
+      Effect.gen(function* () {
+        // From creating the scope to recording it as owned nothing may interrupt,
+        // or a started child would be left without an owner to stop it.
+        const { scope, child } = yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            const scope = yield* Scope.make();
+            const child = yield* spawner
+              .spawn(
+                ChildProcess.make(
+                  python,
+                  [script, "--port", new URL(url).port || String(GALLERY_PORT)],
+                  {
+                    cwd: galleryDir,
+                    detached: true,
+                    stdin: "ignore",
+                    killSignal: "SIGTERM",
+                    forceKillAfter: `${killGraceMs} millis`,
+                  },
+                ),
+              )
+              .pipe(
+                Effect.provideService(Scope.Scope, scope),
+                Effect.tapError(() => Scope.close(scope, Exit.void)),
+                Effect.mapError((cause) =>
+                  operationError("unavailable", `spawn_failed: ${cause.message}`),
+                ),
+              );
+            // Keep both pipes drained, or the child can block on a full buffer.
+            for (const output of [child.stdout, child.stderr]) {
+              yield* output.pipe(Stream.runDrain, Effect.ignore, Effect.forkIn(scope));
+            }
+            owned = scope;
+            return { scope, child };
+          }),
+        );
+        // A server that exits on its own is no longer ours to stop.
+        yield* child.exitCode.pipe(
+          Effect.exit,
+          Effect.flatMap(() =>
+            Effect.sync(() => {
+              if (owned === scope) owned = null;
+            }),
+          ),
+          Effect.forkIn(serviceScope),
+        );
+        const startedAt = yield* Clock.currentTimeMillis;
+        while ((yield* Clock.currentTimeMillis) < deadline) {
+          if (owned !== scope) return "exited" as const;
+          if ((yield* Clock.currentTimeMillis) - startedAt >= STARTED_SETTLE_MS) {
+            if ((yield* portAccepts(url)) && owned === scope) return "ready" as const;
+          }
+          yield* Effect.sleep("200 millis");
+        }
+        yield* stopOwned;
+        return "exited" as const;
+      });
+
     const startServer = Effect.gen(function* () {
       const script = NodePath.join(galleryDir, "server.py");
       if (!NodeFS.existsSync(script)) {
@@ -175,60 +234,15 @@ export const make = (options: GalleryOpenOptions = {}) =>
       }
       const venvPython = NodePath.join(galleryDir, ".venv", "bin", "python");
       const python = NodeFS.existsSync(venvPython) ? venvPython : "python3";
-      // From creating the scope to recording it as owned nothing may interrupt,
-      // or a started child would be left without an owner to stop it.
-      const { scope, child } = yield* Effect.uninterruptible(
-        Effect.gen(function* () {
-          const scope = yield* Scope.make();
-          const child = yield* spawner
-            .spawn(
-              ChildProcess.make(
-                python,
-                [script, "--port", new URL(url).port || String(GALLERY_PORT)],
-                {
-                  cwd: galleryDir,
-                  detached: true,
-                  stdin: "ignore",
-                  killSignal: "SIGTERM",
-                  forceKillAfter: `${killGraceMs} millis`,
-                },
-              ),
-            )
-            .pipe(
-              Effect.provideService(Scope.Scope, scope),
-              Effect.tapError(() => Scope.close(scope, Exit.void)),
-              Effect.mapError((cause) =>
-                operationError("unavailable", `spawn_failed: ${cause.message}`),
-              ),
-            );
-          // Keep both pipes drained, or the child can block on a full buffer.
-          for (const output of [child.stdout, child.stderr]) {
-            yield* output.pipe(Stream.runDrain, Effect.ignore, Effect.forkIn(scope));
-          }
-          owned = scope;
-          return { scope, child };
-        }),
-      );
-      // A server that exits on its own is no longer ours to stop.
-      yield* child.exitCode.pipe(
-        Effect.exit,
-        Effect.flatMap(() =>
-          Effect.sync(() => {
-            if (owned === scope) owned = null;
-          }),
-        ),
-        Effect.forkIn(serviceScope),
-      );
-      const startedAt = yield* Clock.currentTimeMillis;
-      const deadline = startedAt + readyTimeoutMs;
+      const deadline = (yield* Clock.currentTimeMillis) + readyTimeoutMs;
+      // server.py refuses a port the system still holds after the last gallery
+      // stopped (macOS keeps it up to ~30 s), so a quick reopen starts again
+      // until the port is free. A gallery that came up meanwhile is used as is.
       while ((yield* Clock.currentTimeMillis) < deadline) {
-        if (owned !== scope) break;
-        if ((yield* Clock.currentTimeMillis) - startedAt >= STARTED_SETTLE_MS) {
-          if ((yield* portAccepts(url)) && owned === scope) return;
-        }
-        yield* Effect.sleep("200 millis");
+        if ((yield* launch(script, python, deadline)) === "ready") return;
+        if (yield* galleryAnswers(url)) return;
+        yield* Effect.sleep("1 second");
       }
-      yield* stopOwned;
       return yield* Effect.fail(operationError("unavailable", "gallery_not_ready"));
     });
 

@@ -38,6 +38,11 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
     def log_message(self, *args): pass
+# Like the real gallery when the system still holds the port: refuse once.
+once = os.environ.get('FAKE_GALLERY_FAIL_ONCE')
+if once and not os.path.exists(once):
+    open(once, 'w').close()
+    raise SystemExit('Port is used by another app')
 # Like the real gallery: bind first, then build the catalog, then answer.
 server = ThreadingHTTPServer(('127.0.0.1', a.port), H)
 time.sleep(float(os.environ.get('FAKE_GALLERY_DELAY', '0')))
@@ -213,6 +218,30 @@ it.live("opens the tab while a slow gallery is still building its catalog", () =
         opened.tabId,
       ]);
       expect(yield* waitUntil(answers(url))).toBe(true);
+    }),
+  ),
+);
+
+it.live("starts the gallery again when its first start is refused", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { dir, url, opener } = yield* harness();
+      process.env.FAKE_GALLERY_FAIL_ONCE = NodePath.join(dir, "failed-once");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          delete process.env.FAKE_GALLERY_FAIL_ONCE;
+        }),
+      );
+      yield* opener.open({ threadId, openedBy: "user" });
+      expect(yield* waitUntil(answers(url))).toBe(true);
+      expect(
+        yield* Effect.promise(() =>
+          NodeFSP.access(NodePath.join(dir, "failed-once")).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      ).toBe(true);
     }),
   ),
 );

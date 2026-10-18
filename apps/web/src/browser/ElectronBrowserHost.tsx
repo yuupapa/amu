@@ -53,6 +53,10 @@ export function ElectronBrowserHost() {
                   previewState.desktopByTabId[snapshot.tabId]?.pictureInPicture ?? false,
                 poppedOut: previewState.desktopByTabId[snapshot.tabId]?.poppedOut ?? false,
                 desktopKnown: previewState.desktopByTabId[snapshot.tabId] !== undefined,
+                // The desktop reports a guest that finished loading (Amu Gallery's auto pop-out waits for it).
+                desktopLoaded:
+                  (previewState.desktopByTabId[snapshot.tabId]?.hasWebContents ?? false) &&
+                  !(previewState.desktopByTabId[snapshot.tabId]?.loading ?? true),
                 zoomFactor: previewState.desktopByTabId[snapshot.tabId]?.zoomFactor ?? 1,
               }))
           : [];
@@ -138,6 +142,7 @@ export function ElectronBrowserHost() {
           pictureInPicture,
           poppedOut,
           desktopKnown,
+          desktopLoaded,
           zoomFactor,
         }) => {
           const url = snapshot.navStatus._tag === "Idle" ? null : snapshot.navStatus.url;
@@ -178,7 +183,9 @@ export function ElectronBrowserHost() {
                   threadRef={threadRef}
                   serverTabId={snapshot.tabId}
                   runtimeTabId={runtimeTabId}
-                  loaded={snapshot.navStatus._tag === "Success"}
+                  // The guest finished loading a page that navigated: right after the
+                  // webview attaches it reports "not loading" before it starts.
+                  loaded={desktopLoaded && snapshot.navStatus._tag === "Success"}
                   poppedOut={poppedOut}
                   desktopKnown={desktopKnown}
                 />

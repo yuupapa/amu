@@ -20,7 +20,6 @@ import {
   creatorReturnedStep,
 } from "../creator/creatorPanelAutoClose";
 import {
-  clearCreatorAutoPopout,
   runCreatorWindowAction,
   takeCreatorAutoPopout,
   useCreatorAutoPopoutRequested,
@@ -39,8 +38,9 @@ export function GalleryTabWatcher(props: {
   const { threadRef, serverTabId, runtimeTabId, loaded, poppedOut, desktopKnown } = props;
   const autoPopout = useCreatorAutoPopoutRequested(runtimeTabId);
 
-  // A closed tab's request goes with it.
-  useEffect(() => () => clearCreatorAutoPopout(runtimeTabId), [runtimeTabId]);
+  // No clearing on unmount: React's development double mount would drop the
+  // request before the page loads. A request expires on its own (60 s), and a
+  // closed tab's id is never reused.
   const ready = desktopKnown && loaded;
   useEffect(() => {
     if (!autoPopout || !ready || !takeCreatorAutoPopout(runtimeTabId)) return;
