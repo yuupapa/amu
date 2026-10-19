@@ -18,6 +18,7 @@
  */
 import { CREATOR_LIMITS } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
+import { isAbsolutePath } from "@t3tools/shared/path";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -328,8 +329,8 @@ export const make = Effect.fn("CreatorPreviewSupervisor.make")(function* (
   const ensure: CreatorPreviewSupervisor["Service"]["ensure"] = Effect.fn(
     "CreatorPreviewSupervisor.ensure",
   )(function* (root) {
-    // POSIX only (process groups), so an absolute path starts with `/`.
-    if (!root.startsWith("/")) {
+    // `C:\…` and `C:/…` are absolute on Windows, where a `/` check refused every root.
+    if (!isAbsolutePath(root)) {
       return yield* startError("invalid_root", "The serving root must be an absolute path");
     }
     while (true) {

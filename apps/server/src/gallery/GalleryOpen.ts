@@ -248,6 +248,9 @@ export const make = (options: GalleryOpenOptions = {}) =>
 
     const ensureServer = Effect.gen(function* () {
       if (yield* galleryAnswers(url)) return;
+      // The server Amu started answers only once its catalog is built; while it
+      // still holds the port, a reopen must not stop it and start over.
+      if (owned !== null && (yield* portAccepts(url))) return;
       yield* stopOwned;
       yield* startServer;
     });

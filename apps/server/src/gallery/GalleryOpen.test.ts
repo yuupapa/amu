@@ -45,6 +45,9 @@ if once and not os.path.exists(once):
     raise SystemExit('Port is used by another app')
 # Like the real gallery: bind first, then build the catalog, then answer.
 server = ThreadingHTTPServer(('127.0.0.1', a.port), H)
+starts = os.environ.get('FAKE_GALLERY_STARTS')
+if starts:
+    open(starts, 'a').write(str(os.getpid()) + '\\n')
 time.sleep(float(os.environ.get('FAKE_GALLERY_DELAY', '0')))
 server.serve_forever()
 `;
@@ -218,6 +221,35 @@ it.live("opens the tab while a slow gallery is still building its catalog", () =
         opened.tabId,
       ]);
       expect(yield* waitUntil(answers(url))).toBe(true);
+    }),
+  ),
+);
+
+it.live("a reopen while the gallery builds its catalog keeps the same server", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      process.env.FAKE_GALLERY_DELAY = "4";
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          delete process.env.FAKE_GALLERY_DELAY;
+        }),
+      );
+      const { dir, url, opener } = yield* harness();
+      process.env.FAKE_GALLERY_STARTS = NodePath.join(dir, "starts");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          delete process.env.FAKE_GALLERY_STARTS;
+        }),
+      );
+      yield* opener.open({ threadId, openedBy: "agent" });
+      expect(yield* answers(url)).toBe(false);
+      yield* opener.open({ threadId, openedBy: "user" });
+      expect(yield* waitUntil(answers(url))).toBe(true);
+      // One line per start of the stand-in: the reopen did not start it again.
+      const starts = yield* Effect.promise(() =>
+        NodeFSP.readFile(NodePath.join(dir, "starts"), "utf8"),
+      );
+      expect(starts.trim().split("\n")).toHaveLength(1);
     }),
   ),
 );

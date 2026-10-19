@@ -319,3 +319,13 @@ it.live("refuses a relative root without taking a slot", () =>
     }),
   ),
 );
+
+it.live("takes a Windows drive path as an absolute root", () =>
+  withSupervisor({ maxPreviews: 1 }, (supervisor) =>
+    Effect.gen(function* () {
+      // The folder does not exist here, so the start fails later, not at the root check.
+      const exit = yield* Effect.exit(supervisor.ensure("C:/Users/amu/project"));
+      expect(startError(exit)).not.toMatchObject({ reason: "invalid_root" });
+    }),
+  ),
+);
