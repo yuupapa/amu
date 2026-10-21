@@ -53,7 +53,7 @@ const media = (p) => p.evaluate(() => { const a = document.querySelector('#wave 
 // 3 mobile layout
 for (const w of [390, 360]) { const { p } = await page('full.html', w); await p.waitForTimeout(800);
   const m = await p.evaluate(() => {
-    const starts = [...document.querySelectorAll('.row .t')].map((e) => Math.round(e.getBoundingClientRect().left));
+    const starts = [...document.querySelectorAll('.row .nm')].map((e) => Math.round(e.getBoundingClientRect().left));
     const over = [...document.querySelectorAll('.row .b')].filter((e) => e.scrollWidth > e.clientWidth + 1).length;
     const r = (s) => { const b = document.querySelector(s).getBoundingClientRect(); return [Math.round(b.width), Math.round(b.height)]; };
     const fs = [...document.querySelectorAll('.row .b, .row .m')].map((e) => parseFloat(getComputedStyle(e).fontSize));
@@ -66,5 +66,18 @@ for (const w of [390, 360]) { const { p } = await page('full.html', w); await p.
   ok(`w${w}: no h-scroll`, !m.hscroll);
   await p.screenshot({ path: `${T}/shot-${w}.png` }); await p.close(); }
 { const { p } = await page('full.html', 728); await p.waitForTimeout(800); await p.screenshot({ path: `${T}/shot-728.png` }); await p.close(); }
+// 4 narrow chat column / split view: names stay readable, rows stay tappable
+for (const w of [240, 300]) { const { p } = await page('full.html', w); await p.waitForTimeout(800);
+  const g = await p.evaluate(() => ({
+    sw: document.documentElement.scrollWidth,
+    nm: Math.min(...[...document.querySelectorAll('.row .nm')].map((e) => e.getBoundingClientRect().width)),
+    rowH: Math.min(...[...document.querySelectorAll('.row')].map((e) => e.getBoundingClientRect().height)),
+  }));
+  ok(`w${w}: no h-scroll`, g.sw <= w, String(g.sw));
+  ok(`w${w}: name readable`, g.nm >= w * 0.5, String(Math.round(g.nm)));
+  ok(`w${w}: row >=44px`, g.rowH >= 44, String(Math.round(g.rowH)));
+  await p.click('.row >> nth=2'); await p.waitForTimeout(400);
+  ok(`w${w}: row clickable`, await p.$eval('.row >> nth=2', (e) => e.getAttribute('aria-current') === 'true'));
+  await p.screenshot({ path: `${T}/shot-${w}.png` }); await p.close(); }
 await b.close();
 console.log(res.join('\n'));

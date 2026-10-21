@@ -64,10 +64,35 @@
   .aa-list .d { flex-shrink: 0; color: var(--aa-muted-foreground); font-family: var(--aa-font-mono); }
   .aa-drop { margin-top: 10px; border: 1px dashed var(--aa-border); border-radius: 6px; padding: 10px 8px; text-align: center; font-size: 12px; color: var(--aa-muted-foreground); cursor: pointer; display: block; }
   .aa-drop.over, .aa-drop.hint { border-color: var(--aa-primary); color: var(--aa-foreground); }
-  @media (max-width: 480px) {
+  /* 幅はチャット欄・分割表示で変わるので、画面ではなくプレーヤー自身の幅で切り替える */
+  .aa { container-type: inline-size; }
+  @container (max-width: 480px) {
     .aa .icon { min-width: 44px; min-height: 40px; }
     .aa button.primary { min-height: 40px; }
     .aa-vol input { width: 96px; height: 32px; }
+  }
+  @container (max-width: 420px) {
+    .aa-box { padding: 12px; }
+    .aa button.primary { flex: 1; }
+    .aa-sp { flex-basis: 100%; height: 0; }
+    .aa-vol { flex: 1 1 140px; }
+    .aa-vol input { flex: 1; width: auto; min-width: 0; }
+    .aa-list { max-height: 320px; }
+    /* 行は「曲名＋長さ」「種類＋メモ」の2段にして、曲名の幅を確保する */
+    .aa-list .row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "nm nm d" "b m m"; column-gap: 8px; row-gap: 3px; min-height: 48px; padding: 8px 10px; }
+    .aa-list .t { display: contents; }
+    .aa-list .n { display: none; }
+    .aa-list .nm { grid-area: nm; min-width: 0; overflow-wrap: anywhere; }
+    .aa-list .d { grid-area: d; align-self: start; }
+    .aa-list .b { grid-area: b; width: auto; align-self: center; padding: 0 6px; }
+    .aa-list .m { grid-area: m; min-width: 0; align-self: center; }
+  }
+  @container (max-width: 300px) {
+    .aa-ctrl > * { order: 2; }
+    .aa-ctrl > #prev, .aa-ctrl > #play, .aa-ctrl > #next { order: 0; }
+    .aa-time { order: 1; flex-basis: 100%; text-align: center; }
+    .aa-sp { display: none; }
+    .aa-drop { padding: 8px 6px; }
   }
 </style>
 </head>
