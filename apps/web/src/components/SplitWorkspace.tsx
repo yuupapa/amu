@@ -8,6 +8,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 
 import { cn } from "~/lib/utils";
+import { isElectron } from "../env";
 import { ChatPaneContext, type ChatPaneContextValue } from "./ChatPaneContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import {
@@ -338,6 +339,7 @@ function SplitPaneHeader(props: {
     <div
       className={cn(
         "flex h-7 shrink-0 items-center gap-1 border-b px-2 text-xs",
+        isElectron && "drag-region select-none",
         props.focused ? "bg-accent/60 text-foreground" : "text-muted-foreground",
         props.atWindowTop && COLLAPSED_SIDEBAR_TITLEBAR_HEIGHT_CLASS,
         props.atWindowTopLeft && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,

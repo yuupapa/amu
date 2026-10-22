@@ -329,3 +329,15 @@ it.live("takes a Windows drive path as an absolute root", () =>
     }),
   ),
 );
+
+it("protects native macOS exports while retaining inherited Node options", () => {
+  const env = Supervisor.HYPERFRAMES_PREVIEW_COMMAND.env?.(
+    "/p",
+    { NODE_OPTIONS: "--no-warnings" },
+    "darwin",
+  );
+  expect(env?.NODE_OPTIONS).toMatch(/^--no-warnings --import=data:text\/javascript;base64,/);
+  const source = Buffer.from(env!.NODE_OPTIONS!.split("base64,")[1]!, "base64").toString();
+  expect(source).toContain("amu.render.acquire");
+  expect(Supervisor.HYPERFRAMES_PREVIEW_COMMAND.env?.("/p", {}, "linux")).toEqual({});
+});

@@ -17,6 +17,8 @@
  * process exits, so the default command always passes it.
  */
 import { CREATOR_LIMITS } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { renderSafetyNodeOptions } from "./previewRenderSafety.ts";
 import * as NetService from "@t3tools/shared/Net";
 import { isAbsolutePath } from "@t3tools/shared/path";
 import * as Cause from "effect/Cause";
@@ -37,6 +39,11 @@ export const HYPERFRAMES_VERSION = "0.8.143";
 export interface CreatorPreviewCommand {
   readonly file: string;
   readonly args: (root: string, port: number) => ReadonlyArray<string>;
+  readonly env?: (
+    root: string,
+    inherited: NodeJS.ProcessEnv,
+    platform: NodeJS.Platform,
+  ) => Record<string, string>;
 }
 
 export const HYPERFRAMES_PREVIEW_COMMAND: CreatorPreviewCommand = {
@@ -52,6 +59,8 @@ export const HYPERFRAMES_PREVIEW_COMMAND: CreatorPreviewCommand = {
     "--no-open",
     "--force-new",
   ],
+  env: (_root, inherited, platform) =>
+    platform === "darwin" ? { NODE_OPTIONS: renderSafetyNodeOptions(inherited.NODE_OPTIONS) } : {},
 };
 
 export interface CreatorPreviewOptions {
@@ -145,6 +154,8 @@ export const make = Effect.fn("CreatorPreviewSupervisor.make")(function* (
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const net = yield* NetService.NetService;
   const serviceScope = yield* Scope.Scope;
+  const platform = yield* HostProcess.Platform;
+  const environment = yield* HostProcess.Environment;
   const command = options.command ?? HYPERFRAMES_PREVIEW_COMMAND;
   const readyTimeoutMs = options.readyTimeoutMs ?? CREATOR_LIMITS.hyperframesStartTimeoutMs;
   const maxPreviews = options.maxPreviews ?? CREATOR_LIMITS.maxPreviews;
@@ -183,6 +194,9 @@ export const make = Effect.fn("CreatorPreviewSupervisor.make")(function* (
           ChildProcess.make(command.file, [...command.args(root, port)], {
             detached: true,
             stdin: "ignore",
+            ...(command.env
+              ? { env: command.env(root, environment, platform), extendEnv: true }
+              : {}),
             killSignal: "SIGTERM",
             forceKillAfter: `${killGraceMs} millis`,
           }),

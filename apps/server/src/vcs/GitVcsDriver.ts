@@ -39,6 +39,7 @@ import {
 } from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
+import { checkCheckpointBudget, hasCheckpointObjectTemps } from "./checkpointBudget.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -960,6 +961,43 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             });
           }
         }
+
+        const candidates = yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "."],
+          env: commitEnv,
+          maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+        });
+        const budgetError = (detail: string) =>
+          new VcsProcessExitError({
+            operation,
+            command: "git checkpoint preflight",
+            cwd: input.cwd,
+            exitCode: 1,
+            detail,
+          });
+        if (candidates.stdoutTruncated) {
+          return yield* budgetError("Automatic checkpoint file listing exceeds its safety limit.");
+        }
+        const hasTemps = yield* Effect.tryPromise({
+          try: () => hasCheckpointObjectTemps(gitCommonDir),
+          catch: () =>
+            budgetError("Could not inspect Git temporary objects. No checkpoint was published."),
+        });
+        if (hasTemps) {
+          return yield* budgetError(
+            "Git temporary objects remain. Check active Git writers and leftover files before another automatic checkpoint.",
+          );
+        }
+        const budgetFailure = yield* Effect.tryPromise({
+          try: () => checkCheckpointBudget(input.cwd, splitNullSeparatedGitStdoutPaths(candidates)),
+          catch: () =>
+            budgetError(
+              "Could not inspect automatic checkpoint file sizes. No checkpoint was published.",
+            ),
+        });
+        if (budgetFailure !== null) return yield* budgetError(budgetFailure);
 
         const stageFiles = (exclusions: ReadonlyArray<string>) =>
           execute({
