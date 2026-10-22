@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Amu Audio</title>
+<style>
+  .aa {
+    --aa-accent-surface: var(--accent-surface, #232b40);
+    --aa-border: var(--border, #34343b);
+    --aa-card: var(--card, #18181b);
+    --aa-chart-1: var(--chart-1, #4f7cff);
+    --aa-chart-2: var(--chart-2, #2fb67c);
+    --aa-chart-3: var(--chart-3, #d9a43b);
+    --aa-destructive: var(--destructive, #e5484d);
+    --aa-font-mono: var(--font-mono, ui-monospace, Menlo, monospace);
+    --aa-font-sans: var(--font-sans, system-ui, -apple-system, "Hiragino Sans", sans-serif);
+    --aa-foreground: var(--foreground, #e7e7ea);
+    --aa-muted: var(--muted, #26262b);
+    --aa-muted-foreground: var(--muted-foreground, #9a9aa3);
+    --aa-primary: var(--primary, #3d66e6);
+    --aa-primary-foreground: var(--primary-foreground, #ffffff);
+    --aa-radius: var(--radius, 10px);
+    --aa-ring: var(--ring, #7b9bff);
+    --aa-secondary: var(--secondary, #2a2a30);
+    --aa-secondary-foreground: var(--secondary-foreground, #e7e7ea);
+  }
+  .aa { font-family: var(--aa-font-sans); color: var(--aa-foreground); }
+  .aa-box { background: var(--aa-card); border: 1px solid var(--aa-border); border-radius: var(--aa-radius); padding: 16px; }
+  .aa-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .aa-title { font-weight: 600; font-size: 13px; letter-spacing: .02em; }
+  .aa-now { flex: 1; font-size: 12px; color: var(--aa-muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .aa-wave { height: 56px; cursor: pointer; border-radius: 6px; background: var(--aa-muted); }
+  .aa-ctrl { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .aa button, .aa select { font: inherit; font-size: 12px; color: var(--aa-foreground); background: var(--aa-secondary); border: 1px solid var(--aa-border); border-radius: 6px; padding: 5px 9px; min-height: 32px; cursor: pointer; }
+  .aa button:hover:not(:disabled), .aa select:hover { filter: brightness(1.15); }
+  .aa button:active:not(:disabled) { transform: translateY(1px); }
+  .aa button:disabled { opacity: .45; cursor: not-allowed; }
+  .aa :focus-visible { outline: 2px solid var(--aa-ring); outline-offset: 2px; }
+  .aa .icon { min-width: 40px; display: inline-flex; align-items: center; justify-content: center; }
+  .aa button.primary { background: var(--aa-primary); color: var(--aa-primary-foreground); border-color: transparent; min-width: 72px; }
+  .aa button[aria-pressed="true"] { background: var(--aa-accent-surface); border-color: var(--aa-primary); }
+  .aa-time { font-family: var(--aa-font-mono); font-size: 12px; color: var(--aa-muted-foreground); }
+  .aa-vol { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--aa-muted-foreground); }
+  .aa-vol input { width: 80px; height: 24px; accent-color: var(--aa-primary); }
+  .aa-sp { flex: 1; }
+  .aa-msg { margin-top: 8px; font-size: 12px; color: var(--aa-destructive); }
+  .aa-msg:empty { display: none; }
+  .aa-list { list-style: none; margin: 10px 0 0; padding: 0; max-height: 240px; overflow-y: auto; }
+  .aa-list .row { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+  .aa-list .row:hover { background: var(--aa-muted); }
+  .aa-list .row:focus-visible { outline: 2px solid var(--aa-ring); outline-offset: -2px; }
+  .aa-list .row[aria-current="true"] { background: var(--aa-accent-surface); }
+  .aa-list .row[aria-current="true"] .nm { font-weight: 600; }
+  .aa-list .row[aria-current="true"] .m { white-space: normal; }
+  .aa-list .n { flex-shrink: 0; color: var(--aa-muted-foreground); font-family: var(--aa-font-mono); width: 18px; }
+  .aa-list .b { flex-shrink: 0; width: 84px; box-sizing: border-box; text-align: center; font-size: 12px; padding: 1px 4px; border-radius: 4px; background: var(--aa-secondary); color: var(--aa-secondary-foreground); white-space: nowrap; }
+  .aa-list .b.voice { background: color-mix(in srgb, var(--aa-chart-1) 25%, transparent); }
+  .aa-list .b.music { background: color-mix(in srgb, var(--aa-chart-2) 25%, transparent); }
+  .aa-list .b.sfx { background: color-mix(in srgb, var(--aa-chart-3) 25%, transparent); }
+  .aa-list .t { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .aa-list .m { font-size: 12px; color: var(--aa-muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .aa-list .err { color: var(--aa-destructive); }
+  .aa-list .d { flex-shrink: 0; color: var(--aa-muted-foreground); font-family: var(--aa-font-mono); }
+  .aa-drop { margin-top: 10px; border: 1px dashed var(--aa-border); border-radius: 6px; padding: 10px 8px; text-align: center; font-size: 12px; color: var(--aa-muted-foreground); cursor: pointer; display: block; }
+  .aa-drop.over, .aa-drop.hint { border-color: var(--aa-primary); color: var(--aa-foreground); }
+  /* 幅はチャット欄・分割表示で変わるので、画面ではなくプレーヤー自身の幅で切り替える */
+  .aa { container-type: inline-size; }
+  @container (max-width: 480px) {
+    .aa .icon { min-width: 44px; min-height: 40px; }
+    .aa button.primary { min-height: 40px; }
+    .aa-vol input { width: 96px; height: 32px; }
+  }
+  @container (max-width: 420px) {
+    .aa-box { padding: 12px; }
+    .aa button.primary { flex: 1; }
+    .aa-sp { flex-basis: 100%; height: 0; }
+    .aa-vol { flex: 1 1 140px; }
+    .aa-vol input { flex: 1; width: auto; min-width: 0; }
+    .aa-list { max-height: 320px; }
+    /* 行は「曲名＋長さ」「種類＋メモ」の2段にして、曲名の幅を確保する */
+    .aa-list .row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "nm nm d" "b m m"; column-gap: 8px; row-gap: 3px; min-height: 48px; padding: 8px 10px; }
+    .aa-list .t { display: contents; }
+    .aa-list .n { display: none; }
+    .aa-list .nm { grid-area: nm; min-width: 0; overflow-wrap: anywhere; }
+    .aa-list .d { grid-area: d; align-self: start; }
+    .aa-list .b { grid-area: b; width: auto; align-self: center; padding: 0 6px; }
+    .aa-list .m { grid-area: m; min-width: 0; align-self: center; }
+  }
+  @container (max-width: 300px) {
+    .aa-ctrl > * { order: 2; }
+    .aa-ctrl > #prev, .aa-ctrl > #play, .aa-ctrl > #next { order: 0; }
+    .aa-time { order: 1; flex-basis: 100%; text-align: center; }
+    .aa-sp { display: none; }
+    .aa-drop { padding: 8px 6px; }
+  }
+</style>
+</head>
+<body>
+<div class="aa"><div class="aa-box">
+  <div class="aa-head"><span class="aa-title">Amu Audio</span><span class="aa-now" id="now" aria-live="polite">音声ファイルを追加してください</span></div>
+  <div class="aa-wave" id="wave" aria-label="波形。クリックした位置から再生します"></div>
+  <div class="aa-ctrl">
+    <button id="prev" class="icon" aria-label="前の曲" title="前の曲"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M3 2h2v12H3zM14 2v12L6 8z"/></svg></button>
+    <button id="play" class="primary">再生</button>
+    <button id="next" class="icon" aria-label="次の曲" title="次の曲"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M11 2h2v12h-2zM2 2v12l8-6z"/></svg></button>
+    <span class="aa-time" id="time">0:00 / 0:00</span>
+    <span class="aa-sp"></span>
+    <button id="loop" aria-pressed="false" title="今の曲をくり返す">リピート</button>
+    <select id="rate" aria-label="再生速度" title="再生速度"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+    <label class="aa-vol">音量<input id="vol" type="range" min="0" max="1" step="0.01" value="0.8"></label>
+  </div>
+  <div class="aa-msg" id="msg" role="status"></div>
+  <ul class="aa-list" id="list" aria-label="プレイリスト"></ul>
+  <label class="aa-drop" id="drop" tabindex="0" role="button">ここに音声をドロップ、またはクリックして選択（mp3 / wav / m4a / ogg / aac / flac）
+    <input id="file" type="file" accept="audio/*" multiple hidden>
+  </label>
+</div></div>
+<script type="module">
+import WaveSurfer from 'https://unpkg.com/wavesurfer.js@7.12.12/dist/wavesurfer.esm.js';
+
+const TRACKS = /*TRACKS*/[];
+
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.querySelector('.aa')).getPropertyValue(v.replace('--', '--aa-')).trim() || undefined;
+const fmt = (s) => { s = Math.max(0, s || 0); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`; };
+const KIND = { voice: 'ナレーション', music: 'BGM', sfx: '効果音' };
+
+const ws = WaveSurfer.create({
+  container: $('wave'), height: 56, barWidth: 2, barGap: 1, barRadius: 2,
+  waveColor: css('--muted-foreground') || '#888', progressColor: css('--primary') || '#3d66e6',
+  cursorColor: css('--foreground') || '#fff', normalize: true,
+});
+const tracks = [];
+let cur = -1, loop = false, wantPlay = false, resumeAt = 0;
+
+const say = (text) => { $('msg').textContent = text; };
+const settings = () => { ws.setPlaybackRate(Number($('rate').value), true); ws.setVolume(Number($('vol').value)); };
+const setPlayLabel = (playing) => { $('play').textContent = playing ? '一時停止' : '再生'; };
+
+function syncButtons() {
+  const none = tracks.length === 0;
+  $('play').disabled = none;
+  $('prev').disabled = $('next').disabled = tracks.length < 2;
+}
+
+function render() {
+  $('list').innerHTML = '';
+  tracks.forEach((t, i) => {
+    const li = document.createElement('li');
+    const row = document.createElement('button');
+    row.className = 'row';
+    if (i === cur) row.setAttribute('aria-current', 'true');
+    const label = KIND[t.kind];
+    row.innerHTML = `<span class="n">${i + 1}</span>${label ? `<span class="b ${t.kind}">${label}</span>` : ''}<span class="t"><span class="nm"></span><span class="m"></span></span><span class="d"></span>`;
+    row.querySelector('.nm').textContent = t.name;
+    const m = row.querySelector('.m');
+    if (t.err) { m.textContent = '再生できません（ファイルが壊れているか、形式に対応していません）'; m.classList.add('err'); }
+    else if (t.meta) { m.textContent = t.meta; m.title = t.meta; }
+    else m.remove();
+    row.querySelector('.d').textContent = t.dur ? fmt(t.dur) : '';
+    row.setAttribute('aria-label', `${i + 1}. ${label ? label + ' ' : ''}${t.name}${t.dur ? ' ' + fmt(t.dur) : ''}`);
+    row.onclick = () => load(i, true);
+    li.appendChild(row);
+    $('list').appendChild(li);
+  });
+  syncButtons();
+}
+
+function probeDuration(t) {
+  if (t.dur) return;
+  const a = new Audio();
+  a.preload = 'metadata';
+  a.onloadedmetadata = () => { if (isFinite(a.duration)) { t.dur = a.duration; render(); } };
+  a.onerror = () => { t.err = true; render(); };
+  a.src = t.url;
+}
+
+// 同じ種類のテイク同士で切り替えるときは再生位置を引き継ぐ（聞き比べ用）
+function load(i, autoplay, keepPos = true) {
+  const t = tracks[i];
+  if (!t) return;
+  const prev = tracks[cur];
+  resumeAt = keepPos && prev && prev !== t && (prev.kind || '') === (t.kind || '') ? ws.getCurrentTime() : 0;
+  cur = i; wantPlay = autoplay; say('');
+  $('now').textContent = t.name;
+  setPlayLabel(false);
+  $('time').textContent = `0:00 / ${fmt(t.dur)}`;
+  render();
+  ws.load(t.url, t.peaks ? [t.peaks] : undefined, t.peaks ? t.dur : undefined).catch(() => {});
+}
+
+function play() {
+  ws.play().catch(() => { setPlayLabel(false); });
+}
+
+ws.on('ready', () => {
+  const t = tracks[cur];
+  if (!t) return;
+  t.err = false; t.dur = ws.getDuration();
+  settings();
+  render();
+  $('time').textContent = `0:00 / ${fmt(t.dur)}`;
+  if (resumeAt > 0 && resumeAt < t.dur - 0.3) ws.setTime(resumeAt);
+  if (wantPlay) play();
+});
+ws.on('error', () => {
+  const t = tracks[cur];
+  if (t) { t.err = true; render(); }
+  setPlayLabel(false);
+  say(`「${t ? t.name : ''}」を再生できませんでした。`);
+});
+ws.on('play', () => setPlayLabel(true));
+ws.on('pause', () => setPlayLabel(false));
+ws.on('timeupdate', (s) => $('time').textContent = `${fmt(s)} / ${fmt(ws.getDuration())}`);
+ws.on('finish', () => {
+  if (loop) { ws.setTime(0); play(); }
+  else if (cur < tracks.length - 1) load(cur + 1, true, false);
+  else setPlayLabel(false);
+});
+
+function add(list) {
+  const first = tracks.length;
+  for (const t of list) { tracks.push(t); probeDuration(t); }
+  render();
+  if (cur < 0 && tracks.length > first) load(first, false);
+}
+
+$('play').onclick = () => {
+  if (!tracks.length) { $('drop').classList.add('hint'); $('drop').focus(); return; }
+  if (ws.isPlaying()) ws.pause(); else play();
+};
+$('prev').onclick = () => tracks.length && load((cur - 1 + tracks.length) % tracks.length, true);
+$('next').onclick = () => tracks.length && load((cur + 1) % tracks.length, true);
+$('loop').onclick = () => { loop = !loop; $('loop').setAttribute('aria-pressed', String(loop)); };
+$('rate').onchange = settings;
+$('vol').oninput = settings;
+settings();
+
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space') return;
+  const tag = e.target.tagName;
+  if (tag === 'BUTTON' || tag === 'SELECT' || e.target.getAttribute('role') === 'button') return;
+  if (tag === 'INPUT' && e.target.type !== 'range') return;
+  e.preventDefault();
+  $('play').click();
+});
+
+const isAudio = (f) => f.type.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|aac|flac)$/i.test(f.name);
+function fromFiles(files) {
+  const all = [...files];
+  const ok = all.filter(isAudio), ng = all.filter((f) => !isAudio(f));
+  say(ng.length ? `音声ではないため追加しませんでした: ${ng.map((f) => f.name).join('、')}` : '');
+  $('drop').classList.remove('hint');
+  add(ok.map((f) => ({ name: f.name, url: URL.createObjectURL(f) })));
+}
+$('file').onchange = (e) => { fromFiles(e.target.files); e.target.value = ''; };
+const drop = $('drop');
+drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
+['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', (e) => fromFiles(e.dataTransfer.files));
+
+add(TRACKS);
+syncButtons();
+</script>
+</body>
+</html>
