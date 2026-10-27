@@ -798,7 +798,9 @@ function shouldRedirectInputToComposer(event: Event): boolean {
 }
 
 function shouldTypeToFocusComposer(event: KeyboardEvent): boolean {
-  if (event.isComposing) return false;
+  // keyCode 229 marks a key the IME consumed; the first one arrives with
+  // isComposing still false, and redirecting it would type it twice.
+  if (event.isComposing || event.keyCode === 229) return false;
   if (event.metaKey || event.ctrlKey || event.altKey) return false;
   if (event.key.length !== 1) return false;
   if (!shouldRedirectInputToComposer(event)) return false;

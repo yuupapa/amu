@@ -1520,9 +1520,29 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
     return next;
   }, [clampEditorCursor, editor, literalText]);
 
+  // Rewriting the doc or caret mid-IME detaches the marked text, so the
+  // commit lands as a second copy. Wait for the composition to end, then
+  // let the controlled update below run again.
+  const [compositionEndCount, setCompositionEndCount] = useState(0);
+  useEffect(() => {
+    const dom = editor?.view.dom;
+    if (!dom) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onCompositionEnd = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setCompositionEndCount((count) => count + 1), 50);
+    };
+    dom.addEventListener("compositionend", onCompositionEnd);
+    return () => {
+      clearTimeout(timer);
+      dom.removeEventListener("compositionend", onCompositionEnd);
+    };
+  }, [editor]);
+
   // Controlled value/cursor from the store (history recall, chip insertion…).
   useLayoutEffect(() => {
     if (!editor) return;
+    if (editor.view.composing) return;
     const initialSelection = !hasAppliedControlledSelectionRef.current;
     hasAppliedControlledSelectionRef.current = true;
     const normalizedCursor = clampEditorCursor(value, cursor);
@@ -1590,6 +1610,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
     });
   }, [
     clampEditorCursor,
+    compositionEndCount,
     cursor,
     editor,
     expandEditorCursor,
