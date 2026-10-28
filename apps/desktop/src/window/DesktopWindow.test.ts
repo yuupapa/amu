@@ -15,7 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as Electron from "electron";
 import * as NodeEvents from "node:events";
-import { vi } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 
 vi.mock("electron", async (importOriginal) => ({
   ...(await importOriginal<typeof import("electron")>()),
@@ -694,6 +694,45 @@ describe("DesktopWindow", () => {
           assert.equal(yield* Ref.get(createCount), 3);
         }).pipe(Effect.provide(layer));
       }),
+  );
+
+  it.effect("blocks duplicate native physical keydowns before renderer and composition input", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = layerTest({ window: fakeWindow.window, createCount, mainWindow });
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        const beforeInput = fakeWindow.webContentsListeners.get("before-input-event")!;
+        const preventDefault = vi.fn();
+        const event = { preventDefault };
+        const input = {
+          type: "keyDown",
+          code: "KeyA",
+          key: "Process",
+          isComposing: true,
+          isAutoRepeat: false,
+          meta: false,
+          control: false,
+          alt: false,
+          shift: false,
+        };
+        beforeInput(event, input);
+        expect(preventDefault).not.toHaveBeenCalled();
+        beforeInput(event, input);
+        expect(preventDefault).toHaveBeenCalledTimes(1);
+        beforeInput(event, { ...input, isAutoRepeat: true });
+        expect(preventDefault).toHaveBeenCalledTimes(1);
+        beforeInput(event, { ...input, type: "keyUp" });
+        beforeInput(event, input);
+        expect(preventDefault).toHaveBeenCalledTimes(1);
+        fakeWindow.windowListeners.get("blur")!();
+        beforeInput(event, input);
+        expect(preventDefault).toHaveBeenCalledTimes(1);
+      }).pipe(Effect.provide(layer));
+    }),
   );
 
   it.effect("blocks only repeated Cmd+W input before it reaches the native window menu", () =>

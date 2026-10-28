@@ -33,6 +33,7 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import { makeQuitShortcutHandler } from "./QuitHold.ts";
+import { makeNativeDuplicateKeyGuard } from "./NativeDuplicateKeyGuard.ts";
 
 const TITLEBAR_HEIGHT = 40;
 // Matches --workspace-topbar-height in apps/web/src/index.css. Native macOS
@@ -678,7 +679,16 @@ export const make = Effect.gen(function* () {
         void runPromise(electronApp.quit);
       },
     });
+    const duplicateKeyGuard = makeNativeDuplicateKeyGuard();
+    window.on("blur", duplicateKeyGuard.reset);
+    window.webContents.on("did-start-navigation", duplicateKeyGuard.reset);
     window.webContents.on("before-input-event", (event, input) => {
+      // The observed native down/down/up pairs reach the renderer twice.
+      // Filter physical keys here, including the IME's composing Process keys.
+      if (environment.platform === "darwin" && duplicateKeyGuard.shouldSuppress(input)) {
+        event.preventDefault();
+        return;
+      }
       quitShortcutHandler(event, input);
       if (input.type !== "keyDown" || !input.isAutoRepeat) return;
       const modifier = environment.platform === "darwin" ? input.meta : input.control;
