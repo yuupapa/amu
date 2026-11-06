@@ -1,3 +1,4 @@
+// @effect-diagnostics globalDate:off globalConsole:off - serialized Node preload runs outside Effect.
 /**
  * The pinned CLI has no admission hook. Its Studio adapter owns the real render
  * promise, including cancellation cleanup. Transform only that adapter in
@@ -73,15 +74,82 @@ export function protectStudioAdapter(source: string): string {
       );
   }
   return source
+    .replace(BEFORE_RUN, "      let renderJob;\n      const run = (async () => {")
     .replace(
       BEFORE_TRY,
       '        try {\n          await globalThis[Symbol.for("amu.render.acquire")](opts.project.dir, abortController, (reason) => { state.error = reason; abortController.abort(); });\n          const { createRenderJob, executeRenderJob } = await loadStudioProducer();',
     )
-    .replace(BEFORE_JOB, BEFORE_JOB + "\n            workers: 1,")
+    .replace(
+      BEFORE_JOB,
+      BEFORE_JOB + '\n            workers: 1,\n            useGpu: opts.format === "mp4",',
+    )
     .replace(
       BEFORE_END,
-      '      })().finally(() => globalThis[Symbol.for("amu.render.release")](abortController));\n      inFlightRenders.set(abortController, run);',
+      '      })().finally(async () => { try { await globalThis[Symbol.for("amu.render.report")](opts, state, renderJob); } finally { await globalThis[Symbol.for("amu.render.release")](abortController); } });\n      inFlightRenders.set(abortController, run);',
     );
+}
+
+/** Diagnostic failures must never turn a completed video into a failed export. */
+export async function recordRenderReport(
+  opts: { outputPath?: string; format?: string },
+  state: { status: string; error?: string },
+  job: { config?: { useGpu?: boolean }; perfSummary?: unknown } | undefined,
+): Promise<void> {
+  if (!opts.outputPath || !job) return;
+  const fs = process.getBuiltinModule("node:fs/promises");
+  const childProcess = process.getBuiltinModule("node:child_process");
+  let media: unknown = null;
+  let probeError: string | undefined;
+  if (state.status === "complete") {
+    try {
+      const output = await new Promise<string>((resolve, reject) =>
+        childProcess.execFile(
+          "ffprobe",
+          [
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,width,height,r_frame_rate:stream_tags=encoder",
+            "-of",
+            "json",
+            opts.outputPath!,
+          ],
+          { timeout: 10000, maxBuffer: 1024 * 1024 },
+          (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        ),
+      );
+      media = JSON.parse(output);
+    } catch (error) {
+      probeError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  try {
+    await fs.writeFile(
+      opts.outputPath + ".amu-export.json",
+      JSON.stringify(
+        {
+          recordedAt: new Date().toISOString(),
+          profile: "amu-mac-hardware-1worker-20261023",
+          status: state.status,
+          error: state.error,
+          hardwareEncodingRequested: job.config?.useGpu === true,
+          workers: 1,
+          performance: job.perfSummary ?? null,
+          media,
+          probeError,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+  } catch (error) {
+    console.warn(
+      "Amu could not save export diagnostics:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }
 
 const runtimeSource = String.raw`
@@ -89,6 +157,7 @@ const { registerHooks } = process.getBuiltinModule("node:module");
 const { spawn } = process.getBuiltinModule("node:child_process");
 const { fileURLToPath } = process.getBuiltinModule("node:url");
 const protect = @@PROTECT@@;
+globalThis[Symbol.for("amu.render.report")] = @@REPORT@@;
 const leases = new Map();
 let installed = false;
 const http = process.getBuiltinModule("node:http");
@@ -163,6 +232,7 @@ registerHooks({
 export const renderSafetyNodeOptions = (inherited: string | undefined): string => {
   const source = runtimeSource
     .replace("@@PROTECT@@", protectStudioAdapter.toString())
+    .replace("@@REPORT@@", recordRenderReport.toString())
     .replace("@@PROGRAM@@", JSON.stringify(renderLeaseProgram));
   const own = "--import=data:text/javascript;base64," + Buffer.from(source).toString("base64");
   return inherited?.trim() ? inherited.trim() + " " + own : own;

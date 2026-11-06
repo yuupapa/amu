@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - execute the serialized preview adapter without a browser.
 import * as NodeVM from "node:vm";
 import { describe, expect, it } from "@effect/vitest";
-import { protectStudioAdapter, renderSafetyNodeOptions } from "./previewRenderSafety.ts";
+import {
+  protectStudioAdapter,
+  recordRenderReport,
+  renderSafetyNodeOptions,
+} from "./previewRenderSafety.ts";
 import * as NodeFS from "node:fs";
 
 const fixture = NodeFS.readFileSync(
@@ -18,9 +22,13 @@ const deferred = () => {
 
 function setup(admit: () => Promise<void>) {
   let released = 0;
+  const reports: unknown[][] = [];
   const sandbox = { Symbol, AbortController };
   Object.assign(sandbox, {
     [Symbol.for("amu.render.acquire")]: admit,
+    [Symbol.for("amu.render.report")]: (...args: unknown[]) => {
+      reports.push(args);
+    },
     [Symbol.for("amu.render.release")]: () => {
       released++;
     },
@@ -29,7 +37,7 @@ function setup(admit: () => Promise<void>) {
     protectStudioAdapter(fixture).replace("export function", "function") + "\nstartRender",
     sandbox,
   );
-  return { fn, released: () => released };
+  return { fn, reports, released: () => released };
 }
 
 describe("native render safety adapter", () => {
@@ -66,6 +74,31 @@ describe("native render safety adapter", () => {
     expect(test.released()).toBe(1);
     expect(result.state.status).toBe("cancelled");
   });
+
+  it.each(["mp4", "webm", "mov"])(
+    "requests hardware compression only for MP4: %s",
+    async (format) => {
+      const test = setup(async () => {});
+      let options: { workers: number; useGpu: boolean } | undefined;
+      const job = { perfSummary: { stages: { captureMs: 1200, encodeMs: 300 } } };
+      const result = test.fn(
+        { project: { dir: "/project" }, format, outputPath: "/project/renders/out." + format },
+        async () => ({
+          createRenderJob: (input: { workers: number; useGpu: boolean }) => {
+            options = input;
+            return job;
+          },
+          executeRenderJob: async () => {},
+        }),
+        new Map(),
+      );
+      await result.run;
+      expect(options?.workers).toBe(1);
+      expect(options?.useGpu).toBe(format === "mp4");
+      expect(test.reports[0]?.[2]).toBe(job);
+      expect(test.released()).toBe(1);
+    },
+  );
 
   it("does not create a renderer if admission refuses", async () => {
     const test = setup(async () => {
@@ -106,6 +139,48 @@ describe("native render safety adapter", () => {
   it("refuses an incompatible or already modified adapter", () => {
     expect(() => protectStudioAdapter("new version")).toThrow("incompatible");
     expect(() => protectStudioAdapter(protectStudioAdapter(fixture))).toThrow("incompatible");
+  });
+
+  it("saves failure diagnostics without probing an unfinished video", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "amu-render-report-"));
+    try {
+      const outputPath = path.join(root, "out.mp4");
+      await recordRenderReport(
+        { outputPath, format: "mp4" },
+        { status: "failed", error: "test render error" },
+        { config: { useGpu: true }, perfSummary: { stages: { captureMs: 42 } } },
+      );
+      const report = JSON.parse(await fs.readFile(outputPath + ".amu-export.json", "utf8"));
+      expect(report.status).toBe("failed");
+      expect(report.hardwareEncodingRequested).toBe(true);
+      expect(report.performance.stages.captureMs).toBe(42);
+      expect(report.media).toBeNull();
+      expect(report.probeError).toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a completed export successful when media probing fails", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "amu-render-probe-"));
+    try {
+      const outputPath = path.join(root, "missing.mp4");
+      const state = { status: "complete" };
+      await recordRenderReport({ outputPath }, state, { config: { useGpu: true } });
+      const report = JSON.parse(await fs.readFile(outputPath + ".amu-export.json", "utf8"));
+      expect(state.status).toBe("complete");
+      expect(report.status).toBe("complete");
+      expect(report.media).toBeNull();
+      expect(report.probeError).toBeTruthy();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("serializes a self-contained preload and preserves existing Node options", () => {
