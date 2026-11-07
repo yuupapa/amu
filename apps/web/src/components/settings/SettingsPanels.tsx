@@ -1,3 +1,4 @@
+import { AmuHelp } from "./AmuHelp";
 import { SettingsGroup } from "./SettingsGroup";
 import { installUpdateReturningHere } from "../../amu/restartReturn";
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
@@ -2270,6 +2271,7 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <AmuHelp />
       <ProjectDefaultsSettings category="general" />
       <SettingsSection id="organization" title="Organization">
         <SettingsRow

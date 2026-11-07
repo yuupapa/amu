@@ -674,6 +674,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "amu-help",
+    title: "Amuの使い方・ヘルプ",
+    to: "/settings/general",
+    targetId: "amu-help",
+    searchTerms: ["help ヘルプ 使い方 案内 初めて creator audio gallery 動画 音声 モデル"],
+  },
+  {
     id: "amu-creator",
     title: "Amu Creator（試験版）",
     to: "/settings/integrations",
