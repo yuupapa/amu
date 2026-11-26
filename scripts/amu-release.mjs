@@ -21,6 +21,12 @@ const ARCH = "arm64";
 const root = NodePath.resolve(import.meta.dirname, "..");
 const args = process.argv.slice(2);
 const publish = args.includes("--publish");
+const fullInstallOnly = args.includes("--full-install-only");
+if (publish && !fullInstallOnly) {
+  throw new Error(
+    "Mac partial updates invalidate the app signature. Use --full-install-only until the installer preserves a valid signature.",
+  );
+}
 const notesIndex = args.indexOf("--notes-file");
 const notesFile = notesIndex >= 0 ? args[notesIndex + 1] : undefined;
 if (!notesFile) throw new Error("Pass --notes-file with the release notes (Markdown list).");
@@ -144,6 +150,18 @@ const electronVersion = plist(
   ":CFBundleVersion",
 );
 
+// Amu uses an ad-hoc signature. Finish signing after branding and packaging,
+// before making either archive; otherwise Info.plist changes invalidate it.
+run("/usr/bin/codesign", [
+  "--force",
+  "--deep",
+  "--sign",
+  "-",
+  "--preserve-metadata=entitlements,flags,runtime",
+  app,
+]);
+run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app]);
+
 // The update zip: the app code and the parts that ship with it (the list in
 // apps/desktop/src/updates/AmuUpdateFeed.ts). The installed bundle keeps the
 // rest, amu-local.json included.
@@ -200,10 +218,26 @@ run("gh", [
   `Amu ${version}`,
   "--notes-file",
   notesFile,
-  NodePath.join(out, manifestName),
-  payloadPath,
+  ...(fullInstallOnly ? [] : [NodePath.join(out, manifestName), payloadPath]),
   NodePath.join(out, appZipName),
 ]);
+if (fullInstallOnly) {
+  NodeFS.mkdirSync(NodePath.join(out, "previous-feed"), { recursive: true });
+  const previousManifest = NodePath.join(out, "previous-feed", manifestName);
+  run("gh", [
+    "release",
+    "download",
+    "--repo",
+    REPOSITORY,
+    "--pattern",
+    manifestName,
+    "--output",
+    previousManifest,
+  ]);
+  const previous = JSON.parse(NodeFS.readFileSync(previousManifest, "utf8"));
+  if (previous.version === version) throw new Error("Expected the previous Mac update feed.");
+  run("gh", ["release", "upload", tag, "--repo", REPOSITORY, previousManifest]);
+}
 run("gh", [
   "workflow",
   "run",

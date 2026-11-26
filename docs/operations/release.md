@@ -461,6 +461,8 @@ blockmaps, with a 60 MB maximum for a representative sidecar-to-sidecar update.
 
 ## Amu releases (yuupapa/amu)
 
+Mac releases currently require `--full-install-only`: replace the app with the verified full archive. The published Mac feed stays on the previous version so older clients cannot perform a signature-breaking partial update. Windows updates continue normally. Do not re-enable partial updates until both update and rollback preserve valid bundle signatures.
+
 Amu は上の Release ワークフローを使いません。Mac で `node scripts/amu-release.mjs --notes-file <notes.md> --publish` を実行します。
 
 1. スクリプトが Mac 版をビルドし、更新用の zip とマニフェストを付けた下書きのリリースを作ります。
