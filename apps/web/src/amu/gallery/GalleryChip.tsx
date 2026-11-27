@@ -13,7 +13,6 @@ import { Group } from "~/components/ui/group";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { type ThreadPreviewState, useThreadPreviewState } from "~/previewStateStore";
-import { useRightPanelStore } from "~/rightPanelStore";
 
 import { runCreatorWindowAction } from "../creator/creatorWindow";
 import { useGalleryEnabled } from "./useGalleryOpener";
@@ -40,12 +39,7 @@ export function GalleryChip({ threadRef }: { threadRef: ScopedThreadRef }) {
   const runtimeTabId = previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId);
   const poppedOut = previewState.desktopByTabId[tabId]?.poppedOut ?? false;
 
-  const showInPanel = () => useRightPanelStore.getState().openBrowser(threadRef, tabId);
-  // Open (or bring forward) the window; a tab that cannot pop out yet shows in the panel.
-  const openWindow = () =>
-    void runCreatorWindowAction("pop-out", runtimeTabId, APP_NAME).then((opened) => {
-      if (!opened) showInPanel();
-    });
+  const openWindow = () => void runCreatorWindowAction("pop-out", runtimeTabId, APP_NAME);
   const label = poppedOut ? "ギャラリーウィンドウを表示" : "ギャラリーを別ウィンドウで開く";
 
   return (
@@ -81,21 +75,7 @@ export function GalleryChip({ threadRef }: { threadRef: ScopedThreadRef }) {
           <ChevronDownIcon />
         </MenuTrigger>
         <MenuPopup align="end" sideOffset={6}>
-          {poppedOut ? (
-            <>
-              <MenuItem onClick={openWindow}>ギャラリーウィンドウを表示</MenuItem>
-              <MenuItem
-                onClick={() => void runCreatorWindowAction("return", runtimeTabId, APP_NAME)}
-              >
-                パネルに戻す
-              </MenuItem>
-            </>
-          ) : (
-            <>
-              <MenuItem onClick={openWindow}>別ウィンドウで開く</MenuItem>
-              <MenuItem onClick={showInPanel}>パネルで表示</MenuItem>
-            </>
-          )}
+          <MenuItem onClick={openWindow}>{label}</MenuItem>
         </MenuPopup>
       </Menu>
     </Group>

@@ -93,11 +93,10 @@ function CreatorSessionRunner(props: {
  *   view's runner keeps the confirm sheet), so comments made in the window
  *   still reach the server after a thread switch.
  * - Popping out closes the thread's right panel, leaving the chat the whole
- *   width; coming back by any path (the button, the window's ×, a crash, a
- *   failed load) reopens it on this tab. A panel the user reopens meanwhile is
- *   left alone.
+ *   width. Closing the window leaves the panel closed. A panel the user
+ *   reopens meanwhile is left alone.
  * - A tab an agent just opened moves into its window once its session is
- *   live; if that fails it stays in the panel, after a toast.
+ *   live; if that fails, a toast reports the error without opening a panel.
  */
 export function CreatorTabWatcher(props: {
   readonly threadRef: ScopedThreadRef;
@@ -125,13 +124,10 @@ export function CreatorTabWatcher(props: {
   const live = session.view.generation !== null;
   useEffect(() => {
     if (!autoPopout || !live || !takeCreatorAutoPopout(runtimeTabId)) return;
-    void runCreatorWindowAction("pop-out", runtimeTabId).then((opened) => {
-      if (!opened) useRightPanelStore.getState().openBrowser(threadRef, serverTabId);
-    });
-  }, [autoPopout, live, runtimeTabId, serverTabId, threadRef]);
+    void runCreatorWindowAction("pop-out", runtimeTabId);
+  }, [autoPopout, live, runtimeTabId]);
 
-  // Acts on transitions. The first known state only recovers a panel a pop-out
-  // closed before a crash or restart; mounting on a popped-out tab changes nothing.
+  // Acts on transitions and clears old persisted marks without reopening panels.
   const shownPoppedOut = useRef<boolean | null>(null);
   useEffect(() => {
     if (!desktopKnown || shownPoppedOut.current === poppedOut) return;
@@ -154,9 +150,6 @@ export function CreatorTabWatcher(props: {
     if (step === "close") {
       creatorPanelMarks.set(threadKey);
       panels.close(threadRef);
-    } else if (step === "reopen") {
-      creatorPanelMarks.clear(threadKey);
-      panels.openBrowser(threadRef, serverTabId);
     } else if (step === "forget") {
       creatorPanelMarks.clear(threadKey);
     }

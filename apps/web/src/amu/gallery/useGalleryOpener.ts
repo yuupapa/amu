@@ -2,14 +2,16 @@
  * Amu Gallery from the web app: whether it is on, the 「Amu ギャラリーを開く」
  * entry of the right panel's new-tab menu, and the Japanese text of its errors.
  * The server starts the media gallery when needed and opens it as this
- * thread's Gallery tab; the panel then shows that tab.
+ * thread's Gallery tab; it then opens in a separate window.
  */
 import type { EnvironmentId, ScopedThreadRef, ServerSettings } from "@t3tools/contracts";
 import { useMemo } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
 import { toastManager } from "~/components/ui/toast";
-import { useRightPanelStore } from "~/rightPanelStore";
+import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
+import { readThreadPreviewState } from "~/previewStateStore";
+import { requestCreatorAutoPopout } from "../creator/creatorWindow";
 import { creatorEnvironment } from "~/state/creator";
 import { useServerConfigs } from "~/state/entities";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -65,7 +67,13 @@ export function useGalleryOpener(threadRef: ScopedThreadRef | null): (() => void
           }),
         );
         if (result.ok) {
-          useRightPanelStore.getState().openBrowser(threadRef, result.value.tabId);
+          requestCreatorAutoPopout(
+            previewRuntimeTabId(
+              threadRef,
+              readThreadPreviewState(threadRef).serverEpoch,
+              result.value.tabId,
+            ),
+          );
           return;
         }
         toastManager.add({

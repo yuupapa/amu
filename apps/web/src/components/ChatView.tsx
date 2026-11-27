@@ -2434,6 +2434,7 @@ export default function ChatView(props: ChatViewProps) {
   const previewMiniPlayerVisible = shouldRenderPreviewMiniPlayer(
     activePreviewMiniPlayer?.source ?? null,
     renderedRightPanelSurface,
+    activePreviewState.sessions,
   );
   const canMaximizeRightPanel = rightPanelOpen && !shouldUsePlanSidebarSheet;
   const rightPanelMaximized = canMaximizeRightPanel && rightPanelState.maximized === true;
@@ -2456,13 +2457,26 @@ export default function ChatView(props: ChatViewProps) {
         .filter((session) => session.runtime === "server" && session.reveal === false)
         .map((session) => session.tabId),
     );
-    useRightPanelStore
-      .getState()
-      .reconcileBrowserSurfaces(
-        activeThreadRef,
-        Object.keys(activePreviewState.sessions),
-        hiddenTabIds,
-      );
+    const windowTabIds = new Set(
+      Object.values(activePreviewState.sessions)
+        .filter((session) => session.creator !== undefined || session.gallery !== undefined)
+        .map((session) => session.tabId),
+    );
+    const panels = useRightPanelStore.getState();
+    const panel = selectThreadRightPanelState(panels.byThreadKey, activeThreadRef);
+    const activeSurface = panel.surfaces.find((surface) => surface.id === panel.activeSurfaceId);
+    if (
+      activeSurface?.kind === "preview" &&
+      activeSurface.resourceId &&
+      windowTabIds.has(activeSurface.resourceId)
+    ) {
+      panels.close(activeThreadRef);
+    }
+    panels.reconcileBrowserSurfaces(
+      activeThreadRef,
+      Object.keys(activePreviewState.sessions).filter((tabId) => !windowTabIds.has(tabId)),
+      hiddenTabIds,
+    );
   }, [activePreviewState.sessions, activeThreadRef, previewSessionsReady]);
 
   useEffect(() => {
@@ -2471,7 +2485,8 @@ export default function ChatView(props: ChatViewProps) {
       activeThreadRef &&
       previewSessionsReady &&
       source?.kind === "browser" &&
-      !activePreviewState.sessions[source.tabId]
+      (!activePreviewState.sessions[source.tabId] ||
+        !shouldRenderPreviewMiniPlayer(source, null, activePreviewState.sessions))
     ) {
       usePreviewMiniPlayerStore.getState().close(activeThreadRef);
     }
@@ -5911,8 +5926,16 @@ export default function ChatView(props: ChatViewProps) {
   ]);
   const closePreviewPanel = useCallback(() => {
     if (activeThreadRef) {
-      // Closing the panel on a live browser or device floats it instead of dropping it.
-      if (activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId) {
+      // Creator and Gallery never become floating previews when a panel closes.
+      if (
+        activeRightPanelSurface?.kind === "preview" &&
+        activeRightPanelSurface.resourceId &&
+        shouldRenderPreviewMiniPlayer(
+          browserMiniPlayerSource(activeRightPanelSurface.resourceId),
+          null,
+          activePreviewState.sessions,
+        )
+      ) {
         usePreviewMiniPlayerStore
           .getState()
           .open(activeThreadRef, browserMiniPlayerSource(activeRightPanelSurface.resourceId));
@@ -5924,7 +5947,7 @@ export default function ChatView(props: ChatViewProps) {
       useRightPanelStore.getState().setMaximized(activeThreadRef, false);
       useRightPanelStore.getState().close(activeThreadRef);
     }
-  }, [activeRightPanelSurface, activeThreadRef]);
+  }, [activePreviewState.sessions, activeRightPanelSurface, activeThreadRef]);
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !browserAvailable) return;
     if (previewPanelOpen) {

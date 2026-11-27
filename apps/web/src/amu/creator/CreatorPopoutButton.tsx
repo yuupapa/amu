@@ -1,4 +1,4 @@
-import { AppWindow, PanelRightIcon } from "lucide-react";
+import { AppWindow } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -6,7 +6,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { runCreatorWindowAction } from "./creatorWindow";
 
 /**
- * Toolbar toggle for a Creator tab: its own window, or back into the panel.
+ * Opens or focuses the separate Creator window.
  * Labelled, unlike the icon-only expand button beside it, so the two read as
  * different actions. The desktop main adopts the window as the tab's guest, so
  * review comments made there still reach the thread.
@@ -25,10 +25,10 @@ export function CreatorPopoutButton({
   disabledReason?: string | null;
 }) {
   const disabled = disabledReason !== null;
-  const label = poppedOut ? "パネルに戻す" : "別ウィンドウ";
+  const label = poppedOut ? "ウィンドウを表示" : "別ウィンドウ";
   const tooltip =
     disabledReason ??
-    (poppedOut ? `${appName}をこのパネルに戻します` : `${appName}を別ウィンドウで大きく開きます`);
+    (poppedOut ? `${appName}ウィンドウを表示します` : `${appName}を別ウィンドウで大きく開きます`);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -38,7 +38,7 @@ export function CreatorPopoutButton({
             size="xs"
             onClick={() => {
               if (disabled) return;
-              void runCreatorWindowAction(poppedOut ? "return" : "pop-out", runtimeTabId, appName);
+              void runCreatorWindowAction("pop-out", runtimeTabId, appName);
             }}
             // aria-disabled rather than disabled, so the tooltip can still say why.
             aria-disabled={disabled ? "true" : undefined}
@@ -46,7 +46,7 @@ export function CreatorPopoutButton({
           />
         }
       >
-        {poppedOut ? <PanelRightIcon /> : <AppWindow />}
+        <AppWindow />
         {label}
       </TooltipTrigger>
       <TooltipPopup>{tooltip}</TooltipPopup>
@@ -66,7 +66,6 @@ export function CreatorPoppedOutNotice({
     <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
       <div className="flex flex-col gap-1">
         <p className="text-sm text-muted-foreground">{`${appName}は別ウィンドウで開いています`}</p>
-        <p className="text-xs text-muted-foreground">ウィンドウを閉じてもパネルに戻ります</p>
       </div>
       <div className="flex items-center gap-2">
         <Button
@@ -75,12 +74,6 @@ export function CreatorPoppedOutNotice({
           onClick={() => void runCreatorWindowAction("pop-out", runtimeTabId, appName)}
         >
           {`${appName}ウィンドウを表示`}
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => void runCreatorWindowAction("return", runtimeTabId, appName)}
-        >
-          パネルに戻す
         </Button>
       </div>
     </div>

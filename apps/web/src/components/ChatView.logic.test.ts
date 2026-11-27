@@ -8,6 +8,7 @@ import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ProviderDriverKind,
   type ServerProvider,
+  type PreviewSessionSnapshot,
 } from "@t3tools/contracts";
 import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import type { RightPanelSurface } from "../rightPanelStore";
@@ -883,6 +884,21 @@ describe("agent browser close confirmation", () => {
 });
 
 describe("floating browser preview", () => {
+  it("suppresses Creator and Gallery mini players, including saved ones", () => {
+    const creator = { creator: {} as NonNullable<PreviewSessionSnapshot["creator"]> };
+    const gallery = { gallery: { label: "Gallery" } };
+    for (const session of [creator, gallery]) {
+      expect(
+        shouldRenderPreviewMiniPlayer({ kind: "browser", tabId: "amu" }, null, { amu: session }),
+      ).toBe(false);
+      expect(
+        shouldRenderPreviewMiniPlayer({ kind: "browser", tabId: "ordinary" }, null, {
+          amu: session,
+        }),
+      ).toBe(true);
+    }
+  });
+
   it("only hides the duplicate while the same browser is rendered in the panel", () => {
     expect(shouldRenderPreviewMiniPlayer(null, null)).toBe(false);
     expect(

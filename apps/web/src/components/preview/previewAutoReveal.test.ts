@@ -79,12 +79,11 @@ describe("previewRevealActions", () => {
     ]);
   });
 
-  it("opens a Creator tab an agent opened in the panel, then in its own window", () => {
+  it("opens a Creator tab only in its own window", () => {
     // Creator tabs are desktop tabs, which the reveal pass used to skip; they
     // never float, whatever auto-show says.
     for (const autoShow of [true, false]) {
       expect(pass([], [creatorTab("creator")], { autoShow })).toEqual([
-        { kind: "panel", tabId: "creator" },
         { kind: "creator-window", tabId: "creator" },
       ]);
     }
@@ -94,7 +93,6 @@ describe("previewRevealActions", () => {
     const galleryTab = session("gallery", { reveal: true, gallery: { label: "素材ギャラリー" } });
     for (const autoShow of [true, false]) {
       expect(pass([], [galleryTab], { autoShow })).toEqual([
-        { kind: "panel", tabId: "gallery" },
         { kind: "creator-window", tabId: "gallery" },
       ]);
     }

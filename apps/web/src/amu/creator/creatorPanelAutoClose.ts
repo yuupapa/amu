@@ -1,12 +1,4 @@
-/**
- * The right panel a Creator pop-out closed, per thread. Popping out closes the
- * thread's panel once and marks the thread; the mark is what lets the last
- * Creator to come back reopen it. A panel the user opens again while marked is
- * theirs: the mark is dropped and nothing is closed or reopened for it.
- *
- * Marks persist, so a crash or restart with a window out (nothing is popped out
- * after it) still gets its panel back when the thread's Creator tab shows up.
- */
+/** Tracks panels closed for an Amu window without reopening them when it closes. */
 const STORAGE_KEY = "amu:creator-panel-auto-closed";
 
 let memory: Set<string> | null = null;
@@ -55,7 +47,7 @@ export const creatorPanelMarks = {
   },
 };
 
-export type CreatorPanelStep = "close" | "reopen" | "forget" | null;
+export type CreatorPanelStep = "close" | "forget" | null;
 
 /** A Creator tab of the thread just moved into its own window. */
 export function creatorPoppedOutStep(input: {
@@ -67,17 +59,11 @@ export function creatorPoppedOutStep(input: {
   return input.marked ? "forget" : "close";
 }
 
-/**
- * A Creator tab of the thread is back in the panel, or showed up not popped out
- * (after a restart). Reopens only a panel still closed by a pop-out, and only
- * once no other Creator of the thread is out.
- */
+/** Closing a window (including after restart) only clears its old panel mark. */
 export function creatorReturnedStep(input: {
   readonly panelOpen: boolean;
   readonly marked: boolean;
   readonly otherPoppedOut: boolean;
 }): CreatorPanelStep {
-  if (!input.marked) return null;
-  if (input.panelOpen) return "forget";
-  return input.otherPoppedOut ? null : "reopen";
+  return input.marked && !input.otherPoppedOut ? "forget" : null;
 }

@@ -43,6 +43,7 @@ vi.mock("./useCreatorSession", () => ({
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 
 import { CreatorTabWatcher } from "./CreatorSessionHost";
+import { GalleryTabWatcher } from "../gallery/GalleryTabWatcher";
 import { creatorPanelMarks } from "./creatorPanelAutoClose";
 import { requestCreatorAutoPopout } from "./creatorWindow";
 
@@ -108,7 +109,7 @@ afterEach(async () => {
 });
 
 describe("CreatorTabWatcher right panel", () => {
-  it("closes the panel on pop-out and reopens it on the tab when the window closes", async () => {
+  it("keeps the panel closed when the window closes", async () => {
     panels().openBrowser(threadRef, "a");
     await mount(tabs({}));
     await update(tabs({ a: true }));
@@ -119,11 +120,11 @@ describe("CreatorTabWatcher right panel", () => {
       passive: true,
     });
 
-    // Closing the window with × only flips poppedOut; the panel shows the tab again.
+    // Closing the window must not reopen a panel the user dismissed.
     await act(() => panels().openFile(threadRef, "src/other.ts"));
     await act(() => panels().close(threadRef));
     await update(tabs({}));
-    expect(panel()).toMatchObject({ isOpen: true, activeSurfaceId: "browser:a" });
+    expect(panel().isOpen).toBe(false);
     expect(creatorPanelMarks.has(threadKey)).toBe(false);
   });
 
@@ -143,7 +144,7 @@ describe("CreatorTabWatcher right panel", () => {
     expect(panel()).toMatchObject({ isOpen: true, activeSurfaceId: "file:src/working.ts" });
   });
 
-  it("reopens only when the last Creator of the thread comes back", async () => {
+  it("keeps the panel closed after every Creator window closes", async () => {
     panels().openBrowser(threadRef, "a");
     await mount(tabs({}));
     await update(tabs({ a: true }));
@@ -151,17 +152,17 @@ describe("CreatorTabWatcher right panel", () => {
     await update(tabs({ b: true }));
     expect(panel().isOpen).toBe(false);
     await update(tabs({}));
-    expect(panel()).toMatchObject({ isOpen: true, activeSurfaceId: "browser:b" });
+    expect(panel().isOpen).toBe(false);
   });
 
-  it("recovers a panel a pop-out closed before a crash or restart", async () => {
+  it("clears persisted marks after restart without reopening the panel", async () => {
     // Persisted by the previous run, which died with the window out.
     creatorPanelMarks.set(threadKey);
     await mount(watcher("a", false, false));
     // Waits for the desktop's report: before it, poppedOut is only a default.
     expect(panel().isOpen).toBe(false);
     await update(watcher("a", false, true));
-    expect(panel()).toMatchObject({ isOpen: true, activeSurfaceId: "browser:a" });
+    expect(panel().isOpen).toBe(false);
     expect(creatorPanelMarks.has(threadKey)).toBe(false);
   });
 
@@ -187,7 +188,7 @@ describe("CreatorTabWatcher agent-opened tab", () => {
     expect(mocks.popOutCreator).toHaveBeenCalledOnce();
   });
 
-  it("stays in the panel, with a toast, when the window cannot open", async () => {
+  it("reports a window failure without opening the panel", async () => {
     mocks.popOutCreator.mockRejectedValue(new Error("Studio did not load"));
     mocks.generation = 1;
     requestCreatorAutoPopout("runtime-a");
@@ -197,7 +198,7 @@ describe("CreatorTabWatcher agent-opened tab", () => {
     expect(mocks.toast).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Creatorを別ウィンドウで開けませんでした" }),
     );
-    expect(panel()).toMatchObject({ isOpen: true, activeSurfaceId: "browser:a" });
+    expect(panel().isOpen).toBe(false);
   });
 
   it("lets a request that never goes live expire, releasing the bridge it held", async () => {
@@ -220,5 +221,38 @@ describe("CreatorTabWatcher agent-opened tab", () => {
     mocks.generation = 1;
     await mount(watcher("a", false));
     expect(mocks.popOutCreator).not.toHaveBeenCalled();
+  });
+});
+
+describe("GalleryTabWatcher window", () => {
+  const gallery = (poppedOut: boolean) => (
+    <GalleryTabWatcher
+      threadRef={threadRef}
+      serverTabId="a"
+      runtimeTabId="runtime-gallery"
+      loaded
+      desktopKnown
+      poppedOut={poppedOut}
+    />
+  );
+
+  it("keeps the panel closed after the Gallery window closes", async () => {
+    panels().openBrowser(threadRef, "a");
+    await mount(gallery(false));
+    await update(gallery(true));
+    expect(panel().isOpen).toBe(false);
+    await update(gallery(false));
+    expect(panel().isOpen).toBe(false);
+    expect(creatorPanelMarks.has(threadKey)).toBe(false);
+  });
+
+  it("reports a window failure without opening a panel", async () => {
+    mocks.popOutCreator.mockRejectedValue(new Error("Gallery did not load"));
+    requestCreatorAutoPopout("runtime-gallery");
+    await mount(gallery(false));
+    expect(mocks.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "ギャラリーを別ウィンドウで開けませんでした" }),
+    );
+    expect(panel().isOpen).toBe(false);
   });
 });

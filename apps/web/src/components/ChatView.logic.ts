@@ -13,6 +13,7 @@ import {
   type ModelSelection,
   type OrchestrationV2ProjectedTurnItem,
   type PreviewAnnotationPayload,
+  type PreviewSessionSnapshot,
   type ProviderInteractionMode,
   ProviderDriverKind,
   type ProviderInstanceId,
@@ -99,9 +100,12 @@ export function agentControlledBrowserCloseConfirmation(
 export function shouldRenderPreviewMiniPlayer(
   source: PreviewMiniPlayerSource | null,
   renderedRightPanelSurface: RightPanelSurface | null,
+  sessions: Readonly<Record<string, Pick<PreviewSessionSnapshot, "creator" | "gallery">>> = {},
 ): boolean {
   if (source === null) return false;
   if (source.kind === "browser") {
+    const session = sessions[source.tabId];
+    if (session?.creator !== undefined || session?.gallery !== undefined) return false;
     return !(
       renderedRightPanelSurface?.kind === "preview" &&
       renderedRightPanelSurface.resourceId === source.tabId

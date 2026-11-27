@@ -15,7 +15,6 @@ import { Group } from "~/components/ui/group";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "~/components/ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { type ThreadPreviewState, useThreadPreviewState } from "~/previewStateStore";
-import { useRightPanelStore } from "~/rightPanelStore";
 
 import { useCreatorAttention } from "./creatorAttention";
 import { runCreatorWindowAction } from "./creatorWindow";
@@ -43,12 +42,7 @@ export function CreatorChip({ threadRef }: { threadRef: ScopedThreadRef }) {
   if (tabId === null || runtimeTabId === null) return null;
   const poppedOut = previewState.desktopByTabId[tabId]?.poppedOut ?? false;
 
-  const showInPanel = () => useRightPanelStore.getState().openBrowser(threadRef, tabId);
-  // Open (or bring forward) the window; a tab that cannot pop out yet shows in the panel.
-  const openWindow = () =>
-    void runCreatorWindowAction("pop-out", runtimeTabId).then((opened) => {
-      if (!opened) showInPanel();
-    });
+  const openWindow = () => void runCreatorWindowAction("pop-out", runtimeTabId);
   const label = poppedOut ? "Creatorウィンドウを表示" : "Creatorを別ウィンドウで開く";
 
   return (
@@ -97,19 +91,7 @@ export function CreatorChip({ threadRef }: { threadRef: ScopedThreadRef }) {
               <MenuSeparator />
             </>
           ) : null}
-          {poppedOut ? (
-            <>
-              <MenuItem onClick={openWindow}>Creatorウィンドウを表示</MenuItem>
-              <MenuItem onClick={() => void runCreatorWindowAction("return", runtimeTabId)}>
-                パネルに戻す
-              </MenuItem>
-            </>
-          ) : (
-            <>
-              <MenuItem onClick={openWindow}>別ウィンドウで開く</MenuItem>
-              <MenuItem onClick={showInPanel}>パネルで表示</MenuItem>
-            </>
-          )}
+          <MenuItem onClick={openWindow}>{label}</MenuItem>
         </MenuPopup>
       </Menu>
     </Group>

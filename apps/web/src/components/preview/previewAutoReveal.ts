@@ -9,9 +9,8 @@
  *   not a panel tab floats over the chat; a forced one already in the panel
  *   comes to the front.
  * - With it off: tabs other than Amu Creator stay where they are.
- * - An Amu Creator tab never floats: the agent opened it for the user to
- *   review, so it opens in the right panel and then moves into its own desktop
- *   window (`creator-window`), falling back to the panel if that fails.
+ * - Amu Creator and Gallery open only in their own desktop windows,
+ *   without first revealing a panel or falling back to one on failure.
  *
  * Server tabs need the environment's browser; desktop tabs (Creator tabs are
  * always desktop tabs) need the Electron client. The baseline still covers
@@ -78,7 +77,6 @@ export function previewRevealActions(input: {
     );
     // Amu Gallery tabs move into their own window the same way.
     if (session.creator !== undefined || session.gallery !== undefined) {
-      actions.push({ kind: "panel", tabId: session.tabId });
       if (session.runtime !== "server") {
         actions.push({ kind: "creator-window", tabId: session.tabId });
       }
